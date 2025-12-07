@@ -34,8 +34,10 @@ async def stage1_collect_responses(user_query: str, council_models: List[str]) -
     stage1_results = []
     for model, response in responses.items():
         if response is not None:  # Only include successful responses
+            # Use actual model from response if available (handling fallback), otherwise requested model
+            actual_model = response.get("model", model)
             stage1_results.append(
-                {"model": model, "response": response.get("content", "")}
+                {"model": actual_model, "response": response.get("content", "")}
             )
 
     return stage1_results
@@ -120,8 +122,10 @@ Now evaluate and rank the responses."""
         if response is not None:
             full_text = response.get("content", "")
             parsed = parse_ranking_from_text(full_text)
+            # Use actual model from response if available
+            actual_model = response.get("model", model)
             stage2_results.append(
-                {"model": model, "ranking": full_text, "parsed_ranking": parsed}
+                {"model": actual_model, "ranking": full_text, "parsed_ranking": parsed}
             )
 
     return stage2_results, label_to_model
@@ -195,7 +199,9 @@ Now synthesize your answer to the question above."""
             "response": "Error: Unable to generate final synthesis.",
         }
 
-    return {"model": chairman_model, "response": response.get("content", "")}
+    # Use actual model from response if available
+    actual_model = response.get("model", chairman_model)
+    return {"model": actual_model, "response": response.get("content", "")}
 
 
 def parse_ranking_from_text(ranking_text: str) -> List[str]:

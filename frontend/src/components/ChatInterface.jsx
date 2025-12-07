@@ -187,11 +187,15 @@ export default function ChatInterface({
     effectiveChairmanModel = chairmanModel;
   }
 
-  const getModelStatuses = (msg) => {
+  const getModelStatuses = (msg, msgCouncilModels, msgChairmanModel) => {
     const statuses = {};
 
+    // Use passed models or fallback to effective ones
+    const council = msgCouncilModels || effectiveCouncilModels;
+    const chairman = msgChairmanModel || effectiveChairmanModel;
+
     // Council members status
-    effectiveCouncilModels.forEach((model) => {
+    council.forEach((model) => {
       if (msg.loading?.stage1) {
         statuses[model] = "thinking";
       } else if (msg.stage1) {
@@ -201,9 +205,9 @@ export default function ChatInterface({
 
     // Chairman status
     if (msg.loading?.stage3) {
-      statuses[effectiveChairmanModel] = "thinking";
+      statuses[chairman] = "thinking";
     } else if (msg.stage3) {
-      statuses[effectiveChairmanModel] = "completed";
+      statuses[chairman] = "completed";
     }
 
     return statuses;
@@ -354,20 +358,30 @@ export default function ChatInterface({
                       </div>
 
                       {/* Council Avatars */}
-                      {(msg.stage1 ||
-                        msg.stage2 ||
-                        msg.stage3 ||
-                        msg.loading) && (
-                          <CouncilAvatars
-                            councilModels={effectiveCouncilModels}
-                            chairmanModel={effectiveChairmanModel}
-                            activeModel={activeModel}
-                            onSelectModel={handleSelectModel}
-                            onChairmanClick={handleChairmanClick}
-                            modelStatuses={getModelStatuses(msg)}
-                            isChairman={effectiveChairmanModel === activeModel}
-                          />
-                        )}
+                      {(() => {
+                        const messageCouncilModels = msg.stage1 && msg.stage1.length > 0
+                          ? msg.stage1.map(r => r.model)
+                          : effectiveCouncilModels;
+
+                        const messageChairmanModel = msg.stage3 && msg.stage3.model
+                          ? msg.stage3.model
+                          : effectiveChairmanModel;
+
+                        return (msg.stage1 ||
+                          msg.stage2 ||
+                          msg.stage3 ||
+                          msg.loading) && (
+                            <CouncilAvatars
+                              councilModels={messageCouncilModels}
+                              chairmanModel={messageChairmanModel}
+                              activeModel={activeModel}
+                              onSelectModel={handleSelectModel}
+                              onChairmanClick={handleChairmanClick}
+                              modelStatuses={getModelStatuses(msg, messageCouncilModels, messageChairmanModel)}
+                              isChairman={messageChairmanModel === activeModel}
+                            />
+                          );
+                      })()}
 
                       {/* Stage 1 */}
                       <div ref={stage1Ref}>

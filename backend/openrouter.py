@@ -49,7 +49,8 @@ async def query_model(
 
             return {
                 'content': message.get('content'),
-                'reasoning_details': message.get('reasoning_details')
+                'reasoning_details': message.get('reasoning_details'),
+                'model': data.get('model')  # Capture actual model used
             }
 
     except Exception as e:
@@ -58,7 +59,8 @@ async def query_model(
             print(f"Response body: {e.response.text}")
         return {
             'content': f"Error: {str(e)}",
-            'error': True
+            'error': True,
+            'model': model  # Keep original model on error
         }
 
 

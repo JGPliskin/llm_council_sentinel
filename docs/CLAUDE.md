@@ -19,25 +19,26 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
 **`openrouter.py`**
 - `query_model()`: Single async model query
 - `query_models_parallel()`: Parallel queries using `asyncio.gather()`
-- Returns dict with 'content' and optional 'reasoning_details'
+- Returns dict with 'content', optional 'reasoning_details', and 'model' (actual model name used)
 - Graceful degradation: returns None on failure, continues with successful responses
 
 **`council.py`** - The Core Logic
-- `stage1_collect_responses()`: Parallel queries to all council models
+- `stage1_collect_responses()`: Parallel queries to all council models. Uses actual model name from response (handling fallbacks).
 - `stage2_collect_rankings()`:
   - Anonymizes responses as "Response A, B, C, etc."
-  - Creates `label_to_model` mapping for de-anonymization
+  - Creates `label_to_model` mapping for de-anonymization (using actual model names)
   - Prompts models to evaluate and rank (with strict format requirements)
   - Returns tuple: (rankings_list, label_to_model_dict)
   - Each ranking includes both raw text and `parsed_ranking` list
-- `stage3_synthesize_final()`: Chairman synthesizes from all responses + rankings
+- `stage3_synthesize_final()`: Chairman synthesizes from all responses + rankings. Uses actual chairman model name.
 - `parse_ranking_from_text()`: Extracts "FINAL RANKING:" section, handles both numbered lists and plain format
 - `calculate_aggregate_rankings()`: Computes average rank position across all peer evaluations
 
 **`storage.py`**
 - JSON-based conversation storage in `data/conversations/`
-- Each conversation: `{id, created_at, messages[]}`
-- Assistant messages contain: `{role, stage1, stage2, stage3}`
+- Each conversation: `{id, created_at, messages[], active_models, active_chairman}`
+- `active_models` and `active_chairman` are persisted to ensure consistent model list display even if defaults change
+- Assistant messages contain: `{role, stage1, stage2, stage3, metadata}`
 - Note: metadata (label_to_model, aggregate_rankings) is NOT persisted to storage, only returned via API
 
 **`main.py`**
@@ -45,6 +46,7 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
   - Development: localhost:5173 (Vite), localhost:3000
   - Production: localhost:80, localhost (Docker/Nginx)
 - POST `/api/conversations/{id}/message` returns metadata in addition to stages
+- Conversation response includes `active_models` and `active_chairman` fields
 - Metadata includes: label_to_model mapping and aggregate_rankings
 - `/health` endpoint for Docker health checks
 
@@ -58,6 +60,7 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
 **`components/ChatInterface.jsx`**
 - Multiline textarea (3 rows, resizable)
 - Enter to send, Shift+Enter for new line
+- Dynamic Avatar Rendering: Displays the *actual* model used for a specific message (e.g. if fallback occurred), overriding the conversation default.
 - User messages wrapped in markdown-content class for padding
 
 **`components/Stage1.jsx`**
