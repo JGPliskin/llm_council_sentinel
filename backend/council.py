@@ -1,8 +1,12 @@
 """3-stage LLM Council orchestration."""
 
 from typing import List, Dict, Any, Tuple
-from .zenmux import query_models_parallel, query_model
-from .config import COUNCIL_MODELS, CHAIRMAN_MODEL
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from openrouter import query_models_parallel, query_model
+from config import COUNCIL_MODELS, CHAIRMAN_MODEL
 
 
 async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:

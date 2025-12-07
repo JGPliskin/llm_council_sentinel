@@ -2,7 +2,11 @@
 
 import httpx
 from typing import List, Dict, Any, Optional
-from .config import OPENROUTER_API_KEY, OPENROUTER_API_URL
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from config import OPENROUTER_API_KEY, OPENROUTER_API_URL
 
 
 async def query_model(

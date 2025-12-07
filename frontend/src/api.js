@@ -7,7 +7,7 @@ import i18n from "./i18n";
 
 // In production (Docker), use relative path to go through Nginx proxy
 // In development, use direct backend URL
-const API_BASE = import.meta.env.PROD ? "" : "http://localhost:8008";
+const API_BASE = import.meta.env.PROD ? "" : "http://localhost:8009";
 
 // Constants
 export const MAX_MESSAGE_LENGTH = 1000;
@@ -50,6 +50,17 @@ async function handleErrorResponse(response) {
 }
 
 export const api = {
+  /**
+   * Get model configuration.
+   */
+  async getModels() {
+    const response = await fetch(`${API_BASE}/api/models`);
+    if (!response.ok) {
+      throw new Error("Failed to fetch model configuration");
+    }
+    return response.json();
+  },
+
   /**
    * List all conversations.
    */

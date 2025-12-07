@@ -6,20 +6,21 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # OpenRouter API key
-ZENMUX_API_KEY = os.getenv("ZENMUX_API_KEY")
+# OpenRouter API key
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# Council members - list of ZenMux model identifiers
+# Council members - list of Model identifiers
 COUNCIL_MODELS = [
-    "qwen/qwen3-14b",
-    "x-ai/grok-4.1-fast",
-    "kuaishou/kat-coder-pro-v1",
+    "meituan/longcat-flash-chat:free",
+    "nvidia/nemotron-nano-9b-v2:free",
+    "kwaipilot/kat-coder-pro:free",
 ]
 
 # Chairman model - synthesizes final response
-CHAIRMAN_MODEL = "deepseek/deepseek-chat-v3.1"
+CHAIRMAN_MODEL = "amazon/nova-2-lite-v1:free"
 
-# ZenMux API endpoint
-ZENMUX_API_URL = "https://zenmux.ai/api/v1/chat/completions"
+# OpenRouter API endpoint
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Data directory for conversation storage
 DATA_DIR = "data/conversations"

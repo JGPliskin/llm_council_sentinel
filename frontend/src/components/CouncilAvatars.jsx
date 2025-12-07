@@ -8,7 +8,7 @@ import {
   TooltipTrigger,
 } from "./ui/tooltip";
 import { Crown, ExternalLink } from "lucide-react";
-import { Qwen, Grok, DeepSeek, HuggingFace } from "@lobehub/icons";
+import { Qwen, DeepSeek, HuggingFace, LongCat, Nova, Aws } from "@lobehub/icons";
 import "./CouncilAvatars.css";
 
 // Zenmux invite URL
@@ -16,29 +16,29 @@ const ZENMUX_INVITE_URL = "https://zenmux.ai/invite/ICIEEXGV14722567";
 
 // Model configuration with brand colors and metadata
 const MODEL_CONFIG = {
-  "qwen/qwen3-14b": {
-    name: "Qwen",
-    shortName: "QW",
-    color: "#7c3aed", // Purple
-    Icon: Qwen,
+  "meituan/longcat-flash-chat:free": {
+    name: "LongCat",
+    shortName: "LC",
+    color: "#FF6B35", // Orange
+    Icon: LongCat,
   },
-  "x-ai/grok-4.1-fast": {
-    name: "Grok",
-    shortName: "GK",
-    color: "#000000", // Black (X.AI)
-    Icon: Grok,
+  "nvidia/nemotron-nano-9b-v2:free": {
+    name: "Nemotron",
+    shortName: "NT",
+    color: "#76B900", // NVIDIA Green
+    Icon: HuggingFace, // Using HuggingFace icon as placeholder
   },
-  "kuaishou/kat-coder-pro-v1": {
-    name: "KAT",
-    shortName: "KT",
-    color: "#ff6b35", // Orange
-    Icon: HuggingFace, // Use HuggingFace as default for models without specific logo
+  "kwaipilot/kat-coder-pro:free": {
+    name: "Kuaipilot",
+    shortName: "KP",
+    color: "#FF6E30", // Kuaishou Orange
+    Icon: HuggingFace, // Using HuggingFace icon as placeholder
   },
-  "deepseek/deepseek-chat-v3.1": {
-    name: "DeepSeek",
-    shortName: "DS",
-    color: "#0ea5e9", // Sky blue
-    Icon: DeepSeek,
+  "amazon/nova-2-lite-v1:free": {
+    name: "Amazon Nova",
+    shortName: "AN",
+    color: "#FF9900", // Amazon Orange
+    Icon: Aws, // Using AWS icon for Amazon Nova
     isChairman: true,
   },
 };

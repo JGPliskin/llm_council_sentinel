@@ -11,15 +11,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { MAX_MESSAGE_LENGTH } from "@/api";
+import { MAX_MESSAGE_LENGTH, api } from "@/api";
 
-// Model configuration (should match backend config.py)
-const COUNCIL_MODELS = [
-  "qwen/qwen3-14b",
-  "x-ai/grok-4.1-fast",
-  "kuaishou/kat-coder-pro-v1",
+// Model configuration (will be fetched from backend)
+let COUNCIL_MODELS = [
+  "meituan/longcat-flash-chat:free",
+  "qwen/qwen3-coder:free",
+  "deepseek/deepseek-chat-v3.1",
 ];
-const CHAIRMAN_MODEL = "deepseek/deepseek-chat-v3.1";
+let CHAIRMAN_MODEL = "amazon/nova-2-lite-v1:free";
 
 export default function ChatInterface({
   conversation,
@@ -38,6 +38,21 @@ export default function ChatInterface({
   const stage3Ref = useRef(null);
   const textareaRef = useRef(null);
   const formRef = useRef(null);
+
+  // Fetch model configuration from backend
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const modelConfig = await api.getModels();
+        COUNCIL_MODELS = modelConfig.council_models;
+        CHAIRMAN_MODEL = modelConfig.chairman_model;
+      } catch (error) {
+        console.error("Failed to fetch model configuration:", error);
+      }
+    };
+
+    fetchModels();
+  }, []);
 
   // Character count validation
   const charCount = input.length;

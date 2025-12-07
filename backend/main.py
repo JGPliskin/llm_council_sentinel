@@ -14,8 +14,12 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from . import storage
-from .council import (
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+import storage
+from council import (
     run_full_council,
     generate_conversation_title,
     stage1_collect_responses,
@@ -23,6 +27,7 @@ from .council import (
     stage3_synthesize_final,
     calculate_aggregate_rankings,
 )
+from config import COUNCIL_MODELS, CHAIRMAN_MODEL
 
 # Constants
 MAX_MESSAGE_LENGTH = 1000
@@ -179,6 +184,15 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/api/models")
+async def get_models():
+    """Get model configuration."""
+    return {
+        "council_models": COUNCIL_MODELS,
+        "chairman_model": CHAIRMAN_MODEL
+    }
+
+
 @app.get("/api/conversations", response_model=List[ConversationMetadata])
 async def list_conversations():
     """List all conversations (metadata only)."""
@@ -328,4 +342,4 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8008)
+    uvicorn.run(app, host="0.0.0.0", port=8009)
