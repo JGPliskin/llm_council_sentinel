@@ -53,8 +53,9 @@ export const api = {
   /**
    * Get model configuration.
    */
-  async getModels() {
-    const response = await fetch(`${API_BASE}/api/models`);
+  async getModels(refresh = false) {
+    const url = refresh ? `${API_BASE}/api/models?refresh=true` : `${API_BASE}/api/models`;
+    const response = await fetch(url);
     if (!response.ok) {
       throw new Error("Failed to fetch model configuration");
     }

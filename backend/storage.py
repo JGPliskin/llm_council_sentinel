@@ -22,12 +22,18 @@ def get_conversation_path(conversation_id: str) -> str:
     return os.path.join(DATA_DIR, f"{conversation_id}.json")
 
 
-def create_conversation(conversation_id: str) -> Dict[str, Any]:
+def create_conversation(
+    conversation_id: str, 
+    active_models: Optional[List[str]] = None, 
+    active_chairman: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Create a new conversation.
 
     Args:
         conversation_id: Unique identifier for the conversation
+        active_models: List of active council models for this conversation
+        active_chairman: Active chairman model for this conversation
 
     Returns:
         New conversation dict
@@ -38,7 +44,9 @@ def create_conversation(conversation_id: str) -> Dict[str, Any]:
         "id": conversation_id,
         "created_at": datetime.utcnow().isoformat(),
         "title": "New Conversation",
-        "messages": []
+        "messages": [],
+        "active_models": active_models,
+        "active_chairman": active_chairman
     }
 
     # Save to file

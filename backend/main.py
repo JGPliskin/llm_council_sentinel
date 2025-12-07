@@ -27,8 +27,8 @@ from council import (
     stage3_synthesize_final,
     calculate_aggregate_rankings,
 )
-from config import COUNCIL_MODELS, CHAIRMAN_MODEL
-
+from config import COUNCIL_MODEL_POOL, CHAIRMAN_MODEL_POOL, COUNCIL_SIZE
+from validation import select_active_council, select_active_chairman
 # Constants
 MAX_MESSAGE_LENGTH = 1000
 RATE_LIMIT_MESSAGE = "5/minute"
@@ -184,12 +184,31 @@ async def health():
     return {"status": "ok"}
 
 
+# Global model cache
+ACTIVE_COUNCIL: List[str] = []
+ACTIVE_CHAIRMAN: Optional[str] = None
+
+
 @app.get("/api/models")
-async def get_models():
-    """Get model configuration."""
+async def get_models(refresh: bool = False):
+    """
+    Get model configuration.
+    
+    Args:
+        refresh: If True, force re-validation of models.
+                 If False, return cached valid models if available.
+    """
+    global ACTIVE_COUNCIL, ACTIVE_CHAIRMAN
+    
+    # If refresh requested or cache empty, run validation
+    if refresh or not ACTIVE_COUNCIL:
+        print("Validating models...", flush=True)
+        ACTIVE_COUNCIL = await select_active_council(COUNCIL_MODEL_POOL, COUNCIL_SIZE)
+        ACTIVE_CHAIRMAN = await select_active_chairman(CHAIRMAN_MODEL_POOL)
+    
     return {
-        "council_models": COUNCIL_MODELS,
-        "chairman_model": CHAIRMAN_MODEL
+        "council_models": ACTIVE_COUNCIL,
+        "chairman_model": ACTIVE_CHAIRMAN
     }
 
 
@@ -201,9 +220,24 @@ async def list_conversations():
 
 @app.post("/api/conversations", response_model=Conversation)
 async def create_conversation(request: CreateConversationRequest):
-    """Create a new conversation."""
+    """
+    Create a new conversation.
+    Uses the currently cached active models.
+    """
+    global ACTIVE_COUNCIL, ACTIVE_CHAIRMAN
+    
+    # Ensure we have active models (fallback if cache empty)
+    if not ACTIVE_COUNCIL:
+        print("Cache empty, validating models for new conversation...", flush=True)
+        ACTIVE_COUNCIL = await select_active_council(COUNCIL_MODEL_POOL, COUNCIL_SIZE)
+        ACTIVE_CHAIRMAN = await select_active_chairman(CHAIRMAN_MODEL_POOL)
+    
     conversation_id = str(uuid.uuid4())
-    conversation = storage.create_conversation(conversation_id)
+    conversation = storage.create_conversation(
+        conversation_id, 
+        active_models=ACTIVE_COUNCIL, 
+        active_chairman=ACTIVE_CHAIRMAN
+    )
     return conversation
 
 
@@ -239,9 +273,20 @@ async def send_message(request: Request, conversation_id: str, body: SendMessage
         title = await generate_conversation_title(body.content)
         storage.update_conversation_title(conversation_id, title)
 
+    # Retrieve active models from conversation, or fall back to defaults (for old conversations)
+    # Important: In a real migration we'd backfill, but here we fallback to current valid ones or pool
+    active_models = conversation.get("active_models")
+    if not active_models:
+        # Fallback for old conversations
+        active_models = COUNCIL_MODEL_POOL[:COUNCIL_SIZE]
+        
+    active_chairman = conversation.get("active_chairman")
+    if not active_chairman:
+        active_chairman = CHAIRMAN_MODEL_POOL[0]
+
     # Run the 3-stage council process
     stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
-        body.content
+        body.content, active_models, active_chairman
     )
 
     # Add assistant message with all stages and metadata
@@ -285,15 +330,24 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                     generate_conversation_title(body.content)
                 )
 
+            # Retrieve active models from conversation, or fall back to defaults
+            active_models = conversation.get("active_models")
+            if not active_models:
+                active_models = COUNCIL_MODEL_POOL[:COUNCIL_SIZE]
+                
+            active_chairman = conversation.get("active_chairman")
+            if not active_chairman:
+                active_chairman = CHAIRMAN_MODEL_POOL[0]
+
             # Stage 1: Collect responses
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses(body.content)
+            stage1_results = await stage1_collect_responses(body.content, active_models)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
             # Stage 2: Collect rankings
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
             stage2_results, label_to_model = await stage2_collect_rankings(
-                body.content, stage1_results
+                body.content, stage1_results, active_models
             )
             aggregate_rankings = calculate_aggregate_rankings(
                 stage2_results, label_to_model
@@ -303,7 +357,7 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
             # Stage 3: Synthesize final answer
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
             stage3_result = await stage3_synthesize_final(
-                body.content, stage1_results, stage2_results
+                body.content, stage1_results, stage2_results, active_chairman
             )
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 

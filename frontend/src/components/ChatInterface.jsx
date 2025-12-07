@@ -13,13 +13,13 @@ import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { MAX_MESSAGE_LENGTH, api } from "@/api";
 
-// Model configuration (will be fetched from backend)
-let COUNCIL_MODELS = [
+// Default model configuration
+const DEFAULT_COUNCIL_MODELS = [
   "meituan/longcat-flash-chat:free",
   "qwen/qwen3-coder:free",
   "deepseek/deepseek-chat-v3.1",
 ];
-let CHAIRMAN_MODEL = "amazon/nova-2-lite-v1:free";
+const DEFAULT_CHAIRMAN_MODEL = "amazon/nova-2-lite-v1:free";
 
 export default function ChatInterface({
   conversation,
@@ -31,6 +31,11 @@ export default function ChatInterface({
   const { t } = useTranslation();
   const [input, setInput] = useState("");
   const [activeModel, setActiveModel] = useState(null);
+
+  // Model state
+  const [councilModels, setCouncilModels] = useState(DEFAULT_COUNCIL_MODELS);
+  const [chairmanModel, setChairmanModel] = useState(DEFAULT_CHAIRMAN_MODEL);
+
   const messagesEndRef = useRef(null);
   const scrollAreaRef = useRef(null);
   const stage1Ref = useRef(null);
@@ -43,16 +48,24 @@ export default function ChatInterface({
   useEffect(() => {
     const fetchModels = async () => {
       try {
-        const modelConfig = await api.getModels();
-        COUNCIL_MODELS = modelConfig.council_models;
-        CHAIRMAN_MODEL = modelConfig.chairman_model;
+        // Refresh only if on home page (new conversation)
+        // If viewing an existing conversation, use cached values
+        const shouldRefresh = !conversationId;
+        const modelConfig = await api.getModels(shouldRefresh);
+
+        if (modelConfig.council_models && modelConfig.council_models.length > 0) {
+          setCouncilModels(modelConfig.council_models);
+        }
+        if (modelConfig.chairman_model) {
+          setChairmanModel(modelConfig.chairman_model);
+        }
       } catch (error) {
         console.error("Failed to fetch model configuration:", error);
       }
     };
 
     fetchModels();
-  }, []);
+  }, [conversationId]); // Re-run when conversationId changes (e.g. back to home)
 
   // Character count validation
   const charCount = input.length;
@@ -110,8 +123,6 @@ export default function ChatInterface({
 
   const handleSelectModel = (modelId) => {
     setActiveModel(modelId);
-    // 不使用 scrollIntoView，它会滚动外层容器导致 header 消失
-    // Tab 切换已经足够，用户可以自行滚动查看内容
   };
 
   const handleChairmanClick = (modelId) => {
@@ -163,11 +174,24 @@ export default function ChatInterface({
     }
   };
 
+  // Determine effective models (use conversation-specific ones if active, otherwise defaults)
+  // Determine effective models (use conversation-specific ones if active, otherwise state)
+  let effectiveCouncilModels = conversation?.active_models;
+  // Defensive check: ensure it's an array
+  if (!Array.isArray(effectiveCouncilModels) || effectiveCouncilModels.length === 0) {
+    effectiveCouncilModels = councilModels;
+  }
+
+  let effectiveChairmanModel = conversation?.active_chairman;
+  if (!effectiveChairmanModel || typeof effectiveChairmanModel !== 'string') {
+    effectiveChairmanModel = chairmanModel;
+  }
+
   const getModelStatuses = (msg) => {
     const statuses = {};
 
     // Council members status
-    COUNCIL_MODELS.forEach((model) => {
+    effectiveCouncilModels.forEach((model) => {
       if (msg.loading?.stage1) {
         statuses[model] = "thinking";
       } else if (msg.stage1) {
@@ -177,9 +201,9 @@ export default function ChatInterface({
 
     // Chairman status
     if (msg.loading?.stage3) {
-      statuses[CHAIRMAN_MODEL] = "thinking";
+      statuses[effectiveChairmanModel] = "thinking";
     } else if (msg.stage3) {
-      statuses[CHAIRMAN_MODEL] = "completed";
+      statuses[effectiveChairmanModel] = "completed";
     }
 
     return statuses;
@@ -279,8 +303,8 @@ export default function ChatInterface({
             {/* Council models display */}
             <div className="pt-4 md:pt-6">
               <CouncilAvatars
-                councilModels={COUNCIL_MODELS}
-                chairmanModel={CHAIRMAN_MODEL}
+                councilModels={effectiveCouncilModels}
+                chairmanModel={effectiveChairmanModel}
                 activeModel={null}
                 modelStatuses={{}}
               />
@@ -334,15 +358,16 @@ export default function ChatInterface({
                         msg.stage2 ||
                         msg.stage3 ||
                         msg.loading) && (
-                        <CouncilAvatars
-                          councilModels={COUNCIL_MODELS}
-                          chairmanModel={CHAIRMAN_MODEL}
-                          activeModel={activeModel}
-                          onSelectModel={handleSelectModel}
-                          onChairmanClick={handleChairmanClick}
-                          modelStatuses={getModelStatuses(msg)}
-                        />
-                      )}
+                          <CouncilAvatars
+                            councilModels={effectiveCouncilModels}
+                            chairmanModel={effectiveChairmanModel}
+                            activeModel={activeModel}
+                            onSelectModel={handleSelectModel}
+                            onChairmanClick={handleChairmanClick}
+                            modelStatuses={getModelStatuses(msg)}
+                            isChairman={effectiveChairmanModel === activeModel}
+                          />
+                        )}
 
                       {/* Stage 1 */}
                       <div ref={stage1Ref}>
@@ -419,44 +444,44 @@ export default function ChatInterface({
           {!conversation.messages.some(
             (msg) => msg.role === "assistant" && msg.stage3,
           ) && (
-            <form
-              ref={formRef}
-              className="flex items-end gap-3 border-t bg-card p-4 md:gap-4 md:p-6 shadow-[0_-2px_10px_rgba(0,0,0,0.05)]"
-              onSubmit={handleSubmit}
-            >
-              <div className="relative flex-1">
-                <Textarea
-                  ref={textareaRef}
-                  className={cn(
-                    "min-h-[60px] max-h-[200px] resize-y text-sm md:min-h-[80px] md:max-h-[300px] md:text-base shadow-sm pr-16",
-                    isOverLimit && "border-red-500 focus:border-red-500",
-                  )}
-                  placeholder={t("placeholder")}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  disabled={isLoading}
-                  rows={3}
-                />
-                {/* Character counter */}
-                <div
-                  className={cn(
-                    "absolute bottom-2 right-2 text-xs",
-                    getCounterColor(),
-                  )}
-                >
-                  {charCount}/{MAX_MESSAGE_LENGTH}
-                </div>
-              </div>
-              <Button
-                type="submit"
-                disabled={!input.trim() || isLoading || isOverLimit}
-                className="h-auto px-6 py-3 md:px-8 md:py-4 font-semibold shadow-sm hover:shadow-md transition-all"
+              <form
+                ref={formRef}
+                className="flex items-end gap-3 border-t bg-card p-4 md:gap-4 md:p-6 shadow-[0_-2px_10px_rgba(0,0,0,0.05)]"
+                onSubmit={handleSubmit}
               >
-                {t("send")}
-              </Button>
-            </form>
-          )}
+                <div className="relative flex-1">
+                  <Textarea
+                    ref={textareaRef}
+                    className={cn(
+                      "min-h-[60px] max-h-[200px] resize-y text-sm md:min-h-[80px] md:max-h-[300px] md:text-base shadow-sm pr-16",
+                      isOverLimit && "border-red-500 focus:border-red-500",
+                    )}
+                    placeholder={t("placeholder")}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    disabled={isLoading}
+                    rows={3}
+                  />
+                  {/* Character counter */}
+                  <div
+                    className={cn(
+                      "absolute bottom-2 right-2 text-xs",
+                      getCounterColor(),
+                    )}
+                  >
+                    {charCount}/{MAX_MESSAGE_LENGTH}
+                  </div>
+                </div>
+                <Button
+                  type="submit"
+                  disabled={!input.trim() || isLoading || isOverLimit}
+                  className="h-auto px-6 py-3 md:px-8 md:py-4 font-semibold shadow-sm hover:shadow-md transition-all"
+                >
+                  {t("send")}
+                </Button>
+              </form>
+            )}
         </>
       )}
     </div>

@@ -54,7 +54,12 @@ async def query_model(
 
     except Exception as e:
         print(f"Error querying model {model}: {e}")
-        return None
+        if isinstance(e, httpx.HTTPStatusError):
+            print(f"Response body: {e.response.text}")
+        return {
+            'content': f"Error: {str(e)}",
+            'error': True
+        }
 
 
 async def query_models_parallel(

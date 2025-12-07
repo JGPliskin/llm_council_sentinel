@@ -8,7 +8,7 @@ import {
   TooltipTrigger,
 } from "./ui/tooltip";
 import { Crown, ExternalLink } from "lucide-react";
-import { Qwen, DeepSeek, HuggingFace, LongCat, Nova, Aws } from "@lobehub/icons";
+import { HuggingFace, LongCat, Aws } from "@lobehub/icons";
 import "./CouncilAvatars.css";
 
 // Zenmux invite URL
@@ -26,26 +26,89 @@ const MODEL_CONFIG = {
     name: "Nemotron",
     shortName: "NT",
     color: "#76B900", // NVIDIA Green
-    Icon: HuggingFace, // Using HuggingFace icon as placeholder
+    Icon: HuggingFace,
   },
   "kwaipilot/kat-coder-pro:free": {
     name: "Kuaipilot",
     shortName: "KP",
     color: "#FF6E30", // Kuaishou Orange
-    Icon: HuggingFace, // Using HuggingFace icon as placeholder
+    Icon: HuggingFace,
   },
   "amazon/nova-2-lite-v1:free": {
     name: "Amazon Nova",
     shortName: "AN",
     color: "#FF9900", // Amazon Orange
-    Icon: Aws, // Using AWS icon for Amazon Nova
-    isChairman: true,
+    Icon: Aws,
+  },
+  "google/gemini-2.5-flash": {
+    name: "Gemini 2.5",
+    shortName: "GM",
+    color: "#4285F4", // Google Blue
+    Icon: null, // Fallback to initials
+  },
+  "mistralai/mistral-7b-instruct:free": {
+    name: "Mistral 7B",
+    shortName: "MI",
+    color: "#5C46FF", // Mistral Purple
+    Icon: null,
+  },
+  "arcee-ai/trinity-mini:free": {
+    name: "Trinity",
+    shortName: "TR",
+    color: "#00CED1", // Dark Turquoise
+    Icon: null,
+  },
+  "tngtech/tng-r1t-chimera:free": {
+    name: "Chimera",
+    shortName: "CH",
+    color: "#FF1493", // Deep Pink
+    Icon: null,
+  },
+  "moonshotai/kimi-k2:free": {
+    name: "Kimi K2",
+    shortName: "KM",
+    color: "#000000", // Black
+    Icon: null,
+  },
+  "tngtech/deepseek-r1t2-chimera:free": {
+    name: "DeepSeek Chimera",
+    shortName: "DC",
+    color: "#4B0082", // Indigo
+    Icon: null,
   },
 };
 
-const ModelAvatar = ({ modelId, isActive, onClick, status = "idle" }) => {
-  const config = MODEL_CONFIG[modelId];
-  if (!config) return null;
+// Helper to generate a consistent color from a string
+const stringToColor = (str) => {
+  if (!str) return "#CCCCCC";
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const c = (hash & 0x00ffffff).toString(16).toUpperCase();
+  return "#" + "00000".substring(0, 6 - c.length) + c;
+};
+
+const ModelAvatar = ({ modelId, isActive, onClick, status = "idle", isChairman = false }) => {
+  if (!modelId || typeof modelId !== 'string') return null;
+
+  // Try to get config, or generate fallback
+  let config = MODEL_CONFIG[modelId];
+
+  if (!config) {
+    // Generate fallback config
+    // Ensure safe split
+    const parts = modelId.split("/");
+    const shortName = parts.length > 1 ? parts[1].substring(0, 2).toUpperCase() : modelId.substring(0, 2).toUpperCase();
+    const name = parts.length > 1 ? parts[1] : modelId;
+
+    config = {
+      name,
+      shortName,
+      color: stringToColor(modelId),
+      Icon: null
+    };
+  }
 
   const statusText = {
     idle: "",
@@ -63,7 +126,7 @@ const ModelAvatar = ({ modelId, isActive, onClick, status = "idle" }) => {
     <Tooltip>
       <TooltipTrigger asChild>
         <div
-          className={`model-avatar ${isActive ? "active" : ""} ${config.isChairman ? "chairman" : ""}`}
+          className={`model-avatar ${isActive ? "active" : ""} ${isChairman ? "chairman" : ""}`}
           onClick={onClick}
           style={{ "--model-color": config.color }}
         >
@@ -81,7 +144,7 @@ const ModelAvatar = ({ modelId, isActive, onClick, status = "idle" }) => {
                 </AvatarFallback>
               )}
             </Avatar>
-            {config.isChairman && (
+            {isChairman && (
               <div className="chairman-badge">
                 <Crown size={12} />
               </div>
@@ -130,6 +193,7 @@ export const CouncilAvatars = ({
                 isActive={activeModel === modelId}
                 onClick={() => onSelectModel?.(modelId)}
                 status={modelStatuses[modelId]}
+                isChairman={modelId === chairmanModel}
               />
             ))}
           </div>
@@ -143,6 +207,7 @@ export const CouncilAvatars = ({
               isActive={activeModel === chairmanModel}
               onClick={() => onChairmanClick?.(chairmanModel)}
               status={modelStatuses[chairmanModel]}
+              isChairman={true}
             />
           </div>
         )}
