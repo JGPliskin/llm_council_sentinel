@@ -142,7 +142,7 @@ def add_user_message(conversation_id: str, content: str):
 def add_assistant_message(
     conversation_id: str,
     stage1: List[Dict[str, Any]],
-    stage2: List[Dict[str, Any]],
+    stage2: Dict[str, Any],
     stage3: Dict[str, Any],
     metadata: Optional[Dict[str, Any]] = None
 ):

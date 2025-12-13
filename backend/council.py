@@ -144,41 +144,61 @@ async def _request_stage1(councilor: Dict[str, Any], user_query: str) -> Optiona
         {"role": "user", "content": user_message},
     ]
 
-    response = await query_model(
-        councilor["model"], messages, timeout=timeout, max_output_tokens=max_tokens
-    )
-    if response is None:
-        return None
+    try:
+        response = await query_model(
+            councilor["model"], messages, timeout=timeout, max_output_tokens=max_tokens
+        )
+        if response is None:
+            raise ValueError("No response from model (timeout or network error)")
 
-    raw_text = response.get("content", "")
+        raw_text = response.get("content", "")
 
-    for attempt in range(2):
-        try:
-            parsed = parse_stage1_json(raw_text)
-            judge_card = enforce_judge_card_constraints(parsed.get("judge_card", {}))
-            parsed["judge_card"] = judge_card
-            parsed["councilor_id"] = parsed.get("councilor_id") or councilor["id"]
-            parsed["answer_markdown"] = parsed.get("answer_markdown", "").strip()
-            parsed["model"] = response.get("model", councilor["model"])
-            parsed["councilor_name"] = councilor.get("name")
-            return parsed
-        except Exception:
-            if attempt == 1:
-                break
-            repair_prompt = (
-                "上一轮输出未提供可解析的 JSON，请直接输出符合约束的 JSON 对象，"
-                "不要添加多余文字或代码块。确保 core_reasons 至少两条、列表项<=50字、judge_card 长度<=600。"
-            )
-            messages.append({"role": "user", "content": repair_prompt})
-            response = await query_model(
-                councilor["model"],
-                messages,
-                timeout=timeout,
-                max_output_tokens=max_tokens,
-            )
-            raw_text = "" if response is None else response.get("content", "")
+        for attempt in range(2):
+            try:
+                parsed = parse_stage1_json(raw_text)
+                judge_card = enforce_judge_card_constraints(parsed.get("judge_card", {}))
+                parsed["judge_card"] = judge_card
+                parsed["councilor_id"] = parsed.get("councilor_id") or councilor["id"]
+                parsed["answer_markdown"] = parsed.get("answer_markdown", "").strip()
+                parsed["model"] = response.get("model", councilor["model"])
+                parsed["councilor_name"] = councilor.get("name")
+                parsed["status"] = "ok"
+                return parsed
+            except Exception:
+                if attempt == 1:
+                    break
+                repair_prompt = (
+                    "上一轮输出未提供可解析的 JSON，请直接输出符合约束的 JSON 对象，"
+                    "不要添加多余文字或代码块。确保 core_reasons 至少两条、列表项<=50字、judge_card 长度<=600。"
+                )
+                messages.append({"role": "user", "content": repair_prompt})
+                response = await query_model(
+                    councilor["model"],
+                    messages,
+                    timeout=timeout,
+                    max_output_tokens=max_tokens,
+                )
+                if response is None:
+                     raise ValueError("No response from model on retry")
+                raw_text = response.get("content", "")
 
-    return None
+        raise ValueError("Failed to parse JSON after retries")
+
+    except Exception as e:
+        # Strict error schema return
+        return {
+            "councilor_id": councilor["id"],
+            "councilor_name": councilor.get("name"),
+            "model": councilor["model"],
+            "status": "failed",
+            "error": {
+                "code": "EXECUTION_ERROR",
+                "message": str(e),
+                "retryable": True
+            },
+            "answer_markdown": "",
+            # judge_card is omitted on failure
+        }
 
 
 async def stage1_collect_responses(
@@ -187,22 +207,26 @@ async def stage1_collect_responses(
     """Stage 1: Collect initial responses from all councilors."""
     tasks = [_request_stage1(c, user_query) for c in councilors]
     results = await asyncio.gather(*tasks)
-    return [r for r in results if r is not None]
+    # Collect all responses including failures, do not filter None
+    return list(results)
 
 
 def _build_judge_cards(stage1_results: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
-    """Create anonymized judge cards for ranking."""
+    """Create anonymized judge cards for ranking. Only distinct valid results should be passed here."""
     judge_cards = []
     anon_to_councilor = {}
 
     for idx, result in enumerate(stage1_results, start=1):
+        if result.get("status") != "ok":
+            continue
+            
         anon_id = f"anon_{idx}"
-        councilor_name = result.get("councilor_name", "Unknown") # Prefer name over model for display if available? No, usually model ID or name. 
-        # Actually the system usually maps anon_id to model id for aggregation.
-        model_id = result.get("model", "unknown-model")
-        anon_to_councilor[anon_id] = model_id
+        # We map anon_id to model name for display usually
+        model_name = result.get("model", "unknown-model") 
+        councilor_name = result.get("councilor_name") or model_name
         
-        # Revised: Use updated requirement to pass judge_card payload only
+        anon_to_councilor[anon_id] = f"{councilor_name} ({model_name})"
+
         judge_cards.append(
             {
                 "anon_id": anon_id,
@@ -352,12 +376,41 @@ async def _collect_single_ranking(
 
 async def stage2_collect_rankings(
     user_query: str, stage1_results: List[Dict[str, Any]], council_models: List[str]
-) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
-    """Stage 2: Each model ranks the anonymized responses."""
-    judge_cards, anon_to_councilor = _build_judge_cards(stage1_results)
+) -> Dict[str, Any]:
+    """
+    Stage 2: Each model ranks the anonymized responses.
+    Returns Strict Unified Dict.
+    """
+    # Phase 1: Filter Valid Candidates
+    valid_candidates = [r for r in stage1_results if r.get("status") == "ok"]
+    
+    base_response = {
+        "skipped": False,
+        "skipped_reason": None,
+        "reviews": [],
+        "anon_map": {},
+        "judge_failures": []
+    }
+
+    if len(valid_candidates) == 0:
+        base_response["skipped"] = True
+        base_response["skipped_reason"] = "all_stage1_failed"
+        return base_response
+
+    if len(valid_candidates) == 1:
+        base_response["skipped"] = True
+        base_response["skipped_reason"] = "insufficient_candidates"
+        return base_response
+
+    # Phase 2: Execution
+    judge_cards, anon_to_councilor = _build_judge_cards(valid_candidates)
+    base_response["anon_map"] = anon_to_councilor
     
     if not judge_cards:
-        return [], {}
+        # Should be covered by valid_candidates check, but safety net
+        base_response["skipped"] = True
+        base_response["skipped_reason"] = "insufficient_candidates"
+        return base_response
 
     anon_ids = [card["anon_id"] for card in judge_cards]
 
@@ -365,15 +418,42 @@ async def stage2_collect_rankings(
          _collect_single_ranking(model, user_query, judge_cards, anon_ids)
          for model in council_models
     ]
-    stage2_results = await asyncio.gather(*tasks)
+    raw_results = await asyncio.gather(*tasks)
 
-    return stage2_results, anon_to_councilor
+    reviews = []
+    judge_failures = []
+
+    for res in raw_results:
+        if res.get("error"):
+            judge_failures.append({
+                "judge_councilor_id": res.get("model"), # Using model as ID for now if we don't have mapping
+                "model": res.get("model"),
+                "error": {
+                    "code": "JUDGE_EXECUTION_ERROR",
+                    "message": str(res.get("error")),
+                    "retryable": False
+                }
+            })
+        else:
+             reviews.append(res)
+
+    base_response["judge_failures"] = judge_failures
+
+    if not reviews:
+        base_response["skipped"] = True
+        base_response["skipped_reason"] = "all_judges_failed"
+        # base_response["reviews"] remains []
+    else:
+        base_response["skipped"] = False
+        base_response["reviews"] = reviews
+
+    return base_response
 
 
 async def stage3_synthesize_final(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
-    stage2_results: List[Dict[str, Any]],
+    stage2_result: Dict[str, Any], # Changed to Dict
     chairman: Dict[str, Any],
 ) -> Dict[str, Any]:
     persona = fetch_persona(PERSONA_CACHE, chairman.get("persona_path", ""))
@@ -381,29 +461,46 @@ async def stage3_synthesize_final(
     timeout = stage_limits.get("timeout", 90.0)
     max_tokens = stage_limits.get("max_output_tokens", 900)
 
+    # Filter Valid Stage 1 inputs
+    valid_stage1 = [r for r in stage1_results if r.get("status") == "ok"]
+    
+    if not valid_stage1:
+        return {
+            "status": "failed",
+            "model": "system",
+            "response": "所有模型在第一阶段均未能生成有效回答，无法进行总结。",
+            "error": {"code": "ALL_STAGE1_FAILED", "message": "No valid stage 1 answers"}
+        }
+
     stage1_text = "\n\n".join(
         [
             f"{result.get('councilor_name')} ({result.get('model')}):\n{result.get('answer_markdown')}\n评审卡: {json.dumps(result.get('judge_card', {}), ensure_ascii=False)}"
-            for result in stage1_results
+            for result in valid_stage1
         ]
     )
 
-    stage2_text_parts = []
-    for result in stage2_results:
-        if result.get("error"):
-            stage2_text_parts.append(
-                f"Model: {result['model']}\nRanking: ERROR - {result['error']}"
+    stage2_text = ""
+    skipped_reason_map = {
+        "all_stage1_failed": "所有模型第一阶段均失败（理论上不应运行到此）",
+        "insufficient_candidates": "有效候选方案少于2个，无需排序",
+        "all_judges_failed": "所有评审员在排序阶段均运行失败"
+    }
+
+    if stage2_result.get("skipped"):
+        reason_code = stage2_result.get("skipped_reason")
+        reason_text = skipped_reason_map.get(reason_code, reason_code)
+        stage2_text = f"（阶段二已跳过：{reason_text}，请直接基于阶段一回答进行总结）"
+    else:
+        # Process Reviews
+        reviews_text_parts = []
+        for result in stage2_result.get("reviews", []):
+            ranking_summary = " > ".join(result.get("ranking", []))
+            scores_summary = result.get("scores") if result.get("scores") else "None"
+            rationale_summary = result.get("rationale") if result.get("rationale") else "None"
+            reviews_text_parts.append(
+                f"Model: {result['model']}\nRanking: {ranking_summary}\nScores: {scores_summary}\nRationale: {rationale_summary}"
             )
-            continue
-
-        ranking_summary = " > ".join(result.get("ranking", []))
-        scores_summary = result.get("scores") if result.get("scores") else "None"
-        rationale_summary = result.get("rationale") if result.get("rationale") else "None"
-        stage2_text_parts.append(
-            f"Model: {result['model']}\nRanking: {ranking_summary}\nScores: {scores_summary}\nRationale: {rationale_summary}"
-        )
-
-    stage2_text = "\n\n".join(stage2_text_parts)
+        stage2_text = "\n\n".join(reviews_text_parts)
 
     system_prompt = (
         f"{persona}\n"
@@ -428,18 +525,27 @@ async def stage3_synthesize_final(
         {"role": "user", "content": chairman_prompt},
     ]
 
-    response = await query_model(
-        chairman["model"], messages, timeout=timeout, max_output_tokens=max_tokens
-    )
+    try:
+        response = await query_model(
+            chairman["model"], messages, timeout=timeout, max_output_tokens=max_tokens
+        )
+    
+        if response is None:
+             raise ValueError("No response from chairman")
 
-    if response is None:
+        actual_model = response.get("model", chairman["model"])
         return {
-            "model": "error",
-            "response": "Error: Unable to generate final synthesis.",
+            "status": "ok",
+            "model": actual_model, 
+            "response": response.get("content", "")
         }
-
-    actual_model = response.get("model", chairman["model"])
-    return {"model": actual_model, "response": response.get("content", "")}
+    except Exception as e:
+        return {
+            "status": "failed",
+            "model": chairman["model"],
+            "response": f"最终总结生成失败: {str(e)}",
+            "error": {"code": "CHAIRMAN_FAILED", "message": str(e)}
+        }
 
 
 def calculate_aggregate_rankings(
@@ -503,38 +609,33 @@ async def generate_conversation_title(user_query: str) -> str:
 
 async def run_full_council(
     user_query: str, councilors: List[Dict[str, Any]], chairman: Dict[str, Any]
-) -> Tuple[List, List, Dict, Dict]:
+) -> Tuple[List, Dict, Dict, Dict]:
+    # Stage 1
     stage1_results = await stage1_collect_responses(user_query, councilors)
-
-    if not stage1_results:
-        return (
-            [],
-            [],
-            {
-                "model": "error",
-                "response": "All models failed to respond. Please try again.",
-            },
-            {},
-        )
 
     # Use active models for ranking (using councilors models)
     council_models = [c["model"] for c in councilors]
 
-    stage2_results, anon_to_councilor = await stage2_collect_rankings(
+    # Stage 2 (Unified Dict)
+    stage2_result = await stage2_collect_rankings(
         user_query, stage1_results, council_models
     )
 
-    aggregate_rankings = calculate_aggregate_rankings(
-        stage2_results, anon_to_councilor
-    )
+    # Aggregate Rankings (if not skipped)
+    aggregate_rankings = []
+    if not stage2_result.get("skipped"):
+         aggregate_rankings = calculate_aggregate_rankings(
+            stage2_result.get("reviews", []), stage2_result.get("anon_map", {})
+        )
 
+    # Stage 3
     stage3_result = await stage3_synthesize_final(
-        user_query, stage1_results, stage2_results, chairman
+        user_query, stage1_results, stage2_result, chairman
     )
 
     metadata = {
-        "anon_to_councilor": anon_to_councilor,
+        "anon_to_councilor": stage2_result.get("anon_map", {}),
         "aggregate_rankings": aggregate_rankings,
     }
 
-    return stage1_results, stage2_results, stage3_result, metadata
+    return stage1_results, stage2_result, stage3_result, metadata

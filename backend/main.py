@@ -380,22 +380,27 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
             stage1_results = await stage1_collect_responses(body.content, active_councilors)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
-            # Stage 2: Collect rankings
+            # Stage 2: Collect rankings (Unified Dict)
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
             
             council_models = [c["model"] for c in active_councilors]
-            stage2_results, anon_to_councilor = await stage2_collect_rankings(
+            stage2_result = await stage2_collect_rankings(
                 body.content, stage1_results, council_models
             )
-            aggregate_rankings = calculate_aggregate_rankings(
-                stage2_results, anon_to_councilor
-            )
-            yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'anon_to_councilor': anon_to_councilor, 'aggregate_rankings': aggregate_rankings}})}\n\n"
+            
+            aggregate_rankings = []
+            if not stage2_result.get("skipped"):
+                 aggregate_rankings = calculate_aggregate_rankings(
+                    stage2_result.get("reviews", []), stage2_result.get("anon_map", {})
+                )
+
+            # Emit stage2_complete with the unified dict
+            yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_result, 'metadata': {'anon_to_councilor': stage2_result.get('anon_map', {}), 'aggregate_rankings': aggregate_rankings}})}\n\n"
 
             # Stage 3: Synthesize final answer
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
             stage3_result = await stage3_synthesize_final(
-                body.content, stage1_results, stage2_results, active_chairman
+                body.content, stage1_results, stage2_result, active_chairman
             )
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
@@ -407,11 +412,11 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
 
             # Save complete assistant message with metadata
             metadata = {
-                "anon_to_councilor": anon_to_councilor,
+                "anon_to_councilor": stage2_result.get("anon_map", {}),
                 "aggregate_rankings": aggregate_rankings,
             }
             storage.add_assistant_message(
-                conversation_id, stage1_results, stage2_results, stage3_result, metadata
+                conversation_id, stage1_results, stage2_result, stage3_result, metadata
             )
 
             # Send completion event
