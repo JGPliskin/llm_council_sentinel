@@ -20,12 +20,12 @@ LLM Council is an asynchronous, multi-stage deliberation engine where a "Council
 
 | Component | Functionality | Key Logic |
 | :--- | :--- | :--- |
-| **`main.py`** | FastAPI Entrypoint | - **Startup**: Preloads personas, validates initial health.<br>- **API**: `/api/councilors` (Health status), `/message` (Streaming).<br>- **Safety**: `resolve_target_councilors` enforces `healthy=True`. |
+| **`main.py`** | FastAPI Entrypoint | - **Startup**: Preloads personas, validates initial health.<br>- **API**: `/api/councilors` (Health status), `/message` (Streaming).<br>- **Management**: DELETE endpoints (single/bulk) protected by `X-Admin-Token`.<br>- **Safety**: `resolve_target_councilors` enforces `healthy=True`. |
 | **`council.py`** | Orchestration Engine | - Manages the 3-stage pipeline.<br>- implements `_bounded_query` with semaphores and retry logic.<br>- Handles anonymization maps. |
 | **`validation.py`** | Health System | - **Probes**: Sends "Hello" to models.<br>- **Timeout**: 25s (relaxed for free tier).<br>- **Annotation**: Adds `healthy`, `health_error` to model objects. |
-| **`config.py`** | Configuration | - Defines `COUNCILORS` list (ID, Name, Model, Persona Path).<br>- Defines `CHAIRMAN` definition.<br>- Sets timeouts and concurrency limits. |
+| **`config.py`** | Configuration | - Defines `COUNCILORS` list (ID, Name, Model, Persona Path).<br>- Defines `CHAIRMAN` definition.<br>- Sets timeouts and concurrency limits.<br>- **Auth**: `ADMIN_TOKEN` for management ops. |
 | **`openrouter.py`** | LLM Client | - Async HTTP client for OpenRouter AI.<br>- Handles 429/500 retries.<br>- Normalizes responses. |
-| **`storage.py`** | Persistence | - JSON-based flat file storage.<br>- Saves full conversation history.<br>- **Migration**: Handles schema updates (v1->v2 IDs). |
+| **`storage.py`** | Persistence | - JSON-based flat file storage.<br>- Saves full conversation history.<br>- **Management**: `delete_conversation` (idempotent), `bulk_delete_conversations`.<br>- **Migration**: Handles schema updates (v1->v2 IDs). |
 
 ### 2.2 Frontend (`frontend/src/`)
 

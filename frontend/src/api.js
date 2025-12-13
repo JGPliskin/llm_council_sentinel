@@ -222,4 +222,42 @@ export const api = {
       onEvent("error", { message: error.message });
     }
   },
+
+  /**
+   * Delete a conversation.
+   */
+  async deleteConversation(conversationId) {
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}`, {
+      method: "DELETE",
+      headers: {
+        "X-Admin-Token": import.meta.env.VITE_ADMIN_TOKEN || "",
+      },
+    });
+
+    if (!response.ok) {
+      await handleErrorResponse(response);
+    }
+    // Returns 204 No Content
+  },
+
+  /**
+   * Bulk delete conversations.
+   * @param {string[]} ids
+   * @returns {Promise<{deletedIds: string[], failed: {id: string, reason: string}[]}>}
+   */
+  async bulkDeleteConversations(ids) {
+    const response = await fetch(`${API_BASE}/api/conversations/bulk-delete`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Admin-Token": import.meta.env.VITE_ADMIN_TOKEN || "",
+      },
+      body: JSON.stringify({ ids }),
+    });
+
+    if (!response.ok) {
+      await handleErrorResponse(response);
+    }
+    return response.json();
+  },
 };

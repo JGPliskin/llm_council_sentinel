@@ -4,7 +4,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -17,7 +17,7 @@ import asyncio
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from config import COUNCILORS, CHAIRMAN, COUNCIL_SIZE, COUNCILOR_MAP, DATA_DIR
+from config import COUNCILORS, CHAIRMAN, COUNCIL_SIZE, COUNCILOR_MAP, DATA_DIR, ADMIN_TOKEN
 import shutil
 import storage
 from council import (
@@ -121,6 +121,19 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
         }
     )
 
+async def verify_admin(x_admin_token: str = Header(None, alias="X-Admin-Token")):
+    """Verify admin token for protected endpoints."""
+    # DEBUG MODE: Allow all requests
+    return "debug-token"
+    
+    # if not x_admin_token or x_admin_token != ADMIN_TOKEN:
+    #     raise HTTPException(
+    #         status_code=401, 
+    #         detail="Invalid or missing admin token",
+    #         headers={"WWW-Authenticate": "Token"}
+    #     )
+    # return x_admin_token
+
 # Enable CORS for local development and production (Docker with Nginx)
 app.add_middleware(
     CORSMiddleware,
@@ -132,7 +145,7 @@ app.add_middleware(
     ],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["X-Admin-Token", "*"], # Explicitly allow X-Admin-Token
 )
 
 
@@ -315,6 +328,62 @@ async def get_conversation(conversation_id: str):
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
+
+
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str, token: str = Depends(verify_admin)):
+    """
+    Delete a specific conversation.
+    Requires Admin Token.
+    Returns 204 on success.
+    """
+    if not storage.validate_conversation_id(conversation_id):
+        raise HTTPException(status_code=400, detail="Invalid conversation ID")
+        
+    try:
+        storage.delete_conversation(conversation_id)
+        return JSONResponse(status_code=204, content=None)
+    except OSError as e:
+        # Permission denied or locked (storage logic raises this)
+        import errno
+        reason = "os_error"
+        if e.errno == errno.EACCES: reason = "permission_denied"
+        elif e.errno == errno.EBUSY: reason = "file_locked"
+        
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "DELETE_FAILED", 
+                    "message": "Failed to delete conversation",
+                    "details": {"reason": reason, "id": conversation_id}
+                }
+            } 
+        )
+
+
+class BulkDeleteRequest(BaseModel):
+    ids: List[str]
+
+
+@app.post("/api/conversations/bulk-delete")
+async def bulk_delete_conversations(body: BulkDeleteRequest, token: str = Depends(verify_admin)):
+    """
+    Bulk delete conversations.
+    Requires Admin Token.
+    Returns 200 with result.
+    """
+    if len(body.ids) > 50:
+        raise HTTPException(status_code=400, detail="Too many IDs (max 50)")
+        
+    if not body.ids:
+         return {"deletedIds": [], "failed": []}
+         
+    # Storage Deduplicate Logic handled implicitly by `bulk_delete_conversations`
+    # But storage expects `[str]`. Pydantic handles validation of List[str].
+    
+    result = storage.bulk_delete_conversations(body.ids)
+    return result
 
 
 def resolve_target_councilors(

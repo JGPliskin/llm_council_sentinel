@@ -209,6 +209,88 @@ def update_conversation_schema(conversation_id: str, active_councilor_ids: List[
     save_conversation(conversation)
 
 
+
+def validate_conversation_id(conversation_id: str) -> bool:
+    """
+    Validate conversation ID format to prevent path traversal/injection.
+    Allowlist: alphanumeric, underscore, hyphen. Length: 1-64.
+    """
+    if not conversation_id or not isinstance(conversation_id, str):
+        return False
+    # Use config.DATA_DIR safe joining logic implicitly by ensuring ID is safe
+    import re
+    if not re.match(r'^[a-zA-Z0-9_-]{1,64}$', conversation_id):
+        return False
+    return True
+
+
+def delete_conversation(conversation_id: str) -> bool:
+    """
+    Delete a conversation by ID.
+    Idempotent: Returns True if file is deleted or already gone.
+    Returns False only if validation fails.
+    Raises OSError if deletion fails for other reasons (permission, lock).
+    """
+    if not validate_conversation_id(conversation_id):
+        # We generally return False or raise ValueError. 
+        # Given the plan says "Validate ID format", let's raise ValueError to be specific,
+        # but the plan also says "Return 204 always (unless 400)".
+        # For this internal function, let's return False for invalid ID so caller handles it.
+        return False
+
+    path = get_conversation_path(conversation_id)
+    try:
+        os.remove(path)
+        return True
+    except FileNotFoundError:
+        return True
+    except OSError as e:
+        # Permission denied or locked
+        raise e
+
+
+def bulk_delete_conversations(conversation_ids: List[str]) -> Dict[str, Any]:
+    """
+    Bulk delete conversations.
+    Returns:
+        {
+            "deletedIds": [...],
+            "failed": [{ "id": "...", "reason": "..." }]
+        }
+    """
+    # Dedupe and validate string type
+    unique_ids = list(set([str(i) for i in conversation_ids if i and isinstance(i, str)]))
+    
+    result = {
+        "deletedIds": [],
+        "failed": []
+    }
+    
+    for cid in unique_ids:
+        if not validate_conversation_id(cid):
+            result["failed"].append({"id": cid, "reason": "invalid_id"})
+            continue
+            
+        try:
+            delete_conversation(cid)
+            result["deletedIds"].append(cid)
+        except OSError as e:
+            # Check strictly for permission/lock issues
+            # We treat FileNotFoundError as success (in delete_conversation), so it won't raise here.
+            import errno
+            reason = "os_error"
+            if e.errno == errno.EACCES: # Permission denied
+                reason = "permission_denied"
+            elif e.errno == errno.EBUSY: # Resource busy
+                reason = "file_locked"
+            
+            result["failed"].append({"id": cid, "reason": reason})
+        except Exception as e:
+            result["failed"].append({"id": cid, "reason": "unknown_error"})
+            
+    return result
+
+
 def update_conversation_schema(conversation_id: str, active_councilor_ids: List[str], version: int = 2):
     """
     Update conversation text with new schema/active IDs.
