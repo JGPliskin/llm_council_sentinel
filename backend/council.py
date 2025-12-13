@@ -8,6 +8,23 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from openrouter import query_models_parallel, query_model
 
 
+def _normalize_error(error_data: Any, fallback_code: str = "unknown_error") -> Dict[str, str]:
+    """Convert error payloads into a consistent structure."""
+    if isinstance(error_data, dict) and "code" in error_data and "message" in error_data:
+        return {"code": str(error_data.get("code")), "message": str(error_data.get("message"))}
+
+    return {"code": fallback_code, "message": str(error_data) if error_data else "Unknown error"}
+
+
+def filter_valid_stage1_responses(stage1_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return only successful Stage 1 responses with usable content."""
+    return [
+        result
+        for result in stage1_results
+        if result.get("status") == "ok" and result.get("response")
+    ]
+
+
 async def stage1_collect_responses(user_query: str, council_models: List[str]) -> List[Dict[str, Any]]:
     """
     Stage 1: Collect individual responses from all council models.
@@ -30,15 +47,40 @@ async def stage1_collect_responses(user_query: str, council_models: List[str]) -
     # Query all models in parallel
     responses = await query_models_parallel(council_models, messages)
 
-    # Format results
+    # Format results, including failures for UI stability
     stage1_results = []
-    for model, response in responses.items():
-        if response is not None:  # Only include successful responses
-            # Use actual model from response if available (handling fallback), otherwise requested model
-            actual_model = response.get("model", model)
-            stage1_results.append(
-                {"model": actual_model, "response": response.get("content", "")}
+    for model in council_models:
+        response = responses.get(model)
+        entry = {
+            "councilor_id": model,
+            "councilor_name": model,
+            "model": model,
+            "status": "failed",
+            "response": "",
+        }
+
+        if response is None:
+            entry["error"] = {"code": "no_response", "message": "No response from model"}
+            entry["response"] = "Error: No response from model"
+            stage1_results.append(entry)
+            continue
+
+        # Use actual model from response if available (handling fallback), otherwise requested model
+        entry["model"] = response.get("model", model)
+
+        if response.get("error"):
+            entry["error"] = _normalize_error(response.get("error"))
+            entry["response"] = response.get("content", "")
+        else:
+            entry.update(
+                {
+                    "status": "ok",
+                    "response": response.get("content", ""),
+                    "error": None,
+                }
             )
+
+        stage1_results.append(entry)
 
     return stage1_results
 
@@ -57,20 +99,26 @@ async def stage2_collect_rankings(
     Returns:
         Tuple of (rankings list, label_to_model mapping)
     """
+    # Only evaluate valid Stage 1 answers
+    valid_responses = filter_valid_stage1_responses(stage1_results)
+
+    if len(valid_responses) < 2:
+        return [], {}
+
     # Create anonymized labels for responses (Response A, Response B, etc.)
-    labels = [chr(65 + i) for i in range(len(stage1_results))]  # A, B, C, ...
+    labels = [chr(65 + i) for i in range(len(valid_responses))]  # A, B, C, ...
 
     # Create mapping from label to model name
     label_to_model = {
         f"Response {label}": result["model"]
-        for label, result in zip(labels, stage1_results)
+        for label, result in zip(labels, valid_responses)
     }
 
     # Build the ranking prompt
     responses_text = "\n\n".join(
         [
             f"Response {label}:\n{result['response']}"
-            for label, result in zip(labels, stage1_results)
+            for label, result in zip(labels, valid_responses)
         ]
     )
 
@@ -116,17 +164,48 @@ Now evaluate and rank the responses."""
     # Get rankings from all council models in parallel
     responses = await query_models_parallel(council_models, messages)
 
-    # Format results
+    # Format results, including failures
     stage2_results = []
-    for model, response in responses.items():
-        if response is not None:
-            full_text = response.get("content", "")
-            parsed = parse_ranking_from_text(full_text)
-            # Use actual model from response if available
-            actual_model = response.get("model", model)
-            stage2_results.append(
-                {"model": actual_model, "ranking": full_text, "parsed_ranking": parsed}
+    for model in council_models:
+        response = responses.get(model)
+        entry = {
+            "judge_id": model,
+            "judge_name": model,
+            "model": model,
+            "status": "failed",
+            "ranking": "",
+            "parsed_ranking": [],
+        }
+
+        if response is None:
+            entry["error"] = {"code": "no_response", "message": "No response from model"}
+            entry["ranking"] = "Error: No response from model"
+            stage2_results.append(entry)
+            continue
+
+        full_text = response.get("content", "")
+        actual_model = response.get("model", model)
+        entry["model"] = actual_model
+
+        if response.get("error"):
+            entry.update(
+                {
+                    "ranking": full_text,
+                    "error": _normalize_error(response.get("error")),
+                }
             )
+        else:
+            parsed = parse_ranking_from_text(full_text)
+            entry.update(
+                {
+                    "status": "ok",
+                    "ranking": full_text,
+                    "parsed_ranking": parsed,
+                    "error": None,
+                }
+            )
+
+        stage2_results.append(entry)
 
     return stage2_results, label_to_model
 
@@ -159,8 +238,9 @@ async def stage3_synthesize_final(
 
     stage2_text = "\n\n".join(
         [
-            f"Model: {result['model']}\nRanking: {result['ranking']}"
+            f"Model: {result['model']}\nRanking: {result.get('ranking', '')}"
             for result in stage2_results
+            if result.get("status") == "ok"
         ]
     )
 
@@ -259,6 +339,9 @@ def calculate_aggregate_rankings(
     model_positions = defaultdict(list)
 
     for ranking in stage2_results:
+        if ranking.get("status") != "ok":
+            continue
+
         ranking_text = ranking["ranking"]
 
         # Parse the ranking from the structured format
@@ -344,10 +427,13 @@ async def run_full_council(
     # Stage 1: Collect individual responses
     stage1_results = await stage1_collect_responses(user_query, council_models)
 
+    # Determine valid Stage 1 answers
+    valid_stage1 = filter_valid_stage1_responses(stage1_results)
+
     # If no models responded successfully, return error
-    if not stage1_results:
+    if not valid_stage1:
         return (
-            [],
+            stage1_results,
             [],
             {
                 "model": "error",
@@ -355,6 +441,13 @@ async def run_full_council(
             },
             {},
         )
+
+    # If we don't have enough valid answers, skip Stage 2 and synthesize directly
+    if len(valid_stage1) < 2:
+        stage3_result = await stage3_synthesize_final(
+            user_query, valid_stage1, [], chairman_model
+        )
+        return stage1_results, [], stage3_result, {}
 
     # Stage 2: Collect rankings
     stage2_results, label_to_model = await stage2_collect_rankings(
@@ -366,7 +459,7 @@ async def run_full_council(
 
     # Stage 3: Synthesize final answer
     stage3_result = await stage3_synthesize_final(
-        user_query, stage1_results, stage2_results, chairman_model
+        user_query, valid_stage1, stage2_results, chairman_model
     )
 
     # Prepare metadata

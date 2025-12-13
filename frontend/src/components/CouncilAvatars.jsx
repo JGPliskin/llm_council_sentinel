@@ -114,6 +114,7 @@ const ModelAvatar = ({ modelId, isActive, onClick, status = "idle", isChairman =
     idle: "",
     thinking: "Thinking...",
     completed: "✓",
+    failed: "Failed",
   };
 
   const IconComponent = config.Icon;

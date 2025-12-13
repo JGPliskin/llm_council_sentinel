@@ -198,8 +198,19 @@ export default function ChatInterface({
     council.forEach((model) => {
       if (msg.loading?.stage1) {
         statuses[model] = "thinking";
-      } else if (msg.stage1) {
-        statuses[model] = "completed";
+        return;
+      }
+
+      if (msg.stage1) {
+        const entry = msg.stage1.find(
+          (r) => r.councilor_id === model || r.model === model,
+        );
+
+        if (entry?.status === "failed") {
+          statuses[model] = "failed";
+        } else if (entry) {
+          statuses[model] = "completed";
+        }
       }
     });
 

@@ -26,6 +26,7 @@ from council import (
     stage2_collect_rankings,
     stage3_synthesize_final,
     calculate_aggregate_rankings,
+    filter_valid_stage1_responses,
 )
 from config import COUNCIL_MODEL_POOL, CHAIRMAN_MODEL_POOL, COUNCIL_SIZE
 from validation import select_active_council, select_active_chairman
@@ -344,22 +345,50 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
             # Stage 1: Collect responses
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
             stage1_results = await stage1_collect_responses(body.content, active_models)
+            valid_stage1 = filter_valid_stage1_responses(stage1_results)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
-            # Stage 2: Collect rankings
-            yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-            stage2_results, label_to_model = await stage2_collect_rankings(
-                body.content, stage1_results, active_models
-            )
-            aggregate_rankings = calculate_aggregate_rankings(
-                stage2_results, label_to_model
-            )
-            yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
+            # If no valid answers, short-circuit with error
+            if not valid_stage1:
+                yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
+                stage3_result = {
+                    "model": "error",
+                    "response": "All models failed to respond. Please try again.",
+                }
+                yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
+
+                storage.add_assistant_message(
+                    conversation_id, stage1_results, [], stage3_result, {}
+                )
+                yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+                return
+
+            label_to_model: Dict[str, str] = {}
+            aggregate_rankings = []
+
+            # Stage 2: Collect rankings (only if enough answers)
+            if len(valid_stage1) >= 2:
+                yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
+                stage2_results, label_to_model = await stage2_collect_rankings(
+                    body.content, stage1_results, active_models
+                )
+                aggregate_rankings = calculate_aggregate_rankings(
+                    stage2_results, label_to_model
+                )
+                metadata = {
+                    "label_to_model": label_to_model,
+                    "aggregate_rankings": aggregate_rankings,
+                }
+                yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': metadata})}\n\n"
+            else:
+                stage2_results = []
+                metadata = {}
+                yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': metadata})}\n\n"
 
             # Stage 3: Synthesize final answer
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
             stage3_result = await stage3_synthesize_final(
-                body.content, stage1_results, stage2_results, active_chairman
+                body.content, valid_stage1, stage2_results, active_chairman
             )
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
@@ -370,12 +399,15 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                 yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
 
             # Save complete assistant message with metadata
-            metadata = {
-                "label_to_model": label_to_model,
-                "aggregate_rankings": aggregate_rankings,
-            }
             storage.add_assistant_message(
-                conversation_id, stage1_results, stage2_results, stage3_result, metadata
+                conversation_id,
+                stage1_results,
+                stage2_results,
+                stage3_result,
+                {
+                    "label_to_model": label_to_model,
+                    "aggregate_rankings": aggregate_rankings,
+                },
             )
 
             # Send completion event

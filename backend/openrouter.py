@@ -35,6 +35,23 @@ async def query_model(
         "messages": messages,
     }
 
+    def build_error_response(error: Exception) -> Dict[str, Any]:
+        """Create a standardized error response structure."""
+        code = "unknown_error"
+        message = str(error)
+
+        if isinstance(error, httpx.HTTPStatusError):
+            code = f"http_{error.response.status_code}"
+            message = error.response.text or str(error)
+        elif isinstance(error, httpx.TimeoutException):
+            code = "timeout"
+
+        return {
+            "content": f"Error: {message}",
+            "error": {"code": code, "message": message},
+            "model": model,  # Keep original model on error
+        }
+
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
@@ -57,11 +74,7 @@ async def query_model(
         print(f"Error querying model {model}: {e}")
         if isinstance(e, httpx.HTTPStatusError):
             print(f"Response body: {e.response.text}")
-        return {
-            'content': f"Error: {str(e)}",
-            'error': True,
-            'model': model  # Keep original model on error
-        }
+        return build_error_response(e)
 
 
 async def query_models_parallel(

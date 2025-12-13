@@ -140,6 +140,12 @@
   font-weight: 600;
 }
 
+.model-status.status-failed {
+  color: #ef4444;
+  font-style: normal;
+  font-weight: 600;
+}
+
 @keyframes pulse {
   0%,
   100% {
