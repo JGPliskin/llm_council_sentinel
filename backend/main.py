@@ -382,8 +382,10 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
 
             # Stage 2: Collect rankings
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
+            
+            council_models = [c["model"] for c in active_councilors]
             stage2_results, anon_to_councilor = await stage2_collect_rankings(
-                body.content, stage1_results, active_models
+                body.content, stage1_results, council_models
             )
             aggregate_rankings = calculate_aggregate_rankings(
                 stage2_results, anon_to_councilor
