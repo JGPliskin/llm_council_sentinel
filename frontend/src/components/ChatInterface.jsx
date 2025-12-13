@@ -13,13 +13,13 @@ import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { MAX_MESSAGE_LENGTH, api } from "@/api";
 
-// Default model configuration
-const DEFAULT_COUNCIL_MODELS = [
-  "meituan/longcat-flash-chat:free",
-  "qwen/qwen3-coder:free",
-  "deepseek/deepseek-chat-v3.1",
+// Default model configuration (mirrors backend ids for graceful fallback)
+const DEFAULT_COUNCILORS = [
+  { id: "hefei-strategist", name: "合肥策略官", model: "meituan/longcat-flash-chat:free" },
+  { id: "qinling-engineer", name: "秦岭工程师", model: "nvidia/nemotron-nano-9b-v2:free" },
+  { id: "lingnan-researcher", name: "岭南研究员", model: "kwaipilot/kat-coder-pro:free" },
 ];
-const DEFAULT_CHAIRMAN_MODEL = "amazon/nova-2-lite-v1:free";
+const DEFAULT_CHAIRMAN = { id: "chairman", name: "共识主席", model: "amazon/nova-2-lite-v1:free" };
 
 export default function ChatInterface({
   conversation,
@@ -33,8 +33,8 @@ export default function ChatInterface({
   const [activeModel, setActiveModel] = useState(null);
 
   // Model state
-  const [councilModels, setCouncilModels] = useState(DEFAULT_COUNCIL_MODELS);
-  const [chairmanModel, setChairmanModel] = useState(DEFAULT_CHAIRMAN_MODEL);
+  const [councilors, setCouncilors] = useState(DEFAULT_COUNCILORS);
+  const [chairman, setChairman] = useState(DEFAULT_CHAIRMAN);
 
   const messagesEndRef = useRef(null);
   const scrollAreaRef = useRef(null);
@@ -53,11 +53,11 @@ export default function ChatInterface({
         const shouldRefresh = !conversationId;
         const modelConfig = await api.getModels(shouldRefresh);
 
-        if (modelConfig.council_models && modelConfig.council_models.length > 0) {
-          setCouncilModels(modelConfig.council_models);
+        if (modelConfig.councilors && modelConfig.councilors.length > 0) {
+          setCouncilors(modelConfig.councilors);
         }
-        if (modelConfig.chairman_model) {
-          setChairmanModel(modelConfig.chairman_model);
+        if (modelConfig.chairman) {
+          setChairman(modelConfig.chairman);
         }
       } catch (error) {
         console.error("Failed to fetch model configuration:", error);
@@ -174,17 +174,27 @@ export default function ChatInterface({
     }
   };
 
+  const councilorLookup = {};
+  councilors.forEach((c) => {
+    councilorLookup[c.id] = c;
+    councilorLookup[c.model] = c;
+  });
+
   // Determine effective models (use conversation-specific ones if active, otherwise defaults)
-  // Determine effective models (use conversation-specific ones if active, otherwise state)
-  let effectiveCouncilModels = conversation?.active_models;
-  // Defensive check: ensure it's an array
-  if (!Array.isArray(effectiveCouncilModels) || effectiveCouncilModels.length === 0) {
-    effectiveCouncilModels = councilModels;
+  let effectiveCouncilIds = conversation?.active_models;
+  if (!Array.isArray(effectiveCouncilIds) || effectiveCouncilIds.length === 0) {
+    effectiveCouncilIds = councilors.map((c) => c.id);
   }
+  const effectiveCouncilModels = effectiveCouncilIds.map(
+    (id) => councilorLookup[id]?.model || id,
+  );
 
   let effectiveChairmanModel = conversation?.active_chairman;
+  if (effectiveChairmanModel === chairman?.id) {
+    effectiveChairmanModel = chairman?.model;
+  }
   if (!effectiveChairmanModel || typeof effectiveChairmanModel !== 'string') {
-    effectiveChairmanModel = chairmanModel;
+    effectiveChairmanModel = chairman?.model;
   }
 
   const getModelStatuses = (msg, msgCouncilModels, msgChairmanModel) => {
@@ -415,11 +425,12 @@ export default function ChatInterface({
                         {msg.stage2 && (
                           <Stage2
                             rankings={msg.stage2}
-                            labelToModel={msg.metadata?.label_to_model}
+                            labelToCouncilor={msg.metadata?.label_to_councilor}
                             aggregateRankings={msg.metadata?.aggregate_rankings}
                             activeModel={activeModel}
                             onSelectModel={handleSelectModel}
                             scrollToStage2={scrollToStage2}
+                            councilorLookup={councilorLookup}
                           />
                         )}
                       </div>

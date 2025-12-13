@@ -45,7 +45,7 @@ export default function Stage1({ responses, activeModel, onSelectModel }) {
                 value={String(index)}
                 className="text-xs md:text-sm font-semibold data-[state=active]:bg-card data-[state=active]:shadow-sm"
               >
-                {resp.model.split("/")[1] || resp.model}
+                {resp.councilor_name || resp.model || resp.councilor_id}
               </TabsTrigger>
             ))}
           </TabsList>
@@ -53,11 +53,35 @@ export default function Stage1({ responses, activeModel, onSelectModel }) {
           {responses.map((resp, index) => (
             <TabsContent key={index} value={String(index)}>
               <div className="mb-3 text-sm font-semibold text-muted-foreground mono">
+                {resp.councilor_name && (
+                  <span className="mr-2">{resp.councilor_name}</span>
+                )}
                 {resp.model}
               </div>
               <div className="markdown-content rounded-lg border bg-card p-4 shadow-sm">
-                <ReactMarkdown>{resp.response}</ReactMarkdown>
+                <ReactMarkdown>{resp.answer_markdown || resp.response}</ReactMarkdown>
               </div>
+
+              {resp.judge_card && (
+                <div className="mt-3 rounded-lg border bg-muted/40 p-3 shadow-sm">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                    Judge Card
+                  </div>
+                  <div className="space-y-1 text-sm">
+                    <div className="font-semibold">立场：{resp.judge_card.stance}</div>
+                    {resp.judge_card.core_reasons?.length > 0 && (
+                      <div>
+                        <div className="font-semibold">核心理由</div>
+                        <ul className="ml-4 list-disc">
+                          {resp.judge_card.core_reasons.map((item, i) => (
+                            <li key={i}>{item}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </TabsContent>
           ))}
         </Tabs>

@@ -154,7 +154,7 @@ def add_assistant_message(
         stage1: List of individual model responses
         stage2: List of model rankings
         stage3: Final synthesized response
-        metadata: Optional metadata including label_to_model and aggregate_rankings
+        metadata: Optional metadata including label_to_councilor and aggregate_rankings
     """
     conversation = get_conversation(conversation_id)
     if conversation is None:

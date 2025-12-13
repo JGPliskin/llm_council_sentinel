@@ -1,27 +1,26 @@
-"""Model validation and selection logic."""
-
 import sys
 import os
 import asyncio
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from openrouter import query_model
 from config import COUNCIL_SIZE
 
+
 async def check_model_health(model_id: str) -> bool:
     """
     Check if a model is available by sending a minimal request.
-    
+
     Args:
         model_id: The model identifier to check
-        
+
     Returns:
         True if the model responds successfully, False otherwise
     """
     messages = [{"role": "user", "content": "hi"}]
-    
+
     # Set a short timeout for health checks to avoid delaying startup
     try:
         response = await query_model(model_id, messages, timeout=10.0)
@@ -29,60 +28,58 @@ async def check_model_health(model_id: str) -> bool:
     except Exception:
         return False
 
-async def select_active_council(pool: List[str], count: int = COUNCIL_SIZE) -> List[str]:
+
+async def select_active_council(pool: List[Dict[str, str]], count: int = COUNCIL_SIZE) -> List[Dict[str, str]]:
     """
-    Select the first 'count' healthy models from the pool.
-    
+    Select the first 'count' healthy councilors from the pool.
+
     Args:
-        pool: List of model identifiers in order of preference
-        count: Number of models to select
-        
+        pool: List of councilor definitions in order of preference
+        count: Number of councilors to select
+
     Returns:
-        List of selected active model identifiers
+        List of selected councilor definitions
     """
-    active_models = []
-    
-    # Check models sequentially until we fill the council
-    # Note: We could do this in parallel, but we want to prioritize the top of the list
-    for model in pool:
-        if len(active_models) >= count:
+    active_council: List[Dict[str, str]] = []
+
+    for councilor in pool:
+        if len(active_council) >= count:
             break
-            
+
+        model = councilor.get("model")
         print(f"Checking health of {model}...")
         is_healthy = await check_model_health(model)
-        
+
         if is_healthy:
             print(f"Model {model} is HEALTHY")
-            active_models.append(model)
+            active_council.append(councilor)
         else:
             print(f"Model {model} is UNHEALTHY - skipping")
-            
-    # If we couldn't find enough models, just return what we have
-    # (or potentially fall back to the first ones even if they failed, depending on policy)
-    if len(active_models) == 0:
-         print("WARNING: No healthy council models found!")
-         
-    return active_models
 
-async def select_active_chairman(pool: List[str]) -> str:
+    if len(active_council) == 0:
+        print("WARNING: No healthy council models found!")
+
+    # Fallback: return top N even if unhealthy
+    return active_council or pool[:count]
+
+
+async def select_active_chairman(chairman: Dict[str, str]) -> Dict[str, str]:
     """
-    Select the first healthy chairman model from the pool.
-    
+    Select a healthy chairman definition, falling back to the provided one.
+
     Args:
-        pool: List of model identifiers in order of preference
-        
+        chairman: Chairman definition dict
+
     Returns:
-        The selected active chairman model identifier, or the first one if all fail
+        The chosen chairman definition
     """
-    for model in pool:
-        print(f"Checking health of chairman candidate {model}...")
-        is_healthy = await check_model_health(model)
-        
-        if is_healthy:
-            print(f"Chairman {model} is HEALTHY")
-            return model
-        else:
-            print(f"Chairman {model} is UNHEALTHY - skipping")
-            
-    print("WARNING: No healthy chairman models found! Defaulting to first in pool.")
-    return pool[0] if pool else "amazon/nova-2-lite-v1:free"
+    model = chairman.get("model")
+    print(f"Checking health of chairman candidate {model}...")
+    is_healthy = await check_model_health(model)
+
+    if is_healthy:
+        print(f"Chairman {model} is HEALTHY")
+        return chairman
+
+    print("WARNING: Chairman model unhealthy, falling back to declared definition.")
+    return chairman

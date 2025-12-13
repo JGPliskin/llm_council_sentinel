@@ -26,9 +26,11 @@ from council import (
     stage2_collect_rankings,
     stage3_synthesize_final,
     calculate_aggregate_rankings,
+    set_persona_cache,
 )
-from config import COUNCIL_MODEL_POOL, CHAIRMAN_MODEL_POOL, COUNCIL_SIZE
+from config import COUNCILORS, CHAIRMAN, COUNCIL_SIZE, COUNCILOR_MAP
 from validation import select_active_council, select_active_chairman
+from persona_loader import preload_personas
 # Constants
 MAX_MESSAGE_LENGTH = 1000
 RATE_LIMIT_MESSAGE = "5/minute"
@@ -174,6 +176,16 @@ class Conversation(BaseModel):
     active_chairman: Optional[str] = None
 
 
+@app.on_event("startup")
+async def startup_event():
+    """Preload personas and validate default council lineup."""
+    cache = preload_personas([*COUNCILORS, CHAIRMAN])
+    set_persona_cache(cache)
+    global ACTIVE_COUNCIL, ACTIVE_CHAIRMAN
+    ACTIVE_COUNCIL = await select_active_council(COUNCILORS, COUNCIL_SIZE)
+    ACTIVE_CHAIRMAN = await select_active_chairman(CHAIRMAN)
+
+
 @app.get("/")
 async def root():
     """Health check endpoint."""
@@ -187,30 +199,56 @@ async def health():
 
 
 # Global model cache
-ACTIVE_COUNCIL: List[str] = []
-ACTIVE_CHAIRMAN: Optional[str] = None
+ACTIVE_COUNCIL: List[Dict[str, Any]] = []
+ACTIVE_CHAIRMAN: Optional[Dict[str, Any]] = None
+
+
+def sanitize_councilor_public(definitions: List[Dict[str, Any]]):
+    return [
+        {"id": c["id"], "name": c.get("name"), "model": c.get("model")}
+        for c in definitions
+    ]
+
+
+def normalize_councilor_ids(values: List[str]) -> List[str]:
+    ids: List[str] = []
+    for value in values:
+        if value in COUNCILOR_MAP:
+            ids.append(value)
+            continue
+        for councilor in COUNCILORS:
+            if councilor.get("model") == value:
+                ids.append(councilor["id"])
+                break
+    return ids
+
+
+def resolve_councilors(active_ids: List[str]) -> List[Dict[str, Any]]:
+    resolved = [COUNCILOR_MAP[cid] for cid in active_ids if cid in COUNCILOR_MAP]
+    if resolved:
+        return resolved
+    return COUNCILORS[:COUNCIL_SIZE]
 
 
 @app.get("/api/models")
 async def get_models(refresh: bool = False):
     """
-    Get model configuration.
-    
+    Get public model configuration without exposing prompts.
+
     Args:
         refresh: If True, force re-validation of models.
                  If False, return cached valid models if available.
     """
     global ACTIVE_COUNCIL, ACTIVE_CHAIRMAN
-    
-    # If refresh requested or cache empty, run validation
-    if refresh or not ACTIVE_COUNCIL:
+
+    if refresh or not ACTIVE_COUNCIL or not ACTIVE_CHAIRMAN:
         print("Validating models...", flush=True)
-        ACTIVE_COUNCIL = await select_active_council(COUNCIL_MODEL_POOL, COUNCIL_SIZE)
-        ACTIVE_CHAIRMAN = await select_active_chairman(CHAIRMAN_MODEL_POOL)
-    
+        ACTIVE_COUNCIL = await select_active_council(COUNCILORS, COUNCIL_SIZE)
+        ACTIVE_CHAIRMAN = await select_active_chairman(CHAIRMAN)
+
     return {
-        "council_models": ACTIVE_COUNCIL,
-        "chairman_model": ACTIVE_CHAIRMAN
+        "councilors": sanitize_councilor_public(ACTIVE_COUNCIL),
+        "chairman": sanitize_councilor_public([ACTIVE_CHAIRMAN])[0] if ACTIVE_CHAIRMAN else None,
     }
 
 
@@ -229,16 +267,16 @@ async def create_conversation(request: CreateConversationRequest):
     global ACTIVE_COUNCIL, ACTIVE_CHAIRMAN
     
     # Ensure we have active models (fallback if cache empty)
-    if not ACTIVE_COUNCIL:
+    if not ACTIVE_COUNCIL or not ACTIVE_CHAIRMAN:
         print("Cache empty, validating models for new conversation...", flush=True)
-        ACTIVE_COUNCIL = await select_active_council(COUNCIL_MODEL_POOL, COUNCIL_SIZE)
-        ACTIVE_CHAIRMAN = await select_active_chairman(CHAIRMAN_MODEL_POOL)
-    
+        ACTIVE_COUNCIL = await select_active_council(COUNCILORS, COUNCIL_SIZE)
+        ACTIVE_CHAIRMAN = await select_active_chairman(CHAIRMAN)
+
     conversation_id = str(uuid.uuid4())
     conversation = storage.create_conversation(
-        conversation_id, 
-        active_models=ACTIVE_COUNCIL, 
-        active_chairman=ACTIVE_CHAIRMAN
+        conversation_id,
+        active_models=[c["id"] for c in ACTIVE_COUNCIL],
+        active_chairman=ACTIVE_CHAIRMAN.get("id") if ACTIVE_CHAIRMAN else None
     )
     return conversation
 
@@ -275,20 +313,16 @@ async def send_message(request: Request, conversation_id: str, body: SendMessage
         title = await generate_conversation_title(body.content)
         storage.update_conversation_title(conversation_id, title)
 
-    # Retrieve active models from conversation, or fall back to defaults (for old conversations)
-    # Important: In a real migration we'd backfill, but here we fallback to current valid ones or pool
-    active_models = conversation.get("active_models")
-    if not active_models:
-        # Fallback for old conversations
-        active_models = COUNCIL_MODEL_POOL[:COUNCIL_SIZE]
-        
-    active_chairman = conversation.get("active_chairman")
-    if not active_chairman:
-        active_chairman = CHAIRMAN_MODEL_POOL[0]
+    active_ids = normalize_councilor_ids(conversation.get("active_models") or [])
+    if not active_ids:
+        active_ids = [c["id"] for c in COUNCILORS[:COUNCIL_SIZE]]
 
-    # Run the 3-stage council process
+    active_councilors = resolve_councilors(active_ids)
+    active_chairman_id = conversation.get("active_chairman") or CHAIRMAN.get("id")
+    active_chairman = CHAIRMAN if active_chairman_id == CHAIRMAN.get("id") else CHAIRMAN
+
     stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
-        body.content, active_models, active_chairman
+        body.content, active_councilors, active_chairman
     )
 
     # Add assistant message with all stages and metadata
@@ -333,28 +367,28 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                 )
 
             # Retrieve active models from conversation, or fall back to defaults
-            active_models = conversation.get("active_models")
-            if not active_models:
-                active_models = COUNCIL_MODEL_POOL[:COUNCIL_SIZE]
-                
-            active_chairman = conversation.get("active_chairman")
-            if not active_chairman:
-                active_chairman = CHAIRMAN_MODEL_POOL[0]
+            active_ids = normalize_councilor_ids(conversation.get("active_models") or [])
+            if not active_ids:
+                active_ids = [c["id"] for c in COUNCILORS[:COUNCIL_SIZE]]
+
+            active_councilors = resolve_councilors(active_ids)
+            active_chairman_id = conversation.get("active_chairman") or CHAIRMAN.get("id")
+            active_chairman = CHAIRMAN if active_chairman_id == CHAIRMAN.get("id") else CHAIRMAN
 
             # Stage 1: Collect responses
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses(body.content, active_models)
+            stage1_results = await stage1_collect_responses(body.content, active_councilors)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
             # Stage 2: Collect rankings
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-            stage2_results, label_to_model = await stage2_collect_rankings(
-                body.content, stage1_results, active_models
+            stage2_results, label_to_councilor = await stage2_collect_rankings(
+                body.content, stage1_results, active_councilors
             )
             aggregate_rankings = calculate_aggregate_rankings(
-                stage2_results, label_to_model
+                stage2_results, label_to_councilor
             )
-            yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
+            yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_councilor': label_to_councilor, 'aggregate_rankings': aggregate_rankings}})}\n\n"
 
             # Stage 3: Synthesize final answer
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
@@ -371,7 +405,7 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
 
             # Save complete assistant message with metadata
             metadata = {
-                "label_to_model": label_to_model,
+                "label_to_councilor": label_to_councilor,
                 "aggregate_rankings": aggregate_rankings,
             }
             storage.add_assistant_message(
