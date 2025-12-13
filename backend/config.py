@@ -33,3 +33,24 @@ OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Data directory for conversation storage
 DATA_DIR = "data/conversations"
+
+# Default stage limits (timeouts in seconds, concurrency counts)
+DEFAULT_STAGE_LIMITS = {
+    "stage1": {"timeout": 120.0, "concurrency": 6},
+    "stage2": {"timeout": 180.0, "concurrency": 4},
+}
+
+# Optional per-councilor overrides for stage behavior
+# Example:
+# COUNCILOR_STAGE_OVERRIDES = {
+#     "some/model": {
+#         "stage1_timeout": 90.0,
+#         "stage2_timeout": 150.0,
+#         "stage1_concurrency": 2,
+#         "stage2_concurrency": 3,
+#     }
+# }
+COUNCILOR_STAGE_OVERRIDES = {}
+
+# Backoff configuration for transient failures
+RATE_LIMIT_BACKOFF_SECONDS = 2

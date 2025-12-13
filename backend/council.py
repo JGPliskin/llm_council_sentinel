@@ -6,6 +6,23 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from openrouter import query_models_parallel, query_model
+from config import DEFAULT_STAGE_LIMITS, COUNCILOR_STAGE_OVERRIDES
+
+
+def _get_stage_timeout(model: str, stage_key: str) -> float:
+    override = COUNCILOR_STAGE_OVERRIDES.get(model, {})
+    return override.get(f"{stage_key}_timeout", DEFAULT_STAGE_LIMITS[stage_key]["timeout"])
+
+
+def _get_stage_concurrency(models: List[str], stage_key: str) -> int:
+    override_values = [
+        COUNCILOR_STAGE_OVERRIDES.get(model, {}).get(f"{stage_key}_concurrency")
+        for model in models
+        if COUNCILOR_STAGE_OVERRIDES.get(model, {}).get(f"{stage_key}_concurrency") is not None
+    ]
+    if override_values:
+        return min(override_values)
+    return DEFAULT_STAGE_LIMITS[stage_key]["concurrency"]
 
 
 async def stage1_collect_responses(user_query: str, council_models: List[str]) -> List[Dict[str, Any]]:
@@ -28,7 +45,17 @@ async def stage1_collect_responses(user_query: str, council_models: List[str]) -
     ]
 
     # Query all models in parallel
-    responses = await query_models_parallel(council_models, messages)
+    concurrency = _get_stage_concurrency(council_models, "stage1")
+    timeouts = {
+        model: _get_stage_timeout(model, "stage1") for model in council_models
+    }
+    responses = await query_models_parallel(
+        council_models,
+        messages,
+        concurrency=concurrency,
+        default_timeout=DEFAULT_STAGE_LIMITS["stage1"]["timeout"],
+        timeout_overrides=timeouts,
+    )
 
     # Format results
     stage1_results = []
@@ -114,7 +141,17 @@ Now evaluate and rank the responses."""
     ]
 
     # Get rankings from all council models in parallel
-    responses = await query_models_parallel(council_models, messages)
+    concurrency = _get_stage_concurrency(council_models, "stage2")
+    timeouts = {
+        model: _get_stage_timeout(model, "stage2") for model in council_models
+    }
+    responses = await query_models_parallel(
+        council_models,
+        messages,
+        concurrency=concurrency,
+        default_timeout=DEFAULT_STAGE_LIMITS["stage2"]["timeout"],
+        timeout_overrides=timeouts,
+    )
 
     # Format results
     stage2_results = []
