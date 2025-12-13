@@ -207,6 +207,45 @@ function AppContent() {
     }
   };
 
+  const handleBulkDeleteConversations = async (ids) => {
+    try {
+      const result = await api.bulkDeleteConversations(ids);
+      const { deletedIds, failed } = result;
+
+      // Update state first
+      if (deletedIds && deletedIds.length > 0) {
+        setConversations((prev) => prev.filter(c => !deletedIds.includes(c.id)));
+
+        // Check if current conversation is deleted
+        if (conversationId && deletedIds.includes(conversationId)) {
+          navigate("/");
+          setCurrentConversation(null);
+        }
+      }
+
+      return result; // return to sidebar for its internal logic
+    } catch (error) {
+      console.error("Failed to bulk delete:", error);
+    }
+  };
+
+  const handleDeleteConversation = async (id) => {
+    try {
+      await api.deleteConversation(id);
+
+      // Remove from list
+      setConversations((prev) => prev.filter((c) => c.id !== id));
+
+      // If current was deleted, navigate away
+      if (conversationId === id) {
+        navigate("/");
+        setCurrentConversation(null);
+      }
+    } catch (error) {
+      console.error("Failed to delete conversation:", error);
+    }
+  };
+
   return (
     <div className="flex h-screen w-screen overflow-hidden">
       {/* Desktop Sidebar */}
@@ -216,6 +255,8 @@ function AppContent() {
           currentConversationId={conversationId}
           onSelectConversation={handleSelectConversation}
           onNewConversation={handleNewConversation}
+          onDeleteConversation={handleDeleteConversation}
+          onBulkDeleteConversations={handleBulkDeleteConversations}
         />
       </div>
 
@@ -233,6 +274,8 @@ function AppContent() {
               handleNewConversation();
               setIsMobileMenuOpen(false);
             }}
+            onDeleteConversation={handleDeleteConversation}
+            onBulkDeleteConversations={handleBulkDeleteConversations}
           />
         </SheetContent>
       </Sheet>

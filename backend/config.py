@@ -14,6 +14,9 @@ OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Data directory for conversation storage
 DATA_DIR = "data/conversations"
 
+# Admin Token for protected endpoints
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "secret-token")
+
 # ----------------------------
 # Concurrency & Timeouts
 # ----------------------------

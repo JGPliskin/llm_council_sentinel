@@ -16,6 +16,9 @@ An advanced AI deliberation system featuring multi-model council meetings, anony
   -   Streaming responses.
   -   Visual voting/ranking display.
   -   Dark/Light mode ready (optimized for Light).
+  -   **Conversation Management**:
+      -   Single delete enabled.
+      -   Bulk delete with selection mode.
 
 ## 🛠️ Quick Start (Development)
 
@@ -29,6 +32,7 @@ An advanced AI deliberation system featuring multi-model council meetings, anony
 cd backend
 # Create .env file
 echo "OPENROUTER_API_KEY=sk-or-..." > .env
+echo "ADMIN_TOKEN=secret-token" >> .env
 
 # Install dependencies (using uv or pip)
 uv pip install -r requirements.txt
