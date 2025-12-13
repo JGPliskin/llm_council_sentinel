@@ -9,7 +9,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from config import DATA_DIR
+from config import DATA_DIR, SCHEMA_VERSION
 
 
 def ensure_data_dir():
@@ -23,9 +23,10 @@ def get_conversation_path(conversation_id: str) -> str:
 
 
 def create_conversation(
-    conversation_id: str, 
-    active_models: Optional[List[str]] = None, 
-    active_chairman: Optional[str] = None
+    conversation_id: str,
+    active_models: Optional[List[str]] = None,
+    active_chairman: Optional[str] = None,
+    active_councilor_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Create a new conversation.
@@ -46,7 +47,9 @@ def create_conversation(
         "title": "New Conversation",
         "messages": [],
         "active_models": active_models,
-        "active_chairman": active_chairman
+        "active_chairman": active_chairman,
+        "active_councilor_ids": active_councilor_ids or [],
+        "schema_version": SCHEMA_VERSION,
     }
 
     # Save to file
@@ -141,8 +144,8 @@ def add_user_message(conversation_id: str, content: str):
 
 def add_assistant_message(
     conversation_id: str,
-    stage1: List[Dict[str, Any]],
-    stage2: List[Dict[str, Any]],
+    stage1: Dict[str, Any],
+    stage2: Dict[str, Any],
     stage3: Dict[str, Any],
     metadata: Optional[Dict[str, Any]] = None
 ):

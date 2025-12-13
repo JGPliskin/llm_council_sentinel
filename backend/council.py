@@ -8,7 +8,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from openrouter import query_models_parallel, query_model
 
 
-async def stage1_collect_responses(user_query: str, council_models: List[str]) -> List[Dict[str, Any]]:
+async def stage1_collect_responses(user_query: str, councilors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Stage 1: Collect individual responses from all council models.
 
@@ -28,23 +28,31 @@ async def stage1_collect_responses(user_query: str, council_models: List[str]) -
     ]
 
     # Query all models in parallel
-    responses = await query_models_parallel(council_models, messages)
+    model_map = {c["model"]: c for c in councilors}
+    responses = await query_models_parallel(list(model_map.keys()), messages)
 
     # Format results
     stage1_results = []
     for model, response in responses.items():
-        if response is not None:  # Only include successful responses
+        councilor = model_map.get(model)
+        if response is not None and councilor:  # Only include successful responses
             # Use actual model from response if available (handling fallback), otherwise requested model
             actual_model = response.get("model", model)
             stage1_results.append(
-                {"model": actual_model, "response": response.get("content", "")}
+                {
+                    "councilor_id": councilor["id"],
+                    "councilor_name": councilor["name"],
+                    "model": actual_model,
+                    "answer_markdown": response.get("content", ""),
+                    "judge_card": None,
+                }
             )
 
     return stage1_results
 
 
 async def stage2_collect_rankings(
-    user_query: str, stage1_results: List[Dict[str, Any]], council_models: List[str]
+    user_query: str, stage1_results: List[Dict[str, Any]], councilors: List[Dict[str, Any]]
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """
     Stage 2: Each model ranks the anonymized responses.
@@ -62,7 +70,7 @@ async def stage2_collect_rankings(
 
     # Create mapping from label to model name
     label_to_model = {
-        f"Response {label}": result["model"]
+        f"Response {label}": result["councilor_id"]
         for label, result in zip(labels, stage1_results)
     }
 
@@ -114,18 +122,23 @@ Now evaluate and rank the responses."""
     ]
 
     # Get rankings from all council models in parallel
-    responses = await query_models_parallel(council_models, messages)
+    model_map = {c["model"]: c for c in councilors}
+    responses = await query_models_parallel(list(model_map.keys()), messages)
 
     # Format results
     stage2_results = []
     for model, response in responses.items():
-        if response is not None:
+        councilor = model_map.get(model)
+        if response is not None and councilor:
             full_text = response.get("content", "")
             parsed = parse_ranking_from_text(full_text)
-            # Use actual model from response if available
-            actual_model = response.get("model", model)
             stage2_results.append(
-                {"model": actual_model, "ranking": full_text, "parsed_ranking": parsed}
+                {
+                    "judge_councilor_id": councilor["id"],
+                    "ranking": parsed,
+                    "rationale": full_text,
+                    "scores": None,
+                }
             )
 
     return stage2_results, label_to_model
@@ -152,14 +165,14 @@ async def stage3_synthesize_final(
     # Build comprehensive context for chairman
     stage1_text = "\n\n".join(
         [
-            f"Model: {result['model']}\nResponse: {result['response']}"
+            f"Councilor: {result['councilor_name']}\nResponse: {result['answer_markdown']}"
             for result in stage1_results
         ]
     )
 
     stage2_text = "\n\n".join(
         [
-            f"Model: {result['model']}\nRanking: {result['ranking']}"
+            f"Judge: {result['judge_councilor_id']}\nRanking: {result['rationale']}"
             for result in stage2_results
         ]
     )
@@ -196,12 +209,12 @@ Now synthesize your answer to the question above."""
         # Fallback if chairman fails
         return {
             "model": "error",
-            "response": "Error: Unable to generate final synthesis.",
+            "content": "Error: Unable to generate final synthesis.",
         }
 
     # Use actual model from response if available
     actual_model = response.get("model", chairman_model)
-    return {"model": actual_model, "response": response.get("content", "")}
+    return {"model": actual_model, "content": response.get("content", "")}
 
 
 def parse_ranking_from_text(ranking_text: str) -> List[str]:
@@ -259,10 +272,7 @@ def calculate_aggregate_rankings(
     model_positions = defaultdict(list)
 
     for ranking in stage2_results:
-        ranking_text = ranking["ranking"]
-
-        # Parse the ranking from the structured format
-        parsed_ranking = parse_ranking_from_text(ranking_text)
+        parsed_ranking = ranking.get("ranking", [])
 
         for position, label in enumerate(parsed_ranking, start=1):
             if label in label_to_model:
@@ -328,8 +338,8 @@ Title:"""
 
 
 async def run_full_council(
-    user_query: str, council_models: List[str], chairman_model: str
-) -> Tuple[List, List, Dict, Dict]:
+    user_query: str, councilors: List[Dict[str, Any]], chairman_model: str
+) -> Tuple[Dict, Dict, Dict, Dict]:
     """
     Run the complete 3-stage council process.
 
@@ -342,31 +352,30 @@ async def run_full_council(
         Tuple of (stage1_results, stage2_results, stage3_result, metadata)
     """
     # Stage 1: Collect individual responses
-    stage1_results = await stage1_collect_responses(user_query, council_models)
+    stage1_responses = await stage1_collect_responses(user_query, councilors)
 
     # If no models responded successfully, return error
-    if not stage1_results:
+    if not stage1_responses:
         return (
-            [],
-            [],
+            {"responses": []},
+            {"reviews": [], "anon_map": {}},
             {
-                "model": "error",
-                "response": "All models failed to respond. Please try again.",
+                "final_answer_markdown": "All models failed to respond. Please try again.",
             },
             {},
         )
 
     # Stage 2: Collect rankings
-    stage2_results, label_to_model = await stage2_collect_rankings(
-        user_query, stage1_results, council_models
+    stage2_reviews, label_to_model = await stage2_collect_rankings(
+        user_query, stage1_responses, councilors
     )
 
     # Calculate aggregate rankings
-    aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
+    aggregate_rankings = calculate_aggregate_rankings(stage2_reviews, label_to_model)
 
     # Stage 3: Synthesize final answer
     stage3_result = await stage3_synthesize_final(
-        user_query, stage1_results, stage2_results, chairman_model
+        user_query, stage1_responses, stage2_reviews, chairman_model
     )
 
     # Prepare metadata
@@ -375,4 +384,9 @@ async def run_full_council(
         "aggregate_rankings": aggregate_rankings,
     }
 
-    return stage1_results, stage2_results, stage3_result, metadata
+    return (
+        {"responses": stage1_responses},
+        {"reviews": stage2_reviews, "anon_map": label_to_model},
+        {"final_answer_markdown": stage3_result.get("content", ""), "model": stage3_result.get("model")},
+        metadata,
+    )
