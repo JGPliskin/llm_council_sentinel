@@ -1,218 +1,124 @@
-# CLAUDE.md - Technical Notes for LLM Council
+# AGENTS.md - Technical Architecture & workflows
 
-This file contains technical details, architectural decisions, and important implementation notes for future development sessions.
+This document provides a comprehensive technical reference for the LLM Council system, detailing the architecture, logic flows, state management, and operational rules.
 
-## Project Overview
+## 1. System Overview
 
-LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively answer user questions. The key innovation is anonymized peer review in Stage 2, preventing models from playing favorites.
+LLM Council is an asynchronous, multi-stage deliberation engine where a "Council" of diverse LLM personas debates a user query, peer-reviews each other's answers anonymously, and synthesizes a final consensus via a Chairman model.
 
-## Architecture
+### 1.1 Core Philosophy
+- **Diversity**: Different models/personas avoid "echo chambers".
+- **Anonymity**: Stage 2 reviews are blind to prevent model bias (e.g., favoring their own provider).
+- **Safety**: Unhealthy models are strictly filtered out to prevent execution failures.
+- **Transparency**: Every step (Raw answers, Peer reviews, Synthesis) is visible to the user.
 
-### Backend Structure (`backend/`)
+---
 
-**`config.py`**
-- Contains `COUNCIL_MODELS` (list of OpenRouter model identifiers)
-- Contains `CHAIRMAN_MODEL` (model that synthesizes final answer)
-- Uses environment variable `OPENROUTER_API_KEY` from `.env`
-- Backend runs on **port 8008** in Docker deployment
+## 2. Architecture & Components
 
-**`openrouter.py`**
-- `query_model()`: Single async model query
-- `query_models_parallel()`: Parallel queries using `asyncio.gather()`
-- Returns dict with 'content', optional 'reasoning_details', and 'model' (actual model name used)
-- Graceful degradation: returns None on failure, continues with successful responses
+### 2.1 Backend (`backend/`)
 
-**`council.py`** - The Core Logic
-- `stage1_collect_responses()`: Parallel queries to all council models. Uses actual model name from response (handling fallbacks).
-- `stage2_collect_rankings()`:
-  - Anonymizes responses as "Response A, B, C, etc."
-  - Creates `label_to_model` mapping for de-anonymization (using actual model names)
-  - Prompts models to evaluate and rank (with strict format requirements)
-  - Returns tuple: (rankings_list, label_to_model_dict)
-  - Each ranking includes both raw text and `parsed_ranking` list
-- `stage3_synthesize_final()`: Chairman synthesizes from all responses + rankings. Uses actual chairman model name.
-- `parse_ranking_from_text()`: Extracts "FINAL RANKING:" section, handles both numbered lists and plain format
-- `calculate_aggregate_rankings()`: Computes average rank position across all peer evaluations
+| Component | Functionality | Key Logic |
+| :--- | :--- | :--- |
+| **`main.py`** | FastAPI Entrypoint | - **Startup**: Preloads personas, validates initial health.<br>- **API**: `/api/councilors` (Health status), `/message` (Streaming).<br>- **Safety**: `resolve_target_councilors` enforces `healthy=True`. |
+| **`council.py`** | Orchestration Engine | - Manages the 3-stage pipeline.<br>- implements `_bounded_query` with semaphores and retry logic.<br>- Handles anonymization maps. |
+| **`validation.py`** | Health System | - **Probes**: Sends "Hello" to models.<br>- **Timeout**: 25s (relaxed for free tier).<br>- **Annotation**: Adds `healthy`, `health_error` to model objects. |
+| **`config.py`** | Configuration | - Defines `COUNCILORS` list (ID, Name, Model, Persona Path).<br>- Defines `CHAIRMAN` definition.<br>- Sets timeouts and concurrency limits. |
+| **`openrouter.py`** | LLM Client | - Async HTTP client for OpenRouter AI.<br>- Handles 429/500 retries.<br>- Normalizes responses. |
+| **`storage.py`** | Persistence | - JSON-based flat file storage.<br>- Saves full conversation history.<br>- **Migration**: Handles schema updates (v1->v2 IDs). |
 
-**`storage.py`**
-- JSON-based conversation storage in `data/conversations/`
-- Each conversation: `{id, created_at, messages[], active_models, active_chairman}`
-- `active_models` and `active_chairman` are persisted to ensure consistent model list display even if defaults change
-- Assistant messages contain: `{role, stage1, stage2, stage3, metadata}`
-- Note: metadata (label_to_model, aggregate_rankings) is NOT persisted to storage, only returned via API
+### 2.2 Frontend (`frontend/src/`)
 
-**`main.py`**
-- FastAPI app with CORS enabled for:
-  - Development: localhost:5173 (Vite), localhost:3000
-  - Production: localhost:80, localhost (Docker/Nginx)
-- POST `/api/conversations/{id}/message` returns metadata in addition to stages
-- Conversation response includes `active_models` and `active_chairman` fields
-- Metadata includes: label_to_model mapping and aggregate_rankings
-- `/health` endpoint for Docker health checks
+| Component | Functionality | Key Logic |
+| :--- | :--- | :--- |
+| **`ChatInterface.jsx`** | Main UI | - Manages conversation stream.<br>- **State**: `selectedCouncilorIds` determines active participants.<br>- **Default**: Selects `active && healthy`. |
+| **`CouncilAvatars.jsx`** | Member Display | - **Split Logic**: `available` vs `unavailable` (based on health).<br>- **Toggle**: "Show unavailable" allows inspecting dead models.<br>- **Visuals**: Checkmarks for selection, Grayscale for disabled. |
+| **`Stage1.jsx`** | Proposal View | - Renders initial markdown answers side-by-side. |
+| **`Stage2.jsx`** | Peer Review | - **Tabbed Interface**: Shows raw reviews.<br>- **Ranking**: Visualizes "Ranked 1st", "Ranked 2nd" etc.<br>- **Disclosure**: Shows real names but notes they were anonymous during review. |
 
-### Frontend Structure (`frontend/src/`)
+---
 
-**`App.jsx`**
-- Main orchestration: manages conversations list and current conversation
-- Handles message sending and metadata storage
-- Important: metadata is stored in the UI state for display but not persisted to backend JSON
+## 3. Detailed Logic & Workflows
 
-**`components/ChatInterface.jsx`**
-- Multiline textarea (3 rows, resizable)
-- Enter to send, Shift+Enter for new line
-- Dynamic Avatar Rendering: Displays the *actual* model used for a specific message (e.g. if fallback occurred), overriding the conversation default.
-- User messages wrapped in markdown-content class for padding
+### 3.1 Health Check & Safety Workflow
+The system ensures reliability by filtering out dead models *before* they cause errors.
 
-**`components/Stage1.jsx`**
-- Tab view of individual model responses
-- ReactMarkdown rendering with markdown-content wrapper
+1.  **Startup / Refresh**:
+    -   `validate_council_health` iterates all defined models.
+    -   **Probe**: Sends `{"role": "user", "content": "Hello"}` via `check_model_health`.
+    -   **Timeout**: **25 seconds** (Accommodates cold starts on free tiers).
+    -   **Result**: Returns full list annotated with `healthy: bool` and `health_error: str`.
+2.  **API Exposure**:
+    -   `/api/councilors` returns this annotated list.
+3.  **Execution Guard** (`resolve_target_councilors`):
+    -   When a user sends a message, they send `councilor_ids`.
+    -   **Strict Check**: The backend verifies `is_healthy(id)`.
+    -   **Default Safety**: If an ID is unknown or map lookup fails, it defaults to **`False` (Unhealthy)**.
+    -   **Filtering**: Only healthy IDs are passed to the Stage 1 engine. Unhealthy ones are returned in `ignored_ids`.
 
-**`components/Stage2.jsx`**
-- **Critical Feature**: Tab view showing RAW evaluation text from each model
-- De-anonymization happens CLIENT-SIDE for display (models receive anonymous labels)
-- Shows "Extracted Ranking" below each evaluation so users can validate parsing
-- Aggregate rankings shown with average position and vote count
-- Explanatory text clarifies that boldface model names are for readability only
+### 3.2 The 3-Stage Deliberation Pipeline
 
-**`components/Stage3.jsx`**
-- Final synthesized answer from chairman
-- Green-tinted background (#f0fff0) to highlight conclusion
+#### Stage 1: Proposal Generation
+*   **Goal**: Gather diverse perspectives.
+*   **Concurrency**: Max 6 parallel requests.
+*   **Retry Logic**: 2 Attempts per model.
+    *   **Network Failure**: Backoff and retry.
+    *   **JSON Failure**: Updates prompt with "Your previous reply was invalid..." and retries.
+*   **Output**: List of JSON objects containing `answer_markdown` and a structured `judge_card`.
 
-**Styling (`*.css`)**
-- Light mode theme (not dark mode)
-- Primary color: #4a90e2 (blue)
-- Global markdown styling in `index.css` with `.markdown-content` class
-- 12px padding on all markdown content to prevent cluttered appearance
+#### Stage 2: Anonymized Peer Review
+*   **Anonymization**:
+    *   Inputs: Valid results from Stage 1.
+    *   Process: Assigns `anon_1`, `anon_2` etc. randomly (or structurally).
+    *   Map: Stores `anon_id -> real_councilor_id` for later de-anonymization.
+*   **Review Process**:
+    *   Each Councilor (Judge) executes a "Ranking Task".
+    *   **Prompt**: "You are a judge. Strict JSON. Rank these anonymous responses...".
+    *   **Constraint**: Must include ALL `anon_ids` exactly once.
+*   **Fallback**:
+    *   If fewer than 2 valid Stage 1 candidates exist, Stage 2 is **Skipped** (`insufficient_candidates`).
+    *   If all judges fail, Stage 2 is marked skipped (`all_judges_failed`).
 
-## Key Design Decisions
+#### Stage 3: Chairman Synthesis
+*   **Input**: User Query + Stage 1 Answers + Stage 2 Reviews (if successful) + Aggregate Rankings.
+*   **Role**: The Chairman (usually a high-reasoning model) acts as a neutral synthesizer.
+*   **Prompt**: "Review the debate. Note the consensus. Acknowledge the winner (if any). Provide a final, actionable answer."
+*   **Output**: A comprehensive markdown response.
 
-### Stage 2 Prompt Format
-The Stage 2 prompt is very specific to ensure parseable output:
-```
-1. Evaluate each response individually first
-2. Provide "FINAL RANKING:" header
-3. Numbered list format: "1. Response C", "2. Response A", etc.
-4. No additional text after ranking section
-```
+### 3.3 State Management (Frontend)
 
-This strict format allows reliable parsing while still getting thoughtful evaluations.
+*   **Selection Persistence**:
+    *   `ChatInterface` maintains `selectedCouncilorIds`.
+    *   On "New Conversation", this resets to the default (All Active & Healthy).
+    *   During a conversation, the participants are *locked* to the message history to ensure continuity.
+*   **Visual States**:
+    *   **Available**: `healthy === true`. Shown normally.
+    *   **Unavailable**: `healthy !== true`. Hidden by default.
+    *   **Selected**: Green badge overlay.
+    *   **Disabled**: Opacity 0.4, Grayscale, blocked interaction.
 
-### De-anonymization Strategy
-- Models receive: "Response A", "Response B", etc.
-- Backend creates mapping: `{"Response A": "openai/gpt-5.1", ...}`
-- Frontend displays model names in **bold** for readability
-- Users see explanation that original evaluation used anonymous labels
-- This prevents bias while maintaining transparency
+## 4. Configuration Rules
 
-### Error Handling Philosophy
-- Continue with successful responses if some models fail (graceful degradation)
-- Never fail the entire request due to single model failure
-- Log errors but don't expose to user unless all models fail
+### 4.1 Port & Network
+*   **Backend Port**: **8010** (Development/Local).
+*   **Frontend Port**: **5173** (Vite).
+*   **Docker**: Backend maps internal 8008 -> Host 80 via Nginx.
 
-### UI/UX Transparency
-- All raw outputs are inspectable via tabs
-- Parsed rankings shown below raw text for validation
-- Users can verify system's interpretation of model outputs
-- This builds trust and allows debugging of edge cases
+### 4.2 Model Constraints
+*   **JSON Enforcement**: System prompts aggressively demand JSON.
+*   **Context Windows**: Models must support at least 4k context for Stage 2 (reading multiple inputs).
+*   **Free Tier Models**: Timeouts are explicitly tuned (25s Stage 1, 75s Stage 2) to tolerate slower APIs.
 
-## Important Implementation Details
+## 5. Troubleshooting Logic
 
-### Relative Imports
-All backend modules use relative imports (e.g., `from .config import ...`) not absolute imports. This is critical for Python's module system to work correctly when running as `python -m backend.main`.
+*   **"Unavailable" Status**:
+    *   Cause: `check_model_health` failed (timeout or error).
+    *   Action: Click "Show unavailable" -> Hover tooltip to see error.
+    *   Fix: Check OpenRouter key or try `/api/councilors?refresh=1`.
+*   **"Ghost" Models**:
+    *   If a model appears in `config.py` but not in the UI, check if it was filtered by the `startup_event` logic or if the backend process is stale (check Port 8010).
+*   **Missing Stage 2**:
+    *   If only 1 model succeeds in Stage 1, Stage 2 is skipped by design to save tokens.
 
-### Port Configuration
-
-**Development Mode:**
-- Backend: 8008 (direct access)
-- Frontend: 5173 (Vite dev server)
-- Frontend calls backend directly at `http://localhost:8008`
-
-**Docker/Production Mode:**
-- Backend: 8008 (internal container port)
-- Nginx: 80 (external access port)
-- Frontend built as static files served by Nginx
-- Frontend uses relative URLs (e.g., `/api/...`) which are proxied to backend by Nginx
-- No CORS issues because all traffic goes through single origin (port 80)
-
-The `frontend/src/api.js` automatically detects environment using `import.meta.env.PROD` and switches between development and production API base URLs.
-
-### Markdown Rendering
-All ReactMarkdown components must be wrapped in `<div className="markdown-content">` for proper spacing. This class is defined globally in `index.css`.
-
-### Model Configuration
-Models are hardcoded in `backend/config.py`. Chairman can be same or different from council members. The current default is Gemini as chairman per user preference.
-
-## Docker Deployment
-
-The application can be deployed using Docker Compose:
-
-```bash
-# Build and start containers
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Rebuild after code changes
-docker-compose up -d --build
-
-# Stop containers
-docker-compose down
-```
-
-**Architecture:**
-- `backend` container: Python FastAPI app on port 8008
-- `nginx` container: Nginx reverse proxy on port 80
-  - Serves frontend static files from `/usr/share/nginx/html`
-  - Proxies `/api/*` requests to backend container
-  - Handles CORS by making everything same-origin
-- Shared volume: `./data` for conversation persistence
-
-**Important:** Before deploying, ensure:
-1. Frontend is built: `cd frontend && npm run build`
-2. `.env` file exists with `ZENMUX_API_KEY`
-3. Port 80 is available on host machine
-
-## Common Gotchas
-
-1. **Module Import Errors**: Always run backend as `python -m backend.main` from project root, not from backend directory
-2. **CORS Issues in Docker**:
-   - Frontend must use relative URLs in production (handled automatically by `import.meta.env.PROD`)
-   - Backend CORS must allow `http://localhost` and `http://localhost:80`
-   - Never expose backend port 8008 externally in production
-3. **Ranking Parse Failures**: If models don't follow format, fallback regex extracts any "Response X" patterns in order
-4. **Missing Metadata**: Metadata is ephemeral (not persisted), only available in API responses
-5. **Docker Build Issues**: Remember to rebuild frontend before `docker-compose up --build`
-
-## Future Enhancement Ideas
-
-- Configurable council/chairman via UI instead of config file
-- Streaming responses instead of batch loading
-- Export conversations to markdown/PDF
-- Model performance analytics over time
-- Custom ranking criteria (not just accuracy/insight)
-- Support for reasoning models (o1, etc.) with special handling
-
-## Testing Notes
-
-Use `test_openrouter.py` to verify API connectivity and test different model identifiers before adding to council. The script tests both streaming and non-streaming modes.
-
-## Data Flow Summary
-
-```
-User Query
-    ↓
-Stage 1: Parallel queries → [individual responses]
-    ↓
-Stage 2: Anonymize → Parallel ranking queries → [evaluations + parsed rankings]
-    ↓
-Aggregate Rankings Calculation → [sorted by avg position]
-    ↓
-Stage 3: Chairman synthesis with full context
-    ↓
-Return: {stage1, stage2, stage3, metadata}
-    ↓
-Frontend: Display with tabs + validation UI
-```
-
-The entire flow is async/parallel where possible to minimize latency.
+---
+*Created by [Your Name/Agent] - Last Updated: 2025-12-13*

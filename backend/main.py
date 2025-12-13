@@ -1,11 +1,15 @@
 """FastAPI backend for LLM Council."""
 
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, field_validator
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import uuid
 import json
 import asyncio
@@ -13,11 +17,8 @@ import asyncio
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
+from config import COUNCILORS, CHAIRMAN, COUNCIL_SIZE, COUNCILOR_MAP, DATA_DIR
+import shutil
 import storage
 from council import (
     run_full_council,
@@ -29,7 +30,7 @@ from council import (
     set_persona_cache,
 )
 from config import COUNCILORS, CHAIRMAN, COUNCIL_SIZE, COUNCILOR_MAP
-from validation import select_active_council, select_active_chairman
+from validation import validate_council_health, select_active_chairman
 from persona_loader import preload_personas
 # Constants
 MAX_MESSAGE_LENGTH = 1000
@@ -137,14 +138,15 @@ app.add_middleware(
 
 class CreateConversationRequest(BaseModel):
     """Request to create a new conversation."""
-
-    pass
+    
+    councilor_ids: Optional[List[str]] = None
 
 
 class SendMessageRequest(BaseModel):
     """Request to send a message in a conversation."""
 
     content: str
+    councilor_ids: Optional[List[str]] = None
 
     @field_validator('content')
     @classmethod
@@ -172,8 +174,10 @@ class Conversation(BaseModel):
     created_at: str
     title: str
     messages: List[Dict[str, Any]]
-    active_models: Optional[List[str]] = None
+    active_models: Optional[List[str]] = None # Legacy (kept for v1 read)
+    active_councilor_ids: Optional[List[str]] = None # v2 Canonical
     active_chairman: Optional[str] = None
+    schema_version: Optional[int] = 1 # v1=1 (implicit), v2=2
 
 
 @app.on_event("startup")
@@ -182,7 +186,7 @@ async def startup_event():
     cache = preload_personas([*COUNCILORS, CHAIRMAN])
     set_persona_cache(cache)
     global ACTIVE_COUNCIL, ACTIVE_CHAIRMAN
-    ACTIVE_COUNCIL = await select_active_council(COUNCILORS, COUNCIL_SIZE)
+    ACTIVE_COUNCIL = await validate_council_health(COUNCILORS, COUNCIL_SIZE)
     ACTIVE_CHAIRMAN = await select_active_chairman(CHAIRMAN)
 
 
@@ -199,13 +203,21 @@ async def health():
 
 
 # Global model cache
-ACTIVE_COUNCIL: List[Dict[str, Any]] = []
-ACTIVE_CHAIRMAN: Optional[Dict[str, Any]] = None
+ACTIVE_COUNCIL = []
+ACTIVE_CHAIRMAN = None
 
 
 def sanitize_councilor_public(definitions: List[Dict[str, Any]]):
     return [
-        {"id": c["id"], "name": c.get("name"), "model": c.get("model")}
+        {
+            "id": c["id"], 
+            "name": c.get("name"), 
+            "model": c.get("model"),
+            "active": c.get("active", True),
+            "healthy": c.get("healthy", True),
+            "health_error": c.get("health_error"),
+            "health_checked_at": c.get("health_checked_at")
+        }
         for c in definitions
     ]
 
@@ -233,20 +245,25 @@ def resolve_councilors(active_ids: List[str]) -> List[Dict[str, Any]]:
 @app.get("/api/models")
 async def get_models(refresh: bool = False):
     """
-    Get public model configuration without exposing prompts.
-
-    Args:
-        refresh: If True, force re-validation of models.
-                 If False, return cached valid models if available.
+    Legacy alias for /api/councilors.
+    Preserved for backward compatibility.
     """
-    global ACTIVE_COUNCIL, ACTIVE_CHAIRMAN
+    return await get_councilors(refresh)
 
-    if refresh or not ACTIVE_COUNCIL or not ACTIVE_CHAIRMAN:
-        print("Validating models...", flush=True)
-        ACTIVE_COUNCIL = await select_active_council(COUNCILORS, COUNCIL_SIZE)
-        ACTIVE_CHAIRMAN = await select_active_chairman(CHAIRMAN)
 
+@app.get("/api/councilors")
+async def get_councilors(refresh: bool = False):
+    """
+    Get current councilor configuration.
+    Returns list of councilors and the chairman.
+    """
+    global ACTIVE_COUNCIL
+    if refresh:
+        print("Forcing health check refresh...", flush=True)
+        ACTIVE_COUNCIL = await validate_council_health(COUNCILORS, COUNCIL_SIZE, force_refresh=True)
+    
     return {
+        "version": "2.0-health-v2",
         "councilors": sanitize_councilor_public(ACTIVE_COUNCIL),
         "chairman": sanitize_councilor_public([ACTIVE_CHAIRMAN])[0] if ACTIVE_CHAIRMAN else None,
     }
@@ -269,13 +286,23 @@ async def create_conversation(request: CreateConversationRequest):
     # Ensure we have active models (fallback if cache empty)
     if not ACTIVE_COUNCIL or not ACTIVE_CHAIRMAN:
         print("Cache empty, validating models for new conversation...", flush=True)
-        ACTIVE_COUNCIL = await select_active_council(COUNCILORS, COUNCIL_SIZE)
+        ACTIVE_COUNCIL = await validate_council_health(COUNCILORS, COUNCIL_SIZE)
         ACTIVE_CHAIRMAN = await select_active_chairman(CHAIRMAN)
 
     conversation_id = str(uuid.uuid4())
+    # v2: Store active_councilor_ids
+    # Priority: Request > Default
+    default_ids = [c["id"] for c in ACTIVE_COUNCIL]
+    
+    if request.councilor_ids:
+        normalized = normalize_councilor_ids(request.councilor_ids)
+        valid_requested = [cid for cid in normalized if cid in COUNCILOR_MAP]
+        if valid_requested:
+            default_ids = valid_requested
+            
     conversation = storage.create_conversation(
         conversation_id,
-        active_models=[c["id"] for c in ACTIVE_COUNCIL],
+        active_councilor_ids=default_ids,
         active_chairman=ACTIVE_CHAIRMAN.get("id") if ACTIVE_CHAIRMAN else None
     )
     return conversation
@@ -288,6 +315,105 @@ async def get_conversation(conversation_id: str):
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
+
+
+def resolve_target_councilors(
+    payload_ids: Optional[List[str]],
+    conversation: Dict[str, Any]
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """
+    Resolve effective councilors based on priority:
+    1. Payload (Temporary)
+    2. Conversation (Saved)
+    3. Global Defaults
+    
+    Returns:
+        (resolved_councilor_objs, needs_migration, ignored_ids)
+    """
+    needs_migration = False
+    ignored_ids = []
+    
+    # Helper to check health (using global ACTIVE_COUNCIL state)
+    # We assume ACTIVE_COUNCIL is up to date or we trust the config.
+    # Actually, we should check the `ACTIVE_COUNCIL` list for health status.
+    # Map valid IDs to their health status
+    health_map = {c["id"]: c.get("healthy", True) for c in ACTIVE_COUNCIL}
+    
+    def is_healthy(cid):
+        # STRICT requirement: "healthy === True".
+        # If not in ACTIVE_COUNCIL map, we default to FALSE because we haven't validated it.
+        # This prevents "unknown" councilors from being assumed healthy.
+        return health_map.get(cid, False) is True
+    
+    # 1. Payload Overrides
+    if payload_ids:
+        # Normalize: convert models to councilor IDs if needed
+        # Normalize: convert models to councilor IDs if needed
+        normalized_ids = normalize_councilor_ids(payload_ids)
+        
+        valid_ids = []
+        for cid in normalized_ids:
+            if cid in COUNCILOR_MAP:
+                if is_healthy(cid):
+                    valid_ids.append(cid)
+                else:
+                    ignored_ids.append(cid)
+                    
+        if valid_ids:
+             # Just return mapped objects
+             return [COUNCILOR_MAP[cid] for cid in valid_ids], needs_migration, ignored_ids
+             
+    # 2. Conversation Stored
+    # Check v2 first
+    v2_ids = conversation.get("active_councilor_ids")
+    if v2_ids:
+        # Validate existence AND health (should we filter out unhealthy from history? 
+        # User said "Execution will STRICTLY ignore unhealthy". So yes.)
+        valid_v2 = []
+        for cid in v2_ids:
+             if cid in COUNCILOR_MAP:
+                 if is_healthy(cid):
+                     valid_v2.append(cid)
+                 else:
+                     ignored_ids.append(cid)
+                     
+        if valid_v2:
+            return [COUNCILOR_MAP[cid] for cid in valid_v2], needs_migration, ignored_ids
+            
+    # Check v1 (Legacy Migration)
+    v1_models = conversation.get("active_models")
+    if v1_models:
+        needs_migration = True
+        migrated_ids = []
+        for model_name in v1_models:
+            # Algorithm: Find first councilor using this model
+            found = False
+            for c in COUNCILORS:
+                if c["model"] == model_name:
+                    migrated_ids.append(c["id"])
+                    found = True
+                    break
+            # If not found, discard (as per requirement)
+        
+        if migrated_ids:
+            # Filter healthy
+            valid_migrated = []
+            for cid in migrated_ids:
+                if is_healthy(cid):
+                    valid_migrated.append(cid)
+                else:
+                    ignored_ids.append(cid)
+            
+            if valid_migrated:
+                 return [COUNCILOR_MAP[cid] for cid in valid_migrated], needs_migration, ignored_ids
+            
+    # 3. Global Default (Fallback)
+    # Use all active councilors from config
+    # We assume all in COUNCILORS are active per user instruction
+    # 3. Global Default (Fallback)
+    # Use all ACTIVE and HEALTHY councilors
+    default_ids = [c["id"] for c in ACTIVE_COUNCIL if c.get("healthy") is True]
+    return [COUNCILOR_MAP[cid] for cid in default_ids], True, ignored_ids # Mark as needing migration/save
 
 
 @app.post("/api/conversations/{conversation_id}/message")
@@ -313,11 +439,9 @@ async def send_message(request: Request, conversation_id: str, body: SendMessage
         title = await generate_conversation_title(body.content)
         storage.update_conversation_title(conversation_id, title)
 
-    active_ids = normalize_councilor_ids(conversation.get("active_models") or [])
-    if not active_ids:
-        active_ids = [c["id"] for c in COUNCILORS[:COUNCIL_SIZE]]
-
-    active_councilors = resolve_councilors(active_ids)
+    # Resolution Logic
+    active_councilors, needs_migration, ignored_ids = resolve_target_councilors(body.councilor_ids, conversation)
+    
     active_chairman_id = conversation.get("active_chairman") or CHAIRMAN.get("id")
     active_chairman = CHAIRMAN if active_chairman_id == CHAIRMAN.get("id") else CHAIRMAN
 
@@ -329,6 +453,33 @@ async def send_message(request: Request, conversation_id: str, body: SendMessage
     storage.add_assistant_message(
         conversation_id, stage1_results, stage2_results, stage3_result, metadata
     )
+    
+    # Persistence Update (Soft Migration or Preference Update)
+    # Update if migration needed OR if user provided explicit IDs (making them the new default? 
+    # User said: "Persist selection per conversation: ... on send, include ids and update server-side conversation defaults")
+    # So if body.councilor_ids provided, we update.
+    current_ids = [c["id"] for c in active_councilors]
+    
+    should_update_schema = False
+    
+    # Logic: Update if (Payload Provided) OR (Needs Migration)
+    if body.councilor_ids:
+        should_update_schema = True
+    elif needs_migration:
+        should_update_schema = True
+        
+    if should_update_schema:
+        # Handle Backup if this is first migration (v1 -> v2)
+        if conversation.get("schema_version", 1) < 2:
+            try:
+                src = storage.get_conversation_path(conversation_id)
+                dst = src + ".bak"
+                if not os.path.exists(dst):
+                     shutil.copy2(src, dst)
+            except Exception as e:
+                print(f"Backup failed: {e}")
+
+        storage.update_conversation_schema(conversation_id, current_ids, version=2)
 
     # Return the complete response with metadata
     return {
@@ -366,12 +517,18 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                     generate_conversation_title(body.content)
                 )
 
-            # Retrieve active models from conversation, or fall back to defaults
-            active_ids = normalize_councilor_ids(conversation.get("active_models") or [])
-            if not active_ids:
-                active_ids = [c["id"] for c in COUNCILORS[:COUNCIL_SIZE]]
-
-            active_councilors = resolve_councilors(active_ids)
+            # Resolution Logic
+            # We re-fetch or pass data? resolve_target_councilors is sync (using global COUNCILOR_MAP)
+            active_councilors, needs_migration, ignored_ids = resolve_target_councilors(body.councilor_ids, conversation)
+            
+            # Emit Meta Event
+            meta_payload = {
+                "type": "meta",
+                "resolved_councilor_ids": [c["id"] for c in active_councilors],
+                "ignored_ids": ignored_ids
+            }
+            yield f"data: {json.dumps(meta_payload)}\n\n"
+            
             active_chairman_id = conversation.get("active_chairman") or CHAIRMAN.get("id")
             active_chairman = CHAIRMAN if active_chairman_id == CHAIRMAN.get("id") else CHAIRMAN
 
@@ -383,9 +540,9 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
             # Stage 2: Collect rankings (Unified Dict)
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
             
-            council_models = [c["model"] for c in active_councilors]
+            # Use active_councilors objects, NOT models
             stage2_result = await stage2_collect_rankings(
-                body.content, stage1_results, council_models
+                body.content, stage1_results, active_councilors
             )
             
             aggregate_rankings = []
@@ -418,6 +575,21 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
             storage.add_assistant_message(
                 conversation_id, stage1_results, stage2_result, stage3_result, metadata
             )
+            
+            # Persistence Update (Soft Migration / Sync)
+            current_ids = [c["id"] for c in active_councilors]
+            should_update_schema = False
+            if body.councilor_ids: should_update_schema = True
+            elif needs_migration: should_update_schema = True
+            
+            if should_update_schema:
+                 if conversation.get("schema_version", 1) < 2:
+                    try:
+                        src = storage.get_conversation_path(conversation_id)
+                        dst = src + ".bak"
+                        if not os.path.exists(dst): shutil.copy2(src, dst)
+                    except: pass
+                 storage.update_conversation_schema(conversation_id, current_ids, version=2)
 
             # Send completion event
             yield f"data: {json.dumps({'type': 'complete'})}\n\n"
@@ -439,4 +611,4 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8009)
+    uvicorn.run(app, host="0.0.0.0", port=8010)

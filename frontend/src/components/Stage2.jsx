@@ -77,7 +77,7 @@ export default function Stage2({
                 value={String(index)}
                 className="text-xs md:text-sm font-semibold data-[state=active]:bg-card data-[state=active]:shadow-sm"
               >
-                {rank.councilor_name || resolveCouncilorName(rank.model)}
+                {rank.councilor_name || rank.judge_councilor_name || resolveCouncilorName(rank.model)}
               </TabsTrigger>
             ))}
           </TabsList>
@@ -85,7 +85,7 @@ export default function Stage2({
           {rankings.map((rank, index) => (
             <TabsContent key={index} value={String(index)}>
               <div className="mb-3 text-sm font-semibold text-muted-foreground mono">
-                {rank.councilor_name && <span className="mr-2">{rank.councilor_name}</span>}
+                {(rank.councilor_name || rank.judge_councilor_name) && <span className="mr-2">{rank.councilor_name || rank.judge_councilor_name}</span>}
                 {rank.model}
               </div>
 
@@ -102,21 +102,35 @@ export default function Stage2({
                 </div>
               )}
 
-              {rank.scores && rank.scores.length > 0 && (
+              {rank.scores && (
                 <div className="mt-3 rounded-lg border bg-muted/40 p-4 shadow-sm">
                   <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
                     {t('rawEvaluations')}
                   </div>
                   <div className="space-y-2 text-sm">
-                    {rank.scores.map((item, idx) => (
+                    {/* Handle scores as simple key-value pairs if it's an object */}
+                    {Array.isArray(rank.scores) ? rank.scores.map((item, idx) => (
                       <div key={idx} className="flex flex-col gap-1 rounded-md border bg-card/60 p-3">
                         <div className="flex items-center justify-between">
                           <span className="font-semibold">{resolveLabelName(item.label)}</span>
-                          <span className="mono text-xs text-muted-foreground">{item.score?.toFixed?.(1) ?? item.score}</span>
+                          <span className="mono text-xs text-muted-foreground">{item.score}</span>
                         </div>
-                        <div className="text-muted-foreground text-sm">{item.rationale}</div>
+                        {item.rationale && <div className="text-muted-foreground text-sm">{item.rationale}</div>}
+                      </div>
+                    )) : Object.entries(rank.scores).map(([label, score], idx) => (
+                      <div key={idx} className="flex items-center justify-between rounded-md border bg-card/60 p-3">
+                        <span className="font-semibold">{resolveLabelName(label)}</span>
+                        <span className="mono text-xs text-muted-foreground font-bold">{score}</span>
                       </div>
                     ))}
+
+                    {/* Display Rationale separately if it exists at top level */}
+                    {rank.rationale && (
+                      <div className="mt-2 rounded-md border bg-card/60 p-3 text-sm text-muted-foreground">
+                        <span className="font-semibold block mb-1 text-xs uppercase">Rationale</span>
+                        {rank.rationale}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

@@ -443,7 +443,7 @@ async def stage1_collect_responses(
 def _build_judge_cards(stage1_results: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """Create anonymized judge cards for ranking. Only distinct valid results should be passed here."""
     judge_cards = []
-    anon_to_councilor = {}
+    anon_to_councilor_id = {}
     
     # We iterate and assign anon_ids. 
     # To keep anon_ids consistent across debugs, we could sort, but input order is presumed stable.
@@ -456,10 +456,10 @@ def _build_judge_cards(stage1_results: List[Dict[str, Any]]) -> Tuple[List[Dict[
         anon_id = f"anon_{count}"
         count += 1
         
-        model_name = result.get("model", "unknown-model") 
-        councilor_name = result.get("councilor_name") or model_name
+        # Strict Requirement: anon_map maps anon_id -> councilor_id
+        councilor_id = result.get("councilor_id")
         
-        anon_to_councilor[anon_id] = f"{councilor_name} ({model_name})"
+        anon_to_councilor_id[anon_id] = councilor_id
 
         judge_cards.append(
             {
@@ -468,7 +468,7 @@ def _build_judge_cards(stage1_results: List[Dict[str, Any]]) -> Tuple[List[Dict[
             }
         )
 
-    return judge_cards, anon_to_councilor
+    return judge_cards, anon_to_councilor_id
 
 
 def _build_ranking_messages(user_query: str, judge_cards: List[Dict[str, Any]]) -> List[Dict[str, str]]:
@@ -549,6 +549,8 @@ def _parse_ranking_response(
 
 async def _collect_single_ranking_bounded(
     semaphore: asyncio.Semaphore,
+    councilor_id: str,
+    councilor_name: str,
     model: str,
     user_query: str,
     judge_cards: List[Dict[str, Any]],
@@ -579,6 +581,8 @@ async def _collect_single_ranking_bounded(
         should_retry_json = False
         
         attempt_res = {
+            "judge_councilor_id": councilor_id,
+            "judge_councilor_name": councilor_name,
             "model": response.get("model", model) if response else model,
             "raw_response": response.get("content", "") if response else ""
         }
@@ -633,6 +637,7 @@ async def _collect_single_ranking_bounded(
             
     # Fail
     return {
+        "judge_councilor_id": councilor_id,
         "model": model,
         "error": {
             "code": "EXECUTION_ERROR",
@@ -667,8 +672,9 @@ async def stage2_collect_rankings(
         return base_response
 
     # Phase 2: Execution
-    judge_cards, anon_to_councilor = _build_judge_cards(valid_candidates)
-    base_response["anon_map"] = anon_to_councilor
+    # Note: _build_judge_cards now returns anon_id -> councilor_id
+    judge_cards, anon_map_ids = _build_judge_cards(valid_candidates)
+    base_response["anon_map"] = anon_map_ids
     
     # Should not happen given check above, but consistency
     if len(judge_cards) < 2:
@@ -690,7 +696,14 @@ async def stage2_collect_rankings(
         
         t = asyncio.create_task(
             _collect_single_ranking_bounded(
-                semaphore, model, user_query, judge_cards, anon_ids, timeout
+                semaphore, 
+                councilor["id"],
+                councilor.get("name"),
+                model, 
+                user_query, 
+                judge_cards, 
+                anon_ids, 
+                timeout
             )
         )
         tasks.append((councilor, t))
@@ -713,11 +726,13 @@ async def stage2_collect_rankings(
                     completed_results.append(task.result())
                 except Exception as e:
                     completed_results.append({
+                        "judge_councilor_id": councilor["id"],
                         "model": councilor["model"],
                         "error": str(e) # Simplified error structure for Stage2 raw list
                     })
             else:
                  completed_results.append({
+                     "judge_councilor_id": councilor["id"],
                      "model": councilor["model"],
                      "error": {
                          "code": "STAGE_DEADLINE",
@@ -729,6 +744,7 @@ async def stage2_collect_rankings(
         for i, res in enumerate(results):
             if isinstance(res, Exception):
                 completed_results.append({
+                    "judge_councilor_id": councilors[i]["id"],
                     "model": councilors[i]["model"],
                     "error": str(res)
                 })
@@ -742,7 +758,7 @@ async def stage2_collect_rankings(
         # Check if internal error field exists or if it's a bare exception string (from catch-all)
         if isinstance(res.get("error"), (str, dict)) or res.get("error") is True:
              judge_failures.append({
-                "judge_councilor_id": res.get("model"),
+                "judge_councilor_id": res.get("judge_councilor_id") or res.get("model"),
                 "model": res.get("model"),
                 "error": res.get("error") if isinstance(res.get("error"), dict) else {
                     "code": "JUDGE_EXECUTION_ERROR",
@@ -885,7 +901,7 @@ def calculate_aggregate_rankings(
             avg_rank = sum(positions) / len(positions)
             aggregate.append(
                 {
-                    "model": model,
+                    "councilor_id": model,
                     "average_rank": round(avg_rank, 2),
                     "rankings_count": len(positions),
                 }

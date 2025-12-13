@@ -7,7 +7,7 @@ import i18n from "./i18n";
 
 // In production (Docker), use relative path to go through Nginx proxy
 // In development, use direct backend URL
-const API_BASE = import.meta.env.PROD ? "" : "http://localhost:8009";
+const API_BASE = import.meta.env.PROD ? "" : "http://localhost:8010";
 
 // Constants
 export const MAX_MESSAGE_LENGTH = 1000;
@@ -51,15 +51,31 @@ async function handleErrorResponse(response) {
 
 export const api = {
   /**
-   * Get model configuration.
+   * Get councilor configuration.
    */
-  async getModels(refresh = false) {
-    const url = refresh ? `${API_BASE}/api/models?refresh=true` : `${API_BASE}/api/models`;
+  async getCouncilors(refresh = false) {
+    const params = new URLSearchParams();
+    if (refresh) params.append("refresh", "true");
+
+    // Add cache buster if refreshing
+    if (refresh) params.append("t", Date.now().toString());
+
+    const queryString = params.toString() ? `?${params.toString()}` : "";
+    const url = `${API_BASE}/api/councilors${queryString}`;
+
     const response = await fetch(url);
     if (!response.ok) {
-      throw new Error("Failed to fetch model configuration");
+      throw new Error("Failed to fetch councilor configuration");
     }
     return response.json();
+  },
+
+  /**
+   * Legacy alias for getCouncilors.
+   * @deprecated Use getCouncilors instead.
+   */
+  async getModels(refresh = false) {
+    return this.getCouncilors(refresh);
   },
 
   /**
@@ -106,7 +122,7 @@ export const api = {
   /**
    * Send a message in a conversation.
    */
-  async sendMessage(conversationId, content) {
+  async sendMessage(conversationId, content, councilorIds = null) {
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message`,
       {
@@ -114,7 +130,7 @@ export const api = {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, councilor_ids: councilorIds }),
       },
     );
     if (!response.ok) {
@@ -130,7 +146,7 @@ export const api = {
    * @param {function} onEvent - Callback function for each event: (eventType, data) => void
    * @returns {Promise<void>}
    */
-  async sendMessageStream(conversationId, content, onEvent) {
+  async sendMessageStream(conversationId, content, onEvent, councilorIds = null) {
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message/stream`,
       {
@@ -138,7 +154,7 @@ export const api = {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, councilor_ids: councilorIds }),
       },
     );
 

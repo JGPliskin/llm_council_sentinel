@@ -7,8 +7,9 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "./ui/tooltip";
-import { Crown, ExternalLink } from "lucide-react";
+import { Crown, ExternalLink, Check, ChevronDown, ChevronRight, AlertCircle, Ban } from "lucide-react";
 import { HuggingFace, LongCat, Aws } from "@lobehub/icons";
+import { useState } from "react";
 import "./CouncilAvatars.css";
 
 // Zenmux invite URL
@@ -89,11 +90,29 @@ const stringToColor = (str) => {
   return "#" + "00000".substring(0, 6 - c.length) + c;
 };
 
-const ModelAvatar = ({ modelId, isActive, onClick, status = "idle", isChairman = false }) => {
+const ModelAvatar = ({
+  modelId,
+  item, // Full councilor object if available
+  isActive,
+  onClick,
+  status = "idle",
+  isChairman = false,
+  selectable = false,
+  isSelected = false
+}) => {
   if (!modelId || typeof modelId !== 'string') return null;
 
   // Try to get config, or generate fallback
   let config = MODEL_CONFIG[modelId];
+
+  // Logic for health/disabled state
+  // If item is provided, use it. Otherwise assume healthy (legacy behavior).
+  // STRICT: healthy === true. (null/undefined/false = disabled)
+  const isHealthy = item ? item.healthy === true : true;
+  const healthError = item?.health_error || "Unavailable";
+
+  // If item is unhealthy, force disabled state look
+  const isDisabled = !isHealthy;
 
   if (!config) {
     // Generate fallback config
@@ -103,35 +122,55 @@ const ModelAvatar = ({ modelId, isActive, onClick, status = "idle", isChairman =
     const name = parts.length > 1 ? parts[1] : modelId;
 
     config = {
-      name,
+      name: item?.name || name, // Use server name if available
       shortName,
       color: stringToColor(modelId),
       Icon: null
     };
+  } else if (item?.name) {
+    // Override name from backend config if present
+    config = { ...config, name: item.name };
   }
 
   const statusText = {
     idle: "",
     thinking: "Thinking...",
     completed: "✓",
+    error: "Error"
   };
 
   const IconComponent = config.Icon;
 
-  const handleTooltipClick = () => {
-    window.open(ZENMUX_INVITE_URL, "_blank", "noopener,noreferrer");
+  const handleTooltipClick = (e) => {
+    e.stopPropagation();
+    if (!isDisabled) {
+      window.open(ZENMUX_INVITE_URL, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  const handleClick = (e) => {
+    if (isDisabled) {
+      e.stopPropagation();
+      return;
+    }
+    onClick && onClick(e);
   };
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <div
-          className={`model-avatar ${isActive ? "active" : ""} ${isChairman ? "chairman" : ""}`}
-          onClick={onClick}
+          className={`model-avatar 
+            ${isActive ? "active" : ""} 
+            ${isChairman ? "chairman" : ""} 
+            ${isDisabled ? "disabled" : ""}
+            ${selectable && !isDisabled ? (isSelected ? "selected" : "deselected") : ""}
+          `}
+          onClick={handleClick}
           style={{ "--model-color": config.color }}
         >
           <div className="avatar-wrapper">
-            <Avatar className="h-12 w-12 cursor-pointer transition-all hover:scale-110">
+            <Avatar className="h-12 w-12 cursor-pointer transition-all">
               {IconComponent ? (
                 <div className="flex h-full w-full items-center justify-center p-2">
                   <IconComponent size={32} />
@@ -149,6 +188,21 @@ const ModelAvatar = ({ modelId, isActive, onClick, status = "idle", isChairman =
                 <Crown size={12} />
               </div>
             )}
+
+            {/* Selection Checkmark */}
+            {selectable && isSelected && !isDisabled && (
+              <div className="selection-badge">
+                <Check size={12} strokeWidth={3} />
+              </div>
+            )}
+
+            {/* Disabled Icon */}
+            {isDisabled && (
+              <div className="disabled-badge">
+                <Ban size={12} strokeWidth={3} />
+              </div>
+            )}
+
           </div>
           <div className="model-info">
             <div className="model-name">{config.name}</div>
@@ -157,51 +211,125 @@ const ModelAvatar = ({ modelId, isActive, onClick, status = "idle", isChairman =
                 {statusText[status]}
               </div>
             )}
+            {isDisabled && (
+              <div className="model-status status-error flex gap-1 items-center justify-center">
+                <AlertCircle size={8} /> Unavailable
+              </div>
+            )}
           </div>
         </div>
       </TooltipTrigger>
-      <TooltipContent className="cursor-pointer" onClick={handleTooltipClick}>
-        <div className="flex items-center gap-1.5">
-          <span className="font-mono text-xs">{modelId}</span>
-          <ExternalLink size={10} className="opacity-60" />
-        </div>
+      <TooltipContent className="cursor-pointer max-w-[200px]" onClick={handleTooltipClick}>
+        {isDisabled ? (
+          <div className="text-red-400 font-semibold mb-1">
+            {healthError}
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <span className="font-mono text-xs">{modelId}</span>
+            <ExternalLink size={10} className="opacity-60" />
+          </div>
+        )}
       </TooltipContent>
     </Tooltip>
   );
 };
 
 export const CouncilAvatars = ({
-  councilModels = [],
+  councilModels, // Keep for backward compat support (array of strings)
+  councilors,    // New prop: full objects
   chairmanModel,
   activeModel,
   onSelectModel,
   modelStatuses = {},
   onChairmanClick,
+  selectable = false,
+  selectedIds = new Set(),
+  onToggleId = null
 }) => {
   const { t } = useTranslation();
+  const [showUnavailable, setShowUnavailable] = useState(false);
+
+  // Normalize input: Prefer `councilors` objects. Fallback to `councilModels` strings.
+  let items = [];
+  if (councilors && councilors.length > 0) {
+    items = councilors;
+  } else if (councilModels && councilModels.length > 0) {
+    items = councilModels.map(mid => ({ id: mid, model: mid, healthy: true }));
+  }
+
+  // Filter available vs unavailable (strict healthy check)
+  const available = items.filter(c => c.active !== false && c.healthy === true);
+  const unavailable = items.filter(c => c.active !== false && c.healthy !== true);
+
+  // Unavailable count logic
+  const hiddenCount = unavailable.length;
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="council-avatars">
-        <div className="council-section">
-          <div className="section-label">{t("councilMembers")}</div>
-          <div className="avatars-row">
-            {councilModels.map((modelId) => (
+      <div className="council-avatars flex-col items-center">
+        <div className="council-section w-full items-center">
+          <div className="section-label mb-2">{t("councilMembers")}</div>
+
+          {/* Available Row */}
+          <div className="avatars-row flex-wrap justify-center">
+            {available.map((item) => (
               <ModelAvatar
-                key={modelId}
-                modelId={modelId}
-                isActive={activeModel === modelId}
-                onClick={() => onSelectModel?.(modelId)}
-                status={modelStatuses[modelId]}
-                isChairman={modelId === chairmanModel}
+                key={item.id}
+                modelId={item.model} // Pass model string for visual lookup
+                item={item}          // Pass full item for health status etc.
+                isActive={activeModel === item.model}
+                onClick={() => {
+                  if (selectable && onToggleId) {
+                    onToggleId(item.id);
+                  } else {
+                    onSelectModel?.(item.model);
+                  }
+                }}
+                status={modelStatuses[item.model]}
+                isChairman={item.model === chairmanModel}
+                selectable={selectable && !chairmanModel}
+                isSelected={selectable ? selectedIds.has(item.id) : false}
               />
             ))}
           </div>
+
+          {/* Unavailable Toggle Section */}
+          {hiddenCount > 0 && (
+            <div className="unavailable-section mt-4 w-full flex flex-col items-center">
+              <button
+                type="button"
+                onClick={() => setShowUnavailable(!showUnavailable)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mb-2 px-3 py-1 rounded-full bg-muted/30 hover:bg-muted/50"
+              >
+                {showUnavailable ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                {showUnavailable ? t("hideUnavailable", "Hide unavailable") : t("showUnavailable", `Show ${hiddenCount} unavailable`)}
+              </button>
+
+              {showUnavailable && (
+                <div className="avatars-row flex-wrap justify-center mt-2 p-3 bg-muted/10 rounded-lg border border-dashed border-muted">
+                  {unavailable.map((item) => (
+                    <ModelAvatar
+                      key={item.id}
+                      modelId={item.model}
+                      item={item}
+                      isActive={false}
+                      onClick={() => { }} // Disabled interaction handled in component but failsafe here
+                      status="error"
+                      selectable={false} // Cannot select
+                      isSelected={false}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
         </div>
 
         {chairmanModel && (
-          <div className="chairman-section">
-            <div className="section-label">{t("chairman")}</div>
+          <div className="chairman-section mt-4 pt-4 border-t border-border/50 w-full flex flex-col items-center">
+            <div className="section-label mb-2">{t("chairman")}</div>
             <ModelAvatar
               modelId={chairmanModel}
               isActive={activeModel === chairmanModel}

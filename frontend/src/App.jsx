@@ -72,7 +72,7 @@ function AppContent() {
     navigate(`/c/${id}`);
   };
 
-  const handleSendMessage = async (content) => {
+  const handleSendMessage = async (content, councilorIds = null) => {
     if (!conversationId) return;
 
     setIsLoading(true);
@@ -145,6 +145,12 @@ function AppContent() {
                 lastMsg.stage2 = event.data;
                 lastMsg.metadata = event.metadata;
                 lastMsg.loading.stage2 = false;
+
+                // Update conversation active_councilor_ids if provided
+                if (councilorIds) {
+                  // logic to update conversation state if we want optimistic update
+                  // but re-fetch on complete handles it usually.
+                }
                 return { ...prev, messages };
               });
               break;
@@ -188,6 +194,7 @@ function AppContent() {
               console.log("Unknown event type:", eventType);
           }
         },
+        councilorIds
       );
     } catch (error) {
       console.error("Failed to send message:", error);

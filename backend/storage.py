@@ -24,7 +24,8 @@ def get_conversation_path(conversation_id: str) -> str:
 
 def create_conversation(
     conversation_id: str, 
-    active_models: Optional[List[str]] = None, 
+    active_models: Optional[List[str]] = None,
+    active_councilor_ids: Optional[List[str]] = None,
     active_chairman: Optional[str] = None
 ) -> Dict[str, Any]:
     """
@@ -32,7 +33,8 @@ def create_conversation(
 
     Args:
         conversation_id: Unique identifier for the conversation
-        active_models: List of active council models for this conversation
+        active_models: Legacy (optional)
+        active_councilor_ids: List of active councilor IDs (v2)
         active_chairman: Active chairman model for this conversation
 
     Returns:
@@ -46,7 +48,9 @@ def create_conversation(
         "title": "New Conversation",
         "messages": [],
         "active_models": active_models,
-        "active_chairman": active_chairman
+        "active_councilor_ids": active_councilor_ids,
+        "active_chairman": active_chairman,
+        "schema_version": 2
     }
 
     # Save to file
@@ -189,4 +193,30 @@ def update_conversation_title(conversation_id: str, title: str):
         raise ValueError(f"Conversation {conversation_id} not found")
 
     conversation["title"] = title
+    save_conversation(conversation)
+
+
+def update_conversation_schema(conversation_id: str, active_councilor_ids: List[str], version: int = 2):
+    """
+    Update conversation text with new schema/active IDs.
+    """
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        return
+        
+    conversation["active_councilor_ids"] = active_councilor_ids
+    conversation["schema_version"] = version
+    save_conversation(conversation)
+
+
+def update_conversation_schema(conversation_id: str, active_councilor_ids: List[str], version: int = 2):
+    """
+    Update conversation text with new schema/active IDs.
+    """
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        return
+        
+    conversation["active_councilor_ids"] = active_councilor_ids
+    conversation["schema_version"] = version
     save_conversation(conversation)
