@@ -1,6 +1,7 @@
 """3-stage LLM Council orchestration."""
 
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
+import json
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -43,6 +44,156 @@ async def stage1_collect_responses(user_query: str, council_models: List[str]) -
     return stage1_results
 
 
+def _build_judge_cards(stage1_results: List[Dict[str, Any]]) -> Tuple[List[Dict[str, str]], Dict[str, str]]:
+    """Create anonymized judge cards for ranking."""
+
+    judge_cards = []
+    anon_to_councilor = {}
+
+    for idx, result in enumerate(stage1_results, start=1):
+        anon_id = f"anon_{idx}"
+        anon_to_councilor[anon_id] = result["model"]
+        judge_cards.append(
+            {
+                "anon_id": anon_id,
+                # Pass only anonymized payloads to the judges
+                "answer": result["response"],
+            }
+        )
+
+    return judge_cards, anon_to_councilor
+
+
+def _build_ranking_messages(user_query: str, judge_cards: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Build messages instructing judges to return structured JSON rankings."""
+
+    ranking_instructions = {
+        "task": "rank_responses",
+        "question": user_query,
+        "judge_cards": judge_cards,
+        "response_format": {
+            "ranking": "Array of anon_id strings ordered best to worst (required)",
+            "scores": "Optional object mapping anon_id to integer 1-10",
+            "rationale": "Optional explanation in any format",
+        },
+    }
+
+    messages = [
+        {
+            "role": "system",
+            "content": "Always reply with a single JSON object and nothing else.",
+        },
+        {
+            "role": "user",
+            "content": json.dumps(ranking_instructions, ensure_ascii=False),
+        },
+    ]
+    return messages
+
+
+def _parse_ranking_response(
+    response_text: str, expected_anon_ids: List[str]
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Parse and validate a ranking response from a judge."""
+
+    try:
+        data = json.loads(response_text)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"Invalid JSON: {exc}"
+
+    if not isinstance(data, dict):
+        return None, "Top-level response must be a JSON object"
+
+    ranking = data.get("ranking")
+    if not isinstance(ranking, list) or not all(isinstance(item, str) for item in ranking):
+        return None, "`ranking` must be an array of anon_id strings"
+
+    # Validate coverage and duplicates
+    expected_set = set(expected_anon_ids)
+    ranking_set = set(ranking)
+    if ranking_set != expected_set or len(ranking) != len(expected_anon_ids):
+        return None, "`ranking` must include each anon_id exactly once"
+
+    scores = data.get("scores", {})
+    filtered_scores = {}
+    if isinstance(scores, dict):
+        for anon_id, score in scores.items():
+            if (
+                anon_id in expected_set
+                and isinstance(score, int)
+                and 1 <= score <= 10
+            ):
+                filtered_scores[anon_id] = score
+
+    rationale = data.get("rationale")
+
+    parsed = {
+        "ranking": ranking,
+        "scores": filtered_scores,
+        "rationale": rationale,
+    }
+    return parsed, None
+
+
+async def _collect_single_ranking(
+    model: str,
+    user_query: str,
+    judge_cards: List[Dict[str, str]],
+    expected_anon_ids: List[str],
+) -> Dict[str, Any]:
+    """Collect and validate a ranking from a single judge with one retry if needed."""
+
+    messages = _build_ranking_messages(user_query, judge_cards)
+    response = await query_model(model, messages)
+    attempt_results: Dict[str, Any] = {
+        "model": response.get("model", model) if response else model,
+        "raw_response": response.get("content", "") if response else "",
+    }
+
+    parsed, error = (
+        _parse_ranking_response(attempt_results["raw_response"], expected_anon_ids)
+        if response
+        else (None, "No response received")
+    )
+
+    if error:
+        # Retry once with stricter reminder
+        retry_messages = messages + [
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "error": error,
+                        "instruction": "Your previous reply was invalid. Reply again with ONLY the JSON object described earlier. Use the same anon_id values and include each exactly once in `ranking`.",
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        ]
+        retry_response = await query_model(model, retry_messages)
+        attempt_results["retry_raw_response"] = (
+            retry_response.get("content", "") if retry_response else ""
+        )
+        parsed, retry_error = (
+            _parse_ranking_response(
+                attempt_results.get("retry_raw_response", ""), expected_anon_ids
+            )
+            if retry_response
+            else (None, "No response received on retry")
+        )
+
+        if retry_error:
+            attempt_results["error"] = retry_error
+            return attempt_results
+
+    if parsed is None:
+        attempt_results["error"] = error
+        return attempt_results
+
+    attempt_results.update(parsed)
+    return attempt_results
+
+
 async def stage2_collect_rankings(
     user_query: str, stage1_results: List[Dict[str, Any]], council_models: List[str]
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
@@ -55,80 +206,21 @@ async def stage2_collect_rankings(
         council_models: List of active council models
 
     Returns:
-        Tuple of (rankings list, label_to_model mapping)
+        Tuple of (rankings list, anon_to_councilor mapping)
     """
-    # Create anonymized labels for responses (Response A, Response B, etc.)
-    labels = [chr(65 + i) for i in range(len(stage1_results))]  # A, B, C, ...
 
-    # Create mapping from label to model name
-    label_to_model = {
-        f"Response {label}": result["model"]
-        for label, result in zip(labels, stage1_results)
-    }
+    judge_cards, anon_to_councilor = _build_judge_cards(stage1_results)
+    anon_ids = [card["anon_id"] for card in judge_cards]
 
-    # Build the ranking prompt
-    responses_text = "\n\n".join(
-        [
-            f"Response {label}:\n{result['response']}"
-            for label, result in zip(labels, stage1_results)
-        ]
-    )
+    # Collect rankings sequentially to allow retries per judge
+    stage2_results: List[Dict[str, Any]] = []
+    for model in council_models:
+        result = await _collect_single_ranking(
+            model, user_query, judge_cards, anon_ids
+        )
+        stage2_results.append(result)
 
-    ranking_prompt = f"""You are evaluating different responses to the following question.
-
-Question: {user_query}
-
-Here are the responses from different models (anonymized):
-
-{responses_text}
-
-Your task:
-1. First, evaluate each response individually. For each response, explain what it does well and what it does poorly.
-2. Then, at the very end of your response, provide a final ranking.
-
-IMPORTANT: Your final ranking MUST be formatted EXACTLY as follows:
-- Start with the line "FINAL RANKING:" (all caps, with colon)
-- Then list the responses from best to worst as a numbered list
-- Each line should be: number, period, space, then ONLY the response label (e.g., "1. Response A")
-- Do not add any other text or explanations in the ranking section
-
-Example of the correct format for your ENTIRE response:
-
-Response A provides good detail on X but misses Y...
-Response B is accurate but lacks depth on Z...
-Response C offers the most comprehensive answer...
-
-FINAL RANKING:
-1. Response C
-2. Response A
-3. Response B
-
-Now evaluate and rank the responses."""
-
-    messages = [
-        {
-            "role": "system",
-            "content": f'You must respond in the exact same language as this question: "{user_query}". The responses you are evaluating may be in various languages - ignore their languages and evaluate only their content. Your evaluation and ranking must be in the same language as the original question.',
-        },
-        {"role": "user", "content": ranking_prompt},
-    ]
-
-    # Get rankings from all council models in parallel
-    responses = await query_models_parallel(council_models, messages)
-
-    # Format results
-    stage2_results = []
-    for model, response in responses.items():
-        if response is not None:
-            full_text = response.get("content", "")
-            parsed = parse_ranking_from_text(full_text)
-            # Use actual model from response if available
-            actual_model = response.get("model", model)
-            stage2_results.append(
-                {"model": actual_model, "ranking": full_text, "parsed_ranking": parsed}
-            )
-
-    return stage2_results, label_to_model
+    return stage2_results, anon_to_councilor
 
 
 async def stage3_synthesize_final(
@@ -157,12 +249,22 @@ async def stage3_synthesize_final(
         ]
     )
 
-    stage2_text = "\n\n".join(
-        [
-            f"Model: {result['model']}\nRanking: {result['ranking']}"
-            for result in stage2_results
-        ]
-    )
+    stage2_text_parts = []
+    for result in stage2_results:
+        if result.get("error"):
+            stage2_text_parts.append(
+                f"Model: {result['model']}\nRanking: ERROR - {result['error']}"
+            )
+            continue
+
+        ranking_summary = " > ".join(result.get("ranking", []))
+        scores_summary = result.get("scores") if result.get("scores") else "None"
+        rationale_summary = result.get("rationale") if result.get("rationale") else "None"
+        stage2_text_parts.append(
+            f"Model: {result['model']}\nRanking: {ranking_summary}\nScores: {scores_summary}\nRationale: {rationale_summary}"
+        )
+
+    stage2_text = "\n\n".join(stage2_text_parts)
 
     chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.
 
@@ -204,51 +306,15 @@ Now synthesize your answer to the question above."""
     return {"model": actual_model, "response": response.get("content", "")}
 
 
-def parse_ranking_from_text(ranking_text: str) -> List[str]:
-    """
-    Parse the FINAL RANKING section from the model's response.
-
-    Args:
-        ranking_text: The full text response from the model
-
-    Returns:
-        List of response labels in ranked order
-    """
-    import re
-
-    # Look for "FINAL RANKING:" section
-    if "FINAL RANKING:" in ranking_text:
-        # Extract everything after "FINAL RANKING:"
-        parts = ranking_text.split("FINAL RANKING:")
-        if len(parts) >= 2:
-            ranking_section = parts[1]
-            # Try to extract numbered list format (e.g., "1. Response A")
-            # This pattern looks for: number, period, optional space, "Response X"
-            numbered_matches = re.findall(r"\d+\.\s*Response [A-Z]", ranking_section)
-            if numbered_matches:
-                # Extract just the "Response X" part
-                return [
-                    re.search(r"Response [A-Z]", m).group() for m in numbered_matches
-                ]
-
-            # Fallback: Extract all "Response X" patterns in order
-            matches = re.findall(r"Response [A-Z]", ranking_section)
-            return matches
-
-    # Fallback: try to find any "Response X" patterns in order
-    matches = re.findall(r"Response [A-Z]", ranking_text)
-    return matches
-
-
 def calculate_aggregate_rankings(
-    stage2_results: List[Dict[str, Any]], label_to_model: Dict[str, str]
+    stage2_results: List[Dict[str, Any]], anon_to_councilor: Dict[str, str]
 ) -> List[Dict[str, Any]]:
     """
     Calculate aggregate rankings across all models.
 
     Args:
         stage2_results: Rankings from each model
-        label_to_model: Mapping from anonymous labels to model names
+        anon_to_councilor: Mapping from anon_id to councilor_id
 
     Returns:
         List of dicts with model name and average rank, sorted best to worst
@@ -259,14 +325,14 @@ def calculate_aggregate_rankings(
     model_positions = defaultdict(list)
 
     for ranking in stage2_results:
-        ranking_text = ranking["ranking"]
+        ranking_list = ranking.get("ranking")
 
-        # Parse the ranking from the structured format
-        parsed_ranking = parse_ranking_from_text(ranking_text)
+        if not ranking_list or ranking.get("error"):
+            continue
 
-        for position, label in enumerate(parsed_ranking, start=1):
-            if label in label_to_model:
-                model_name = label_to_model[label]
+        for position, anon_id in enumerate(ranking_list, start=1):
+            if anon_id in anon_to_councilor:
+                model_name = anon_to_councilor[anon_id]
                 model_positions[model_name].append(position)
 
     # Calculate average position for each model
@@ -357,12 +423,14 @@ async def run_full_council(
         )
 
     # Stage 2: Collect rankings
-    stage2_results, label_to_model = await stage2_collect_rankings(
+    stage2_results, anon_to_councilor = await stage2_collect_rankings(
         user_query, stage1_results, council_models
     )
 
     # Calculate aggregate rankings
-    aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
+    aggregate_rankings = calculate_aggregate_rankings(
+        stage2_results, anon_to_councilor
+    )
 
     # Stage 3: Synthesize final answer
     stage3_result = await stage3_synthesize_final(
@@ -371,7 +439,7 @@ async def run_full_council(
 
     # Prepare metadata
     metadata = {
-        "label_to_model": label_to_model,
+        "anon_to_councilor": anon_to_councilor,
         "aggregate_rankings": aggregate_rankings,
     }
 

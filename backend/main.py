@@ -348,13 +348,13 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
 
             # Stage 2: Collect rankings
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-            stage2_results, label_to_model = await stage2_collect_rankings(
+            stage2_results, anon_to_councilor = await stage2_collect_rankings(
                 body.content, stage1_results, active_models
             )
             aggregate_rankings = calculate_aggregate_rankings(
-                stage2_results, label_to_model
+                stage2_results, anon_to_councilor
             )
-            yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
+            yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'anon_to_councilor': anon_to_councilor, 'aggregate_rankings': aggregate_rankings}})}\n\n"
 
             # Stage 3: Synthesize final answer
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
@@ -371,7 +371,7 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
 
             # Save complete assistant message with metadata
             metadata = {
-                "label_to_model": label_to_model,
+                "anon_to_councilor": anon_to_councilor,
                 "aggregate_rankings": aggregate_rankings,
             }
             storage.add_assistant_message(
