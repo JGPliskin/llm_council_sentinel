@@ -1,6 +1,7 @@
 """3-stage LLM Council orchestration with persona-driven prompts."""
 
 from typing import List, Dict, Any, Tuple, Optional
+import json
 import sys
 import os
 import json
@@ -181,158 +182,241 @@ async def _request_stage1(councilor: Dict[str, Any], user_query: str) -> Optiona
     return None
 
 
-async def stage1_collect_responses(user_query: str, councilors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    tasks = [_request_stage1(councilor, user_query) for councilor in councilors]
-    results = await asyncio.gather(*tasks)
-    return [res for res in results if res]
+def _build_judge_cards(stage1_results: List[Dict[str, Any]]) -> Tuple[List[Dict[str, str]], Dict[str, str]]:
+    """Create anonymized judge cards for ranking."""
 
+    judge_cards = []
+    anon_to_councilor = {}
 
-def build_anonymized_judge_cards(stage1_results: List[Dict[str, Any]]):
-    labels = [chr(65 + i) for i in range(len(stage1_results))]
-    label_to_councilor = {
-        f"Response {label}": result["councilor_id"] for label, result in zip(labels, stage1_results)
-    }
-    anonymized_cards = []
-    for label, result in zip(labels, stage1_results):
-        anonymized_cards.append(
+    for idx, result in enumerate(stage1_results, start=1):
+        anon_id = f"anon_{idx}"
+        anon_to_councilor[anon_id] = result["model"]
+        judge_cards.append(
             {
-                "label": f"Response {label}",
-                "judge_card": result.get("judge_card", {}),
+                "anon_id": anon_id,
+                # Pass only anonymized payloads to the judges
+                "answer": result["response"],
             }
         )
-    return anonymized_cards, label_to_councilor
+
+    return judge_cards, anon_to_councilor
 
 
-def parse_stage2_json(text: str) -> Dict[str, Any]:
-    cleaned = strip_json_fences(text)
-    return json.loads(cleaned)
+def _build_ranking_messages(user_query: str, judge_cards: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Build messages instructing judges to return structured JSON rankings."""
 
-
-async def _request_stage2(
-    councilor: Dict[str, Any],
-    user_query: str,
-    anonymized_cards: List[Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
-    judge_persona = fetch_persona(PERSONA_CACHE, councilor.get("judge_persona_path", ""))
-    stage_limits = councilor.get("stage_limits", {}).get("stage2", {})
-    timeout = stage_limits.get("timeout", 90.0)
-    max_tokens = stage_limits.get("max_output_tokens")
-
-    system_prompt = (
-        f"{judge_persona}\n"
-        f"{councilor.get('judge_system_prompt', '')}\n"
-        "你仅可依据提供的匿名 judge_card 进行评估，不可使用原始回答。"
-        "保持 persona 语气。输出 JSON，无需代码块：\n"
-        "{\n"
-        "  \"councilor_id\": <string>,\n"
-        "  \"ranking\": [<Response labels 按优先级从好到差>],\n"
-        "  \"scores\": [\n"
-        "    {\"label\": <Response X>, \"score\": <0-10 number>, \"rationale\": <<=80字>}, ...\n"
-        "  ]\n"
-        "}\n"
-        "保持 JSON 简洁，避免多余描述。"
-    )
-
-    cards_text = json.dumps(anonymized_cards, ensure_ascii=False, separators=(",", ":"))
-    user_prompt = (
-        f"用户问题：{user_query}\n"
-        "以下为匿名化的 judge_card 列表：\n"
-        f"{cards_text}\n"
-        "请输出排序与打分。"
-    )
+    ranking_instructions = {
+        "task": "rank_responses",
+        "question": user_query,
+        "judge_cards": judge_cards,
+        "response_format": {
+            "ranking": "Array of anon_id strings ordered best to worst (required)",
+            "scores": "Optional object mapping anon_id to integer 1-10",
+            "rationale": "Optional explanation in any format",
+        },
+    }
 
     messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
+        {
+            "role": "system",
+            "content": "You must always respond in the exact same language as the user's question. Never translate or switch languages.",
+        },
+        {"role": "user", "content": user_query},
     ]
 
-    response = await query_model(
-        councilor["model"], messages, timeout=timeout, max_output_tokens=max_tokens
+    # Query all models in parallel
+    responses = await query_models_parallel(council_models, messages)
+
+    # Format results
+    stage1_results = []
+    for model, response in responses.items():
+        if response is not None:  # Only include successful responses
+            # Use actual model from response if available (handling fallback), otherwise requested model
+            actual_model = response.get("model", model)
+            stage1_results.append(
+                {"model": actual_model, "response": response.get("content", "")}
+            )
+
+    return stage1_results
+
+
+def _build_judge_cards(stage1_results: List[Dict[str, Any]]) -> Tuple[List[Dict[str, str]], Dict[str, str]]:
+    """Create anonymized judge cards for ranking."""
+
+    judge_cards = []
+    anon_to_councilor = {}
+
+    for idx, result in enumerate(stage1_results, start=1):
+        anon_id = f"anon_{idx}"
+        anon_to_councilor[anon_id] = result["model"]
+        judge_cards.append(
+            {
+                "anon_id": anon_id,
+                # Pass only anonymized payloads to the judges
+                "answer": result["response"],
+            }
+        )
+
+    return judge_cards, anon_to_councilor
+
+
+def _build_ranking_messages(user_query: str, judge_cards: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Build messages instructing judges to return structured JSON rankings."""
+
+    ranking_instructions = {
+        "task": "rank_responses",
+        "question": user_query,
+        "judge_cards": judge_cards,
+        "response_format": {
+            "ranking": "Array of anon_id strings ordered best to worst (required)",
+            "scores": "Optional object mapping anon_id to integer 1-10",
+            "rationale": "Optional explanation in any format",
+        },
+    }
+
+    messages = [
+        {
+            "role": "system",
+            "content": "Always reply with a single JSON object and nothing else.",
+        },
+        {
+            "role": "user",
+            "content": json.dumps(ranking_instructions, ensure_ascii=False),
+        },
+    ]
+    return messages
+
+
+def _parse_ranking_response(
+    response_text: str, expected_anon_ids: List[str]
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Parse and validate a ranking response from a judge."""
+
+    try:
+        data = json.loads(response_text)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"Invalid JSON: {exc}"
+
+    if not isinstance(data, dict):
+        return None, "Top-level response must be a JSON object"
+
+    ranking = data.get("ranking")
+    if not isinstance(ranking, list) or not all(isinstance(item, str) for item in ranking):
+        return None, "`ranking` must be an array of anon_id strings"
+
+    # Validate coverage and duplicates
+    expected_set = set(expected_anon_ids)
+    ranking_set = set(ranking)
+    if ranking_set != expected_set or len(ranking) != len(expected_anon_ids):
+        return None, "`ranking` must include each anon_id exactly once"
+
+    scores = data.get("scores", {})
+    filtered_scores = {}
+    if isinstance(scores, dict):
+        for anon_id, score in scores.items():
+            if (
+                anon_id in expected_set
+                and isinstance(score, int)
+                and 1 <= score <= 10
+            ):
+                filtered_scores[anon_id] = score
+
+    rationale = data.get("rationale")
+
+    parsed = {
+        "ranking": ranking,
+        "scores": filtered_scores,
+        "rationale": rationale,
+    }
+    return parsed, None
+
+
+async def _collect_single_ranking(
+    model: str,
+    user_query: str,
+    judge_cards: List[Dict[str, str]],
+    expected_anon_ids: List[str],
+) -> Dict[str, Any]:
+    """Collect and validate a ranking from a single judge with one retry if needed."""
+
+    messages = _build_ranking_messages(user_query, judge_cards)
+    response = await query_model(model, messages)
+    attempt_results: Dict[str, Any] = {
+        "model": response.get("model", model) if response else model,
+        "raw_response": response.get("content", "") if response else "",
+    }
+
+    parsed, error = (
+        _parse_ranking_response(attempt_results["raw_response"], expected_anon_ids)
+        if response
+        else (None, "No response received")
     )
-    if response is None:
-        return None
 
-    raw_text = response.get("content", "")
-
-    for attempt in range(2):
-        try:
-            parsed = parse_stage2_json(raw_text)
-            ranking = parsed.get("ranking") or []
-            scores = parsed.get("scores") or []
-            # Normalize ranking from scores if missing
-            if not ranking and scores:
-                ranking = [entry.get("label") for entry in sorted(scores, key=lambda e: float(e.get("score", 0)), reverse=True) if entry.get("label")]
-            parsed["ranking"] = [label for label in ranking if label]
-            parsed["scores"] = [
-                {
-                    "label": score.get("label"),
-                    "score": float(score.get("score", 0)),
-                    "rationale": truncate_item(score.get("rationale", ""), 80),
-                }
-                for score in scores
-                if score.get("label")
-            ]
-            parsed["councilor_id"] = parsed.get("councilor_id") or councilor["id"]
-            parsed["model"] = response.get("model", councilor["model"])
-            parsed["councilor_name"] = councilor.get("name")
-            return parsed
-        except Exception:
-            if attempt == 1:
-                break
-            repair_prompt = (
-                "输出无法解析为 JSON，请直接返回符合要求的 JSON，对rationale保持80字内，"
-                "不要添加解释或代码围栏。"
+    if error:
+        # Retry once with stricter reminder
+        retry_messages = messages + [
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "error": error,
+                        "instruction": "Your previous reply was invalid. Reply again with ONLY the JSON object described earlier. Use the same anon_id values and include each exactly once in `ranking`.",
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        ]
+        retry_response = await query_model(model, retry_messages)
+        attempt_results["retry_raw_response"] = (
+            retry_response.get("content", "") if retry_response else ""
+        )
+        parsed, retry_error = (
+            _parse_ranking_response(
+                attempt_results.get("retry_raw_response", ""), expected_anon_ids
             )
-            messages.append({"role": "user", "content": repair_prompt})
-            response = await query_model(
-                councilor["model"],
-                messages,
-                timeout=timeout,
-                max_output_tokens=max_tokens,
-            )
-            raw_text = "" if response is None else response.get("content", "")
+            if retry_response
+            else (None, "No response received on retry")
+        )
 
-    return None
+        if retry_error:
+            attempt_results["error"] = retry_error
+            return attempt_results
+
+    if parsed is None:
+        attempt_results["error"] = error
+        return attempt_results
+
+    attempt_results.update(parsed)
+    return attempt_results
 
 
 async def stage2_collect_rankings(
-    user_query: str, stage1_results: List[Dict[str, Any]], councilors: List[Dict[str, Any]]
+    user_query: str, stage1_results: List[Dict[str, Any]], council_models: List[str]
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
-    anonymized_cards, label_to_councilor = build_anonymized_judge_cards(stage1_results)
-    tasks = [
-        _request_stage2(councilor, user_query, anonymized_cards) for councilor in councilors
-    ]
-    results = await asyncio.gather(*tasks)
-    return [res for res in results if res], label_to_councilor
+    """
+    Stage 2: Each model ranks the anonymized responses.
 
+    Args:
+        user_query: The original user query
+        stage1_results: Results from Stage 1
+        council_models: List of active council models
 
-def calculate_aggregate_rankings(
-    stage2_results: List[Dict[str, Any]], label_to_councilor: Dict[str, str]
-) -> List[Dict[str, Any]]:
-    from collections import defaultdict
+    Returns:
+        Tuple of (rankings list, anon_to_councilor mapping)
+    """
 
-    model_positions = defaultdict(list)
+    judge_cards, anon_to_councilor = _build_judge_cards(stage1_results)
+    anon_ids = [card["anon_id"] for card in judge_cards]
 
-    for result in stage2_results:
-        ranking = result.get("ranking") or []
-        for position, label in enumerate(ranking):
-            councilor_id = label_to_councilor.get(label)
-            if councilor_id:
-                model_positions[councilor_id].append(position + 1)
-
-    aggregate = []
-    for councilor_id, positions in model_positions.items():
-        average_rank = sum(positions) / len(positions)
-        aggregate.append(
-            {
-                "councilor_id": councilor_id,
-                "average_rank": average_rank,
-                "rankings_count": len(positions),
-            }
+    # Collect rankings sequentially to allow retries per judge
+    stage2_results: List[Dict[str, Any]] = []
+    for model in council_models:
+        result = await _collect_single_ranking(
+            model, user_query, judge_cards, anon_ids
         )
+        stage2_results.append(result)
 
-    aggregate.sort(key=lambda x: x["average_rank"])
-    return aggregate
+    return stage2_results, anon_to_councilor
 
 
 async def stage3_synthesize_final(
@@ -353,12 +437,22 @@ async def stage3_synthesize_final(
         ]
     )
 
-    stage2_text = "\n\n".join(
-        [
-            f"{result.get('councilor_name')} 排序: {', '.join(result.get('ranking', []))}\n打分: {json.dumps(result.get('scores', []), ensure_ascii=False)}"
-            for result in stage2_results
-        ]
-    )
+    stage2_text_parts = []
+    for result in stage2_results:
+        if result.get("error"):
+            stage2_text_parts.append(
+                f"Model: {result['model']}\nRanking: ERROR - {result['error']}"
+            )
+            continue
+
+        ranking_summary = " > ".join(result.get("ranking", []))
+        scores_summary = result.get("scores") if result.get("scores") else "None"
+        rationale_summary = result.get("rationale") if result.get("rationale") else "None"
+        stage2_text_parts.append(
+            f"Model: {result['model']}\nRanking: {ranking_summary}\nScores: {scores_summary}\nRationale: {rationale_summary}"
+        )
+
+    stage2_text = "\n\n".join(stage2_text_parts)
 
     system_prompt = (
         f"{persona}\n"
@@ -397,14 +491,65 @@ async def stage3_synthesize_final(
     return {"model": actual_model, "response": response.get("content", "")}
 
 
-def parse_ranking_from_text(ranking_text: str) -> List[str]:
-    # Deprecated but kept for compatibility
-    matches = re.findall(r"Response [A-Z]", ranking_text)
-    return matches
+def calculate_aggregate_rankings(
+    stage2_results: List[Dict[str, Any]], anon_to_councilor: Dict[str, str]
+) -> List[Dict[str, Any]]:
+    """
+    Calculate aggregate rankings across all models.
+
+    Args:
+        stage2_results: Rankings from each model
+        anon_to_councilor: Mapping from anon_id to councilor_id
+
+    Returns:
+        List of dicts with model name and average rank, sorted best to worst
+    """
+    from collections import defaultdict
+
+    # Track positions for each model
+    model_positions = defaultdict(list)
+
+    for ranking in stage2_results:
+        ranking_list = ranking.get("ranking")
+
+        if not ranking_list or ranking.get("error"):
+            continue
+
+        for position, anon_id in enumerate(ranking_list, start=1):
+            if anon_id in anon_to_councilor:
+                model_name = anon_to_councilor[anon_id]
+                model_positions[model_name].append(position)
+
+    # Calculate average position for each model
+    aggregate = []
+    for model, positions in model_positions.items():
+        if positions:
+            avg_rank = sum(positions) / len(positions)
+            aggregate.append(
+                {
+                    "model": model,
+                    "average_rank": round(avg_rank, 2),
+                    "rankings_count": len(positions),
+                }
+            )
+
+    # Sort by average rank (lower is better)
+    aggregate.sort(key=lambda x: x["average_rank"])
+
+    return aggregate
 
 
-def calculate_conversation_title_prompt(user_query: str) -> str:
-    return f"""Generate a very short title (3-5 words maximum) that summarizes the following question.
+async def generate_conversation_title(user_query: str) -> str:
+    """
+    Generate a short title for a conversation based on the first user message.
+
+    Args:
+        user_query: The first user message
+
+    Returns:
+        A short title (3-5 words)
+    """
+    title_prompt = f"""Generate a very short title (3-5 words maximum) that summarizes the following question.
 The title should be concise and descriptive. Do not use quotes or punctuation in the title.
 IMPORTANT: Generate the title in the SAME LANGUAGE as the question below.
 
@@ -446,18 +591,22 @@ async def run_full_council(
             {},
         )
 
-    stage2_results, label_to_councilor = await stage2_collect_rankings(
-        user_query, stage1_results, councilors
+    # Stage 2: Collect rankings
+    stage2_results, anon_to_councilor = await stage2_collect_rankings(
+        user_query, stage1_results, council_models
     )
 
-    aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_councilor)
+    # Calculate aggregate rankings
+    aggregate_rankings = calculate_aggregate_rankings(
+        stage2_results, anon_to_councilor
+    )
 
     stage3_result = await stage3_synthesize_final(
         user_query, stage1_results, stage2_results, chairman
     )
 
     metadata = {
-        "label_to_councilor": label_to_councilor,
+        "anon_to_councilor": anon_to_councilor,
         "aggregate_rankings": aggregate_rankings,
     }
 
