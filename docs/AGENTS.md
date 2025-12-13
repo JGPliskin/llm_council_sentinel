@@ -22,7 +22,7 @@ LLM Council is an asynchronous, multi-stage deliberation engine where a "Council
 | :--- | :--- | :--- |
 | **`main.py`** | FastAPI Entrypoint | - **Startup**: Preloads personas, validates initial health.<br>- **API**: `/api/councilors` (Health status), `/message` (Streaming).<br>- **Management**: DELETE endpoints (single/bulk) protected by `X-Admin-Token`.<br>- **Safety**: `resolve_target_councilors` enforces `healthy=True`. |
 | **`council.py`** | Orchestration Engine | - Manages the 3-stage pipeline.<br>- implements `_bounded_query` with semaphores and retry logic.<br>- Handles anonymization maps. |
-| **`validation.py`** | Health System | - **Probes**: Sends "Hello" to models.<br>- **Timeout**: 25s (relaxed for free tier).<br>- **Annotation**: Adds `healthy`, `health_error` to model objects. |
+| **`validation.py`** | Health System | - **HealthManager**: Centralized state with TTL (`1h`) and Circuit Breaker.<br>- **Probes**: Sends "Hello" to models.<br>- **Backoff**: Exponential retry (120s, 300s...) on failures.<br>- **Annotation**: Adds `healthy`, `health_error`, `stale` to model objects. |
 | **`config.py`** | Configuration | - Defines `COUNCILORS` list (ID, Name, Model, Persona Path).<br>- Defines `CHAIRMAN` definition.<br>- Sets timeouts and concurrency limits.<br>- **Auth**: `ADMIN_TOKEN` for management ops. |
 | **`openrouter.py`** | LLM Client | - Async HTTP client for OpenRouter AI.<br>- Handles 429/500 retries.<br>- Normalizes responses. |
 | **`storage.py`** | Persistence | - JSON-based flat file storage.<br>- Saves full conversation history.<br>- **Management**: `delete_conversation` (idempotent), `bulk_delete_conversations`.<br>- **Migration**: Handles schema updates (v1->v2 IDs). |
@@ -44,10 +44,14 @@ LLM Council is an asynchronous, multi-stage deliberation engine where a "Council
 The system ensures reliability by filtering out dead models *before* they cause errors.
 
 1.  **Startup / Refresh**:
-    -   `validate_council_health` iterates all defined models.
-    -   **Probe**: Sends `{"role": "user", "content": "Hello"}` via `check_model_health`.
-    -   **Timeout**: **25 seconds** (Accommodates cold starts on free tiers).
-    -   **Result**: Returns full list annotated with `healthy: bool` and `health_error: str`.
+    -   **Startup**: By default, no pings are sent. Models start as `unknown` (stale) to save tokens.
+    -   **Passive Read**: `GET /api/councilors` returns cached status (TTL 1 hour).
+    -   **Active Refresh**: `GET /api/councilors?refresh=true` triggers parallel probes for all councilors + Chairman.
+    -   **Runtime Updates**: Successful/Failed execution during conversation automatically updates health status.
+    -   **Circuit Breaker**: 
+        -   **Transient**: 2 failures -> Cooldown (120s+).
+        -   **Hard**: 401/403/404 -> Immediately Unhealthy.
+    -   **Result**: Returns full list annotated with `healthy`, `health_error`, `cooldown_until`.
 2.  **API Exposure**:
     -   `/api/councilors` returns this annotated list.
 3.  **Execution Guard** (`resolve_target_councilors`):

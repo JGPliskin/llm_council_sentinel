@@ -98,3 +98,20 @@ CHAIRMAN = {
 COUNCIL_SIZE = 3
 
 COUNCILOR_MAP = {c["id"]: c for c in COUNCILORS}
+
+# ----------------------------
+# Health Check & Circuit Breaker
+# ----------------------------
+HEALTH_TTL_SECONDS = 3600
+REFRESH_COOLDOWN_SECONDS = 60
+FAILURE_THRESHOLD = 2
+BACKOFF_SECONDS = [120, 300, 900, 3600]
+HEALTH_STARTUP_CHECK = False
+PROBE_TIMEOUT_SECONDS = 25.0
+HEALTH_PROBE_CONCURRENCY = 4
+
+# Error Classification
+HARD_FAILURE_CODES = {401, 403, 404}
+HARD_FAILURE_PATTERNS = [
+    "does not exist", "not found", "permission denied", "unauthorized", "disabled"
+]

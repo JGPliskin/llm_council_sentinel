@@ -23,6 +23,7 @@ from config import (
     STAGE2_DEADLINE,
     COUNCILOR_MAP,
 )
+from health import health_manager
 
 # Persona cache is injected at startup by the application
 PERSONA_CACHE: Dict[str, str] = {}
@@ -303,13 +304,29 @@ async def _request_stage1_bounded(
                 parsed["status"] = "ok"
                 parsed_result = parsed
                 success = True
+                
+                # Runtime Health: Success
+                # Note: We update status even if parsing failed? No, parsing is logic, not model health.
+                # However, model returning bad JSON might be "unhealthy" (degraded)?
+                # Spec: "A. Transient ... Network ... B. Determine ... 404".
+                # Bad JSON is arguably "execution success, validation failure".
+                # Let's count it as success for *connection* health (it replied).
+                # So we update success=True immediately if network was fine.
+                health_manager.update_status(councilor["model"], True, source="runtime")
+                
             except Exception as e:
                 # JSON/Validation Failure
                 last_error = f"JSON Parse/Validation Error: {str(e)}"
                 should_retry_json = True
+                # Still consider healthy backend
+                health_manager.update_status(councilor["model"], True, source="runtime")
+                
         else:
             # Network/API Failure
             last_error = f"Network/API Error: {response.get('content') if response else 'No response'}"
+            status_code = response.get('status_code') if response else None
+            # Runtime Health: Failure
+            health_manager.update_status(councilor["model"], False, last_error, status_code, source="runtime")
             should_retry_network = True
 
         # 3. Decision
@@ -592,12 +609,17 @@ async def _collect_single_ranking_bounded(
             if error:
                 last_error = f"JSON/Usage Error: {error}"
                 should_retry_json = True
+                # Logic error but network success
+                health_manager.update_status(model, True, source="runtime")
             else:
                 attempt_res.update(parsed)
                 parsed_result = attempt_res
                 success = True
+                health_manager.update_status(model, True, source="runtime")
         else:
             last_error = f"Network/API Error: {response.get('content') if response else 'No response'}"
+            status_code = response.get('status_code') if response else None
+            health_manager.update_status(model, False, last_error, status_code, source="runtime")
             should_retry_network = True
             
         # 3. Decision
@@ -861,15 +883,21 @@ async def stage3_synthesize_final(
             chairman["model"], messages, timeout=timeout, max_output_tokens=max_tokens
         )
     
-        if response is None:
-             raise ValueError("No response from chairman")
+        if response and not response.get('error'):
+             health_manager.update_status(chairman["model"], True, source="runtime")
+             
+             actual_model = response.get("model", chairman["model"])
+             return {
+                "status": "ok",
+                "model": actual_model, 
+                "response": response.get("content", "")
+             }
+        else:
+             error_msg = response.get("content") if response else "No response from chairman"
+             status_code = response.get('status_code') if response else None
+             health_manager.update_status(chairman["model"], False, error_msg, status_code, source="runtime")
+             raise ValueError(error_msg)
 
-        actual_model = response.get("model", chairman["model"])
-        return {
-            "status": "ok",
-            "model": actual_model, 
-            "response": response.get("content", "")
-        }
     except Exception as e:
         return {
             "status": "failed",

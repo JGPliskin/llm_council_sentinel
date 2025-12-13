@@ -9,7 +9,8 @@ An advanced AI deliberation system featuring multi-model council meetings, anony
   2.  **Peer Review**: Models anonymize and rank each other's answers.
   3.  **Consensus**: A Chairman model synthesizes the final result based on rankings.
 - **Robust Health System**:
-  -   Automatic health checks on startup and refresh.
+  -   **Smart Caching**: Health status cached for 1 hour to reduce API load.
+  -   **Circuit Breaker**: Exponential backoff for failing models.
   -   **Strict Filtering**: Unhealthy models are prevented from answering.
   -   **UI Transparency**: "Show unavailable" toggle reveals down/slow models.
 - **Modern UI**:
@@ -61,4 +62,5 @@ Access the app at **http://localhost:5173**.
 - This usually means the OpenRouter API check failed (timeout or error).
 - Click "Show unavailable" to see the specific error.
 - Check your network and API key.
+- You can force a refresh via API: `GET /api/councilors?refresh=true`.
 - The system automatically filters them out to prevent crashes.
