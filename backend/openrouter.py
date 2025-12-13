@@ -59,12 +59,26 @@ async def query_model(
 
     except Exception as e:
         print(f"Error querying model {model}: {e}")
+        status_code = None
+        headers = {}
+        error_payload = None
+
         if isinstance(e, httpx.HTTPStatusError):
             print(f"Response body: {e.response.text}")
+            status_code = e.response.status_code
+            headers = dict(e.response.headers)
+            try:
+                error_payload = e.response.json()
+            except Exception:
+                error_payload = e.response.text
+
         return {
             'content': f"Error: {str(e)}",
             'error': True,
-            'model': model  # Keep original model on error
+            'model': model,  # Keep original model on error
+            'status_code': status_code,
+            'headers': headers,
+            'error_payload': error_payload
         }
 
 

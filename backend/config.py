@@ -14,6 +14,21 @@ OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Data directory for conversation storage
 DATA_DIR = "data/conversations"
 
+# ----------------------------
+# Concurrency & Timeouts
+# ----------------------------
+DEFAULT_CONCURRENCY_STAGE1 = 6
+DEFAULT_CONCURRENCY_STAGE2 = 4
+
+# Per-call timeouts (seconds)
+DEFAULT_STAGE1_TIMEOUT = 120.0
+DEFAULT_STAGE2_TIMEOUT = 180.0
+
+# Stage-level deadlines (seconds). None = Disabled by default.
+# Can be enabled if desired (e.g. 180.0, 240.0)
+STAGE1_DEADLINE = None 
+STAGE2_DEADLINE = None
+
 # Councilor definitions with personas and stage limits
 COUNCILORS = [
     {
@@ -27,8 +42,8 @@ COUNCILORS = [
             "在比较选项时更关注长期稳健性而非短期噱头。"
         ),
         "stage_limits": {
-            "stage1": {"max_output_tokens": 800, "timeout": 90.0},
-            "stage2": {"max_output_tokens": 360, "timeout": 75.0},
+            "stage1": {"max_output_tokens": 800, "timeout": DEFAULT_STAGE1_TIMEOUT},
+            "stage2": {"max_output_tokens": 360, "timeout": 75.0}, # Custom overrides can remain
         },
     },
     {
@@ -42,7 +57,7 @@ COUNCILORS = [
             "避免夸张修辞，保持克制、精确。"
         ),
         "stage_limits": {
-            "stage1": {"max_output_tokens": 820, "timeout": 90.0},
+            "stage1": {"max_output_tokens": 820, "timeout": DEFAULT_STAGE1_TIMEOUT},
             "stage2": {"max_output_tokens": 360, "timeout": 75.0},
         },
     },
@@ -57,7 +72,7 @@ COUNCILORS = [
             "用简洁中文表达，避免抒情或模板化寒暄。"
         ),
         "stage_limits": {
-            "stage1": {"max_output_tokens": 820, "timeout": 90.0},
+            "stage1": {"max_output_tokens": 820, "timeout": DEFAULT_STAGE1_TIMEOUT},
             "stage2": {"max_output_tokens": 360, "timeout": 75.0},
         },
     },
