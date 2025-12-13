@@ -13,13 +13,13 @@ import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { MAX_MESSAGE_LENGTH, api } from "@/api";
 
-// Default model configuration
-const DEFAULT_COUNCIL_MODELS = [
-  "meituan/longcat-flash-chat:free",
-  "qwen/qwen3-coder:free",
-  "deepseek/deepseek-chat-v3.1",
+// Default model configuration (mirrors backend ids for graceful fallback)
+const DEFAULT_COUNCILORS = [
+  { id: "hefei-strategist", name: "合肥策略官", model: "meituan/longcat-flash-chat:free" },
+  { id: "qinling-engineer", name: "秦岭工程师", model: "nvidia/nemotron-nano-9b-v2:free" },
+  { id: "lingnan-researcher", name: "岭南研究员", model: "kwaipilot/kat-coder-pro:free" },
 ];
-const DEFAULT_CHAIRMAN_MODEL = "amazon/nova-2-lite-v1:free";
+const DEFAULT_CHAIRMAN = { id: "chairman", name: "共识主席", model: "amazon/nova-2-lite-v1:free" };
 
 export default function ChatInterface({
   conversation,
@@ -31,10 +31,11 @@ export default function ChatInterface({
   const { t } = useTranslation();
   const [input, setInput] = useState("");
   const [activeModel, setActiveModel] = useState(null);
+  const [selectedCouncilorIds, setSelectedCouncilorIds] = useState(new Set());
 
   // Model state
-  const [councilModels, setCouncilModels] = useState(DEFAULT_COUNCIL_MODELS);
-  const [chairmanModel, setChairmanModel] = useState(DEFAULT_CHAIRMAN_MODEL);
+  const [councilors, setCouncilors] = useState(DEFAULT_COUNCILORS);
+  const [chairman, setChairman] = useState(DEFAULT_CHAIRMAN);
 
   const messagesEndRef = useRef(null);
   const scrollAreaRef = useRef(null);
@@ -51,13 +52,24 @@ export default function ChatInterface({
         // Refresh only if on home page (new conversation)
         // If viewing an existing conversation, use cached values
         const shouldRefresh = !conversationId;
-        const modelConfig = await api.getModels(shouldRefresh);
+        const modelConfig = await api.getCouncilors(shouldRefresh);
 
-        if (modelConfig.council_models && modelConfig.council_models.length > 0) {
-          setCouncilModels(modelConfig.council_models);
+        if (modelConfig.councilors && modelConfig.councilors.length > 0) {
+          setCouncilors(modelConfig.councilors);
+
+          if (conversationId && conversation && conversation.active_councilor_ids) {
+            // Load persisted selection
+            setSelectedCouncilorIds(new Set(conversation.active_councilor_ids));
+          } else if (!conversationId) {
+            // New conversation: default to active AND strict healthy
+            const defaultIds = (modelConfig.councilors || [])
+              .filter(c => c.active !== false && c.healthy === true)
+              .map(c => c.id);
+            setSelectedCouncilorIds(new Set(defaultIds));
+          }
         }
-        if (modelConfig.chairman_model) {
-          setChairmanModel(modelConfig.chairman_model);
+        if (modelConfig.chairman) {
+          setChairman(modelConfig.chairman);
         }
       } catch (error) {
         console.error("Failed to fetch model configuration:", error);
@@ -103,8 +115,14 @@ export default function ChatInterface({
 
   const handleSubmit = (e) => {
     e.preventDefault();
+    e.preventDefault();
     if (input.trim() && !isLoading && !isOverLimit) {
-      onSendMessage(input);
+      // If we differ from default/active, send list. Otherwise null.
+      // But user requirement says: "Client should... persist selection per conversation".
+      // We'll send the list if it's set.
+      const idsToSend = selectedCouncilorIds.size > 0 ? Array.from(selectedCouncilorIds) : null;
+
+      onSendMessage(input, idsToSend);
       setInput("");
       // Blur textarea on mobile to hide keyboard after sending
       if (window.innerWidth < 768) {
@@ -123,6 +141,18 @@ export default function ChatInterface({
 
   const handleSelectModel = (modelId) => {
     setActiveModel(modelId);
+  };
+
+  const handleToggleCouncilor = (id) => {
+    setSelectedCouncilorIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        if (next.size > 1) next.delete(id); // Prevent deselecting last one?
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
   };
 
   const handleChairmanClick = (modelId) => {
@@ -174,17 +204,28 @@ export default function ChatInterface({
     }
   };
 
+  const councilorLookup = {};
+  councilors.forEach((c) => {
+    councilorLookup[c.id] = c;
+    councilorLookup[c.model] = c;
+  });
+
   // Determine effective models (use conversation-specific ones if active, otherwise defaults)
-  // Determine effective models (use conversation-specific ones if active, otherwise state)
-  let effectiveCouncilModels = conversation?.active_models;
-  // Defensive check: ensure it's an array
-  if (!Array.isArray(effectiveCouncilModels) || effectiveCouncilModels.length === 0) {
-    effectiveCouncilModels = councilModels;
+  let effectiveCouncilIds = conversation?.active_councilor_ids || conversation?.active_models;
+  if (!Array.isArray(effectiveCouncilIds) || effectiveCouncilIds.length === 0) {
+    // If no explicit list in conversation, use current active councilors (fallback)
+    effectiveCouncilIds = councilors.filter(c => c.active !== false).map(c => c.id);
   }
+  const effectiveCouncilModels = effectiveCouncilIds.map(
+    (id) => councilorLookup[id]?.model || id,
+  );
 
   let effectiveChairmanModel = conversation?.active_chairman;
+  if (effectiveChairmanModel === chairman?.id) {
+    effectiveChairmanModel = chairman?.model;
+  }
   if (!effectiveChairmanModel || typeof effectiveChairmanModel !== 'string') {
-    effectiveChairmanModel = chairmanModel;
+    effectiveChairmanModel = chairman?.model;
   }
 
   const getModelStatuses = (msg, msgCouncilModels, msgChairmanModel) => {
@@ -304,17 +345,25 @@ export default function ChatInterface({
               </div>
             </form>
 
-            {/* Council models display */}
+            {/* Council models display with Selection */}
             <div className="pt-4 md:pt-6">
+              <div className="mb-2 text-center text-xs text-muted-foreground">
+                {t("selectCouncilors") || "Select Councilors"}
+              </div>
               <CouncilAvatars
-                councilModels={effectiveCouncilModels}
+                councilors={councilors} // Pass full councilor objects
                 chairmanModel={effectiveChairmanModel}
-                activeModel={null}
+                activeModel={null} // No "active" for viewing
                 modelStatuses={{}}
+
+                // Selection Props
+                selectable={true}
+                selectedIds={selectedCouncilorIds}
+                onToggleId={handleToggleCouncilor}
               />
             </div>
           </div>
-        </div>
+        </div >
       ) : (
         // Messages view: scrollable content with fixed input at bottom
         <>
@@ -414,12 +463,13 @@ export default function ChatInterface({
                         )}
                         {msg.stage2 && (
                           <Stage2
-                            rankings={msg.stage2}
-                            labelToModel={msg.metadata?.label_to_model}
+                            rankings={msg.stage2?.reviews || msg.stage2}
+                            labelToCouncilor={msg.metadata?.label_to_councilor || msg.metadata?.anon_to_councilor || msg.stage2?.anon_map}
                             aggregateRankings={msg.metadata?.aggregate_rankings}
                             activeModel={activeModel}
                             onSelectModel={handleSelectModel}
                             scrollToStage2={scrollToStage2}
+                            councilorLookup={councilorLookup}
                           />
                         )}
                       </div>
@@ -497,7 +547,8 @@ export default function ChatInterface({
               </form>
             )}
         </>
-      )}
-    </div>
+      )
+      }
+    </div >
   );
 }

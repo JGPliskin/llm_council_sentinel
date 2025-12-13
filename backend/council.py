@@ -1,304 +1,918 @@
-"""3-stage LLM Council orchestration."""
+"""3-stage LLM Council orchestration with persona-driven prompts."""
 
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional, Callable
+import json
+import asyncio
+import re
 import sys
 import os
+import random
+import httpx
+
+# Ensure backend directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from openrouter import query_models_parallel, query_model
+from openrouter import query_model
+from persona_loader import fetch_persona
+from config import (
+    DEFAULT_CONCURRENCY_STAGE1,
+    DEFAULT_CONCURRENCY_STAGE2,
+    DEFAULT_STAGE1_TIMEOUT,
+    DEFAULT_STAGE2_TIMEOUT,
+    STAGE1_DEADLINE,
+    STAGE2_DEADLINE,
+    COUNCILOR_MAP,
+)
+
+# Persona cache is injected at startup by the application
+PERSONA_CACHE: Dict[str, str] = {}
 
 
-async def stage1_collect_responses(user_query: str, council_models: List[str]) -> List[Dict[str, Any]]:
+def set_persona_cache(cache: Dict[str, str]):
+    global PERSONA_CACHE
+    PERSONA_CACHE = cache
+
+
+def strip_json_fences(text: str) -> str:
+    cleaned = text.strip()
+    cleaned = re.sub(r"^```json\s*|^```\s*|```$", "", cleaned, flags=re.MULTILINE)
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if match:
+        return match.group(0)
+    return cleaned
+
+
+def truncate_item(text: str, limit: int = 50) -> str:
+    if text is None:
+        return ""
+    text = str(text).strip()
+    return text[:limit]
+
+
+def enforce_judge_card_constraints(judge_card: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = {
+        "stance": str(judge_card.get("stance", "")).strip(),
+        "core_reasons": judge_card.get("core_reasons") or [],
+        "assumptions": judge_card.get("assumptions") or [],
+        "risks": judge_card.get("risks") or [],
+        "actionables": judge_card.get("actionables") or [],
+    }
+
+    # Enforce per-item length and minimum core reasons
+    normalized["core_reasons"] = [truncate_item(item) for item in normalized["core_reasons"] if str(item).strip()]
+    if len(normalized["core_reasons"]) < 2:
+        filler = "补充要点：概括主要论据"
+        normalized["core_reasons"].append(filler)
+        if len(normalized["core_reasons"]) < 2:
+            normalized["core_reasons"].append("补充要点：再凝练一条")
+
+    for key in ["assumptions", "risks", "actionables"]:
+        items = [truncate_item(item) for item in normalized[key] if str(item).strip()]
+        normalized[key] = items
+
+    # Compress to meet 600 char limit if necessary
+    serialized = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized) <= 600:
+        return normalized
+
+    def compress_list(values: List[str]) -> List[str]:
+        if len(values) <= 1:
+            return values
+        merged: List[str] = []
+        buffer = ""
+        for value in values:
+            candidate = (buffer + "；" if buffer else "") + value
+            if len(candidate) <= 45:
+                buffer = candidate
+            else:
+                if buffer:
+                    merged.append(buffer)
+                buffer = value[:45]
+        if buffer:
+            merged.append(buffer)
+        return merged
+
+    compressed = normalized.copy()
+    for key in ["core_reasons", "assumptions", "risks", "actionables"]:
+        compressed[key] = compress_list(compressed[key])
+
+    serialized = json.dumps(compressed, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized) > 600:
+        list_order = ["actionables", "risks", "assumptions", "core_reasons"]
+        while len(serialized) > 600:
+            trimmed = False
+            for key in list_order:
+                if compressed.get(key):
+                    compressed[key].pop()
+                    trimmed = True
+                    break
+            if not trimmed:
+                break
+            serialized = json.dumps(compressed, ensure_ascii=False, separators=(",", ":"))
+    return compressed
+
+
+def parse_stage1_json(text: str) -> Dict[str, Any]:
+    cleaned = strip_json_fences(text)
+    return json.loads(cleaned)
+
+
+def is_retryable_error(response_dict: Optional[Dict[str, Any]]) -> bool:
+    """Check if the response indicates a retryable failure (Network/RateLimit)."""
+    if not response_dict:
+        return True  # No response usually implies timeout/network error
+    
+    # Check for explicit 'error' flag from openrouter.py
+    if response_dict.get("error"):
+        content = response_dict.get("content", "")
+        status = response_dict.get("status_code")
+        
+        # Explicit Non-Retryable
+        if status in [401, 403]:
+            return False
+            
+        # Retryable HTTP Codes
+        if status in [408, 429, 500, 502, 503, 504]:
+            return True
+            
+        # Inspect Error Payload for OpenRouter codes
+        payload = response_dict.get("error_payload")
+        if isinstance(payload, dict):
+            err_obj = payload.get("error", {})
+            # Example OpenRouter/Provider codes
+            code = err_obj.get("code")
+            msg = err_obj.get("message", "").lower()
+            if code in [429, 502, 503] or "rate limit" in msg or "unavailable" in msg:
+                return True
+                
+        # Fallback: Treat generic network exception strings as retryable
+        # This is loose, but usually safer to retry once than fail
+        return True
+        
+    return False
+
+
+def get_retry_after(response_dict: Optional[Dict[str, Any]]) -> Optional[float]:
+    """Parse Retry-After header if present."""
+    if not response_dict:
+        return None
+    headers = response_dict.get("headers", {})
+    val = headers.get("retry-after")
+    if val:
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
+async def _bounded_query(
+    semaphore: asyncio.Semaphore,
+    query_fn: Callable[..., Any],
+    *args,
+) -> Dict[str, Any]:
     """
-    Stage 1: Collect individual responses from all council models.
-
-    Args:
-        user_query: The user's question
-        council_models: List of active council models
-
-    Returns:
-        List of dicts with 'model' and 'response' keys
+    Execute a query with strict semaphore acquisition per attempt.
+    Handles max 2 attempts (1 initial + 1 retry) across both network and logic failures.
     """
+    
+    last_result = None
+    
+    # Total attempts = 2
+    for attempt in range(2):
+        try:
+            async with semaphore:
+                # Execute the wrapped function (which includes logic + optional internal JSON retry if needed,
+                # but here we unify the retry logic so query_fn should perform ONE shot)
+                # Actually, to support "Different Prompt on Retry", query_fn needs to know the attempt number or context.
+                # However, the requirement is "Total 2 attempts". 
+                # So we pass 'attempt' and 'last_result' to query_fn if we want logic inside.
+                # Simplification: We move the "query + validate" logic completely inside here? No, too coupled.
+                # Better: query_fn handles the API call + Validation. If it returns a "Success" dict, we stop.
+                # If it returns a "Failure" dict, we decide to retry.
+                
+                # To support changing prompts (repair), we can ask query_fn to handle the "make call" part
+                # but we need to control the loop here.
+                # Let's trust query_fn to do ONE request.
+                
+                # We need to construct the args potentially differently on retry (repair prompt).
+                # This suggests the caller should pass a 'factory' or we handle the logic inline.
+                # Given strict requirements, let's keep logic inline in _request_stage1 but bounded here?
+                # No, _bounded_query is best as a generic wrapper if we just pass a coroutine.
+                # But we can't pass a coroutine because it's already created. We need a factory.
+                
+                pass # Placeholder for thought, resuming implementation below.
+            
+            # Since we need to modify args (add repair prompt) on retry, `_bounded_query` is best utilized 
+            # as a "Slot Manager". The complexities of "JSON Repair" vs "Network Retry" suggest
+            # we should implement the loop inside `_request_stage1` and strictly acquire semaphore there.
+            # But the requirement says "Semaphore context manager must wrap the entire retry loop... wait, no, 
+            # User said: 'Acquire semaphore per attempt... Release ... before backoff'".
+            
+            # So, `_bounded_query` isn't generic enough if the prompt changes.
+            # I will inline the semaphore usage into `_request_stage1` and `_collect_single_ranking` macros.
+            # This is cleaner.
+            pass
+
+        except asyncio.CancelledError:
+            raise
+
+    return {} # Should not be reached logic-wise if inlined.
+
+
+# Redefining _request_stage1 to handle the loop + semaphore
+async def _request_stage1_bounded(
+    semaphore: asyncio.Semaphore,
+    councilor: Dict[str, Any],
+    user_query: str
+) -> Dict[str, Any]:
+    
+    persona = fetch_persona(PERSONA_CACHE, councilor.get("persona_path", ""))
+    stage_limits = councilor.get("stage_limits", {}).get("stage1", {})
+    timeout = stage_limits.get("timeout", DEFAULT_STAGE1_TIMEOUT)
+    max_tokens = stage_limits.get("max_output_tokens", 800)
+
+    system_prompt = (
+        f"{persona}\n\n"
+        "严格遵守：\n"
+        "- 回答语言需与用户问题保持一致。\n"
+        "- 不自我介绍，不复述问题，不写模板化客套。\n"
+        "- 用紧凑 Markdown 表达答案，避免空洞铺陈。\n"
+        "- 仅返回 JSON，对象格式如下（不要附带说明或代码块）：\n"
+        "  {\n"
+        "    \"councilor_id\": <string>,\n"
+        "    \"answer_markdown\": <string>,\n"
+        "    \"judge_card\": {\n"
+        "      \"stance\": <string>,\n"
+        "      \"core_reasons\": <list, 至少2条>,\n"
+        "      \"assumptions\": <list>,\n"
+        "      \"risks\": <list>,\n"
+        "      \"actionables\": <list>\n"
+        "    }\n"
+        "  }\n"
+        "- 列表每项不超过50个中文字符。\n"
+        "- judge_card 整体序列化长度需<=600字符，若超出请合并/抽象信息后再压缩，不要生硬截断。"
+    )
+
+    user_message = (
+        f"用户问题：{user_query}\n"
+        "请依据 persona 直接作答，并填充 judge_card。"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message},
+    ]
+
+    last_error = None
+    
+    for attempt in range(2):
+        # 1. Acquire Semaphore & Execute
+        response = None
+        try:
+            async with semaphore:
+                # Check cancellation immediately upon entering
+                # (although `async with` doesn't pause, `await query_model` does)
+                response = await query_model(
+                    councilor["model"], messages, timeout=timeout, max_output_tokens=max_tokens
+                )
+        except asyncio.CancelledError:
+            raise # Strict Exit
+        except Exception:
+            # Should not happen as query_model returns dict, but just in case
+            pass
+
+        # 2. Validation Logic
+        success = False
+        parsed_result = None
+        
+        should_retry_network = False
+        should_retry_json = False
+        
+        if response and not response.get("error"):
+            # Try parsing
+            raw_text = response.get("content", "")
+            try:
+                parsed = parse_stage1_json(raw_text)
+                judge_card = enforce_judge_card_constraints(parsed.get("judge_card", {}))
+                parsed["judge_card"] = judge_card
+                parsed["councilor_id"] = parsed.get("councilor_id") or councilor["id"]
+                parsed["answer_markdown"] = parsed.get("answer_markdown", "").strip()
+                parsed["model"] = response.get("model", councilor["model"])
+                parsed["councilor_name"] = councilor.get("name")
+                parsed["status"] = "ok"
+                parsed_result = parsed
+                success = True
+            except Exception as e:
+                # JSON/Validation Failure
+                last_error = f"JSON Parse/Validation Error: {str(e)}"
+                should_retry_json = True
+        else:
+            # Network/API Failure
+            last_error = f"Network/API Error: {response.get('content') if response else 'No response'}"
+            should_retry_network = True
+
+        # 3. Decision
+        if success:
+            return parsed_result
+        
+        # If last attempt, we are done
+        if attempt == 1:
+            break
+            
+        # 4. Prepare Logic for Next Attempt (if allowed)
+        if should_retry_network:
+            if not is_retryable_error(response):
+                # Fatal error (e.g. 401), stop immediately
+                break
+            # Backoff for network
+            retry_after = get_retry_after(response)
+            delay = retry_after if retry_after else random.uniform(0.8, 2.0)
+            try:
+                await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                raise
+            # Messages remain same for network retry
+
+        elif should_retry_json:
+            # No sleep needed for logic retry (or maybe tiny yield), but usually it's fine to proceed.
+            # User comment: "Exception: JSON-repair retry can reuse the same slot if no backoff is needed (optional)."
+            # Implementation: We released slot. We re-acquire. This is safer for fairness.
+            
+            # Update messages with repair prompt
+            repair_prompt = (
+                "上一轮输出未提供可解析的 JSON，请直接输出符合约束的 JSON 对象，"
+                "不要添加多余文字或代码块。确保 core_reasons 至少两条、列表项<=50字、judge_card 长度<=600。"
+            )
+            # Remove previous repair attempts if any (though loop is max 2 so simple append works)
+            messages.append({"role": "user", "content": repair_prompt})
+            
+    # If we exited loop without success
+    return {
+        "councilor_id": councilor["id"],
+        "councilor_name": councilor.get("name"),
+        "model": councilor["model"],
+        "status": "failed",
+        "error": {
+            "code": "EXECUTION_ERROR",
+            "message": str(last_error or "Unknown error"),
+            "retryable": True # Marked as retryable for upstream, though we exhausted retries here
+        },
+        "answer_markdown": "",
+    }
+
+
+async def stage1_collect_responses(
+    user_query: str, councilors: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Stage 1: Collect initial responses from all councilors with strict control."""
+    semaphore = asyncio.Semaphore(DEFAULT_CONCURRENCY_STAGE1)
+    
+    # Create Tasks
+    # We must start them. `asyncio.create_task` schedules them.
+    # Note: Using a mapping to track who is who is safer if order matters, 
+    # but `gather` preserves order of input tasks.
+    tasks = [
+        asyncio.create_task(_request_stage1_bounded(semaphore, c, user_query))
+        for c in councilors
+    ]
+    
+    # Wait with Deadline
+    if STAGE1_DEADLINE:
+        done, pending = await asyncio.wait(tasks, timeout=STAGE1_DEADLINE)
+        
+        # Cancel pending tasks
+        for t in pending:
+            t.cancel()
+        
+        # Safe await for cleanup
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+            
+        # Replace pending results with Failure Objects
+        # We need to map tasks back to councilors. 
+        # Since `tasks` is ordered list, we can check `tick.done()`.
+        results = []
+        for i, task in enumerate(tasks):
+            if task in done:
+                # Task finished (could be success or normal failure)
+                # handle exceptions if any
+                try:
+                    res = task.result()
+                    results.append(res)
+                except Exception as e:
+                    # Should verify if this happens; _request_stage1_bounded handles most.
+                    results.append({
+                        "councilor_id": councilors[i]["id"],
+                        "status": "failed",
+                        "error": {"code": "UNEXPECTED_ERROR", "message": str(e)}
+                    })
+            else:
+                # Task was pending and cancelled
+                results.append({
+                    "councilor_id": councilors[i]["id"],
+                    "councilor_name": councilors[i].get("name"),
+                    "model": councilors[i]["model"],
+                    "status": "failed",
+                    "error": {
+                        "code": "STAGE_DEADLINE", 
+                        "message": "Stage deadline exceeded."
+                    },
+                     "answer_markdown": "",
+                })
+        return results
+        
+    else:
+        # No strict stage deadline, just gather all
+        # But we still use gather to respect exceptions if any, 
+        # though _request_stage1_bounded catches logic errors.
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        final_results = []
+        for i, res in enumerate(results):
+             if isinstance(res, Exception):
+                 final_results.append({
+                    "councilor_id": councilors[i]["id"],
+                    "status": "failed",
+                    "error": {"code": "UNHANDLED_EXCEPTION", "message": str(res)}
+                 })
+             else:
+                 final_results.append(res)
+        return final_results
+
+
+def _build_judge_cards(stage1_results: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """Create anonymized judge cards for ranking. Only distinct valid results should be passed here."""
+    judge_cards = []
+    anon_to_councilor_id = {}
+    
+    # We iterate and assign anon_ids. 
+    # To keep anon_ids consistent across debugs, we could sort, but input order is presumed stable.
+    
+    count = 1
+    for result in stage1_results:
+        if result.get("status") != "ok":
+            continue
+            
+        anon_id = f"anon_{count}"
+        count += 1
+        
+        # Strict Requirement: anon_map maps anon_id -> councilor_id
+        councilor_id = result.get("councilor_id")
+        
+        anon_to_councilor_id[anon_id] = councilor_id
+
+        judge_cards.append(
+            {
+                "anon_id": anon_id,
+                "payload": result["judge_card"]
+            }
+        )
+
+    return judge_cards, anon_to_councilor_id
+
+
+def _build_ranking_messages(user_query: str, judge_cards: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Build messages instructing judges to return structured JSON rankings."""
+    ranking_instructions = {
+        "task": "rank_responses",
+        "question": user_query,
+        "judge_cards": judge_cards,
+        "response_format": {
+            "ranking": "Array of anon_id strings ordered best to worst (required). Include ALL anon_ids exactly once.",
+            "scores": "Optional object mapping anon_id to integer 1-10",
+            "rationale": "Optional explanation in any format (no length constraints)",
+        },
+    }
+
     messages = [
         {
             "role": "system",
-            "content": "You must always respond in the exact same language as the user's question. Never translate or switch languages.",
+            "content": "Always reply with a single JSON object and nothing else. No markdown fences.",
         },
-        {"role": "user", "content": user_query},
+        {
+            "role": "user",
+            "content": json.dumps(ranking_instructions, ensure_ascii=False),
+        },
     ]
+    return messages
 
-    # Query all models in parallel
-    responses = await query_models_parallel(council_models, messages)
 
-    # Format results
-    stage1_results = []
-    for model, response in responses.items():
-        if response is not None:  # Only include successful responses
-            # Use actual model from response if available (handling fallback), otherwise requested model
-            actual_model = response.get("model", model)
-            stage1_results.append(
-                {"model": actual_model, "response": response.get("content", "")}
-            )
+def _parse_ranking_response(
+    response_text: str, expected_anon_ids: List[str]
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Parse and validate a ranking response from a judge."""
+    try:
+        data = json.loads(strip_json_fences(response_text))
+    except Exception as exc:
+        return None, f"Invalid JSON: {exc}"
 
-    return stage1_results
+    if not isinstance(data, dict):
+        return None, "Top-level response must be a JSON object"
+
+    ranking = data.get("ranking")
+    if not isinstance(ranking, list):
+        return None, "`ranking` must be an array"
+
+    ranking_strs = [str(x) for x in ranking]
+    if len(set(ranking_strs)) != len(ranking_strs):
+        return None, "Duplicate anon_ids in ranking"
+    
+    expected_set = set(expected_anon_ids)
+    ranking_set = set(ranking_strs)
+    
+    if ranking_set != expected_set:
+        missing = sorted(list(expected_set - ranking_set))
+        extra = sorted(list(ranking_set - expected_set))
+        return None, f"Ranking mismatch. Missing: {missing}, Extra: {extra}"
+
+    scores = data.get("scores", {})
+    filtered_scores = {}
+    if isinstance(scores, dict):
+        for anon_id, score in scores.items():
+            if anon_id in expected_set:
+                try:
+                    s_val = int(score)
+                    if 1 <= s_val <= 10:
+                        filtered_scores[anon_id] = s_val
+                except (ValueError, TypeError):
+                    pass 
+
+    rationale = data.get("rationale")
+
+    parsed = {
+        "ranking": ranking_strs,
+        "scores": filtered_scores,
+        "rationale": rationale,
+    }
+    return parsed, None
+
+
+async def _collect_single_ranking_bounded(
+    semaphore: asyncio.Semaphore,
+    councilor_id: str,
+    councilor_name: str,
+    model: str,
+    user_query: str,
+    judge_cards: List[Dict[str, Any]],
+    expected_anon_ids: List[str],
+    timeout: float
+) -> Dict[str, Any]:
+    """Collect ranking with semaphore, retry, and backoff."""
+    
+    messages = _build_ranking_messages(user_query, judge_cards)
+    
+    last_error = None
+    
+    for attempt in range(2):
+        # 1. Acquire & Execute
+        response = None
+        try:
+            async with semaphore:
+                response = await query_model(model, messages, timeout=timeout)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+            
+        # 2. Validation
+        success = False
+        parsed_result = None
+        should_retry_network = False
+        should_retry_json = False
+        
+        attempt_res = {
+            "judge_councilor_id": councilor_id,
+            "judge_councilor_name": councilor_name,
+            "model": response.get("model", model) if response else model,
+            "raw_response": response.get("content", "") if response else ""
+        }
+        
+        if response and not response.get("error"):
+            parsed, error = _parse_ranking_response(attempt_res["raw_response"], expected_anon_ids)
+            if error:
+                last_error = f"JSON/Usage Error: {error}"
+                should_retry_json = True
+            else:
+                attempt_res.update(parsed)
+                parsed_result = attempt_res
+                success = True
+        else:
+            last_error = f"Network/API Error: {response.get('content') if response else 'No response'}"
+            should_retry_network = True
+            
+        # 3. Decision
+        if success:
+            return parsed_result
+            
+        if attempt == 1:
+            break
+            
+        # 4. Retry Setup
+        if should_retry_network:
+            if not is_retryable_error(response):
+                break
+            # Backoff
+            retry_after = get_retry_after(response)
+            delay = retry_after if retry_after else random.uniform(0.8, 2.0)
+            try:
+                await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                raise
+        elif should_retry_json:
+            # JSON Repair
+            retry_messages = messages + [
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "error": last_error,
+                            "instruction": f"Your previous reply was invalid. Reply again with ONLY the JSON object. You must include these anon_ids exactly once: {expected_anon_ids}",
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+            ]
+            messages = retry_messages
+            # Re-acquire semaphore in next loop
+            
+    # Fail
+    return {
+        "judge_councilor_id": councilor_id,
+        "model": model,
+        "error": {
+            "code": "EXECUTION_ERROR",
+            "message": str(last_error),
+            "retryable": True
+        }
+    }
 
 
 async def stage2_collect_rankings(
-    user_query: str, stage1_results: List[Dict[str, Any]], council_models: List[str]
-) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    user_query: str, stage1_results: List[Dict[str, Any]], councilors: List[Dict[str, Any]]
+) -> Dict[str, Any]:
     """
     Stage 2: Each model ranks the anonymized responses.
-
-    Args:
-        user_query: The original user query
-        stage1_results: Results from Stage 1
-        council_models: List of active council models
-
-    Returns:
-        Tuple of (rankings list, label_to_model mapping)
+    Strict concurrency, deadlines, and candidate validation.
     """
-    # Create anonymized labels for responses (Response A, Response B, etc.)
-    labels = [chr(65 + i) for i in range(len(stage1_results))]  # A, B, C, ...
-
-    # Create mapping from label to model name
-    label_to_model = {
-        f"Response {label}": result["model"]
-        for label, result in zip(labels, stage1_results)
+    
+    # Phase 1: Filter Valid Candidates
+    valid_candidates = [r for r in stage1_results if r.get("status") == "ok"]
+    
+    base_response = {
+        "skipped": False,
+        "skipped_reason": None,
+        "reviews": [],
+        "anon_map": {},
+        "judge_failures": []
     }
 
-    # Build the ranking prompt
-    responses_text = "\n\n".join(
-        [
-            f"Response {label}:\n{result['response']}"
-            for label, result in zip(labels, stage1_results)
-        ]
-    )
+    if len(valid_candidates) < 2:
+        base_response["skipped"] = True
+        base_response["skipped_reason"] = "insufficient_candidates" # Covers 0 or 1
+        return base_response
 
-    ranking_prompt = f"""You are evaluating different responses to the following question.
-
-Question: {user_query}
-
-Here are the responses from different models (anonymized):
-
-{responses_text}
-
-Your task:
-1. First, evaluate each response individually. For each response, explain what it does well and what it does poorly.
-2. Then, at the very end of your response, provide a final ranking.
-
-IMPORTANT: Your final ranking MUST be formatted EXACTLY as follows:
-- Start with the line "FINAL RANKING:" (all caps, with colon)
-- Then list the responses from best to worst as a numbered list
-- Each line should be: number, period, space, then ONLY the response label (e.g., "1. Response A")
-- Do not add any other text or explanations in the ranking section
-
-Example of the correct format for your ENTIRE response:
-
-Response A provides good detail on X but misses Y...
-Response B is accurate but lacks depth on Z...
-Response C offers the most comprehensive answer...
-
-FINAL RANKING:
-1. Response C
-2. Response A
-3. Response B
-
-Now evaluate and rank the responses."""
-
-    messages = [
-        {
-            "role": "system",
-            "content": f'You must respond in the exact same language as this question: "{user_query}". The responses you are evaluating may be in various languages - ignore their languages and evaluate only their content. Your evaluation and ranking must be in the same language as the original question.',
-        },
-        {"role": "user", "content": ranking_prompt},
-    ]
-
-    # Get rankings from all council models in parallel
-    responses = await query_models_parallel(council_models, messages)
-
-    # Format results
-    stage2_results = []
-    for model, response in responses.items():
-        if response is not None:
-            full_text = response.get("content", "")
-            parsed = parse_ranking_from_text(full_text)
-            # Use actual model from response if available
-            actual_model = response.get("model", model)
-            stage2_results.append(
-                {"model": actual_model, "ranking": full_text, "parsed_ranking": parsed}
+    # Phase 2: Execution
+    # Note: _build_judge_cards now returns anon_id -> councilor_id
+    judge_cards, anon_map_ids = _build_judge_cards(valid_candidates)
+    base_response["anon_map"] = anon_map_ids
+    
+    # Should not happen given check above, but consistency
+    if len(judge_cards) < 2:
+         base_response["skipped"] = True
+         base_response["skipped_reason"] = "insufficient_candidates"
+         return base_response
+         
+    anon_ids = [card["anon_id"] for card in judge_cards]
+    
+    semaphore = asyncio.Semaphore(DEFAULT_CONCURRENCY_STAGE2)
+    tasks = []
+    
+    # We need to map tasks to models for failure accounting
+    # Use councilor objects to get timeouts
+    for councilor in councilors:
+        model = councilor["model"]
+        limits = councilor.get("stage_limits", {}).get("stage2", {})
+        timeout = limits.get("timeout", DEFAULT_STAGE2_TIMEOUT)
+        
+        t = asyncio.create_task(
+            _collect_single_ranking_bounded(
+                semaphore, 
+                councilor["id"],
+                councilor.get("name"),
+                model, 
+                user_query, 
+                judge_cards, 
+                anon_ids, 
+                timeout
             )
+        )
+        tasks.append((councilor, t))
+        
+    raw_tasks = [t for _, t in tasks]
+    
+    # Deadline Logic
+    completed_results = []
+    
+    if STAGE2_DEADLINE:
+        done, pending = await asyncio.wait(raw_tasks, timeout=STAGE2_DEADLINE)
+        for p in pending:
+            p.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+            
+        for councilor, task in tasks:
+            if task in done:
+                try:
+                    completed_results.append(task.result())
+                except Exception as e:
+                    completed_results.append({
+                        "judge_councilor_id": councilor["id"],
+                        "model": councilor["model"],
+                        "error": str(e) # Simplified error structure for Stage2 raw list
+                    })
+            else:
+                 completed_results.append({
+                     "judge_councilor_id": councilor["id"],
+                     "model": councilor["model"],
+                     "error": {
+                         "code": "STAGE_DEADLINE",
+                         "message": "Stage 2 deadline exceeded"
+                     }
+                 })
+    else:
+        results = await asyncio.gather(*raw_tasks, return_exceptions=True)
+        for i, res in enumerate(results):
+            if isinstance(res, Exception):
+                completed_results.append({
+                    "judge_councilor_id": councilors[i]["id"],
+                    "model": councilors[i]["model"],
+                    "error": str(res)
+                })
+            else:
+                completed_results.append(res)
+    
+    reviews = []
+    judge_failures = []
 
-    return stage2_results, label_to_model
+    for res in completed_results:
+        # Check if internal error field exists or if it's a bare exception string (from catch-all)
+        if isinstance(res.get("error"), (str, dict)) or res.get("error") is True:
+             judge_failures.append({
+                "judge_councilor_id": res.get("judge_councilor_id") or res.get("model"),
+                "model": res.get("model"),
+                "error": res.get("error") if isinstance(res.get("error"), dict) else {
+                    "code": "JUDGE_EXECUTION_ERROR",
+                    "message": str(res.get("error")),
+                    "retryable": False
+                }
+            })
+        else:
+             reviews.append(res)
+
+    base_response["judge_failures"] = judge_failures
+
+    if not reviews:
+        base_response["skipped"] = True
+        base_response["skipped_reason"] = "all_judges_failed"
+    else:
+        base_response["skipped"] = False
+        base_response["reviews"] = reviews
+
+    return base_response
 
 
 async def stage3_synthesize_final(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
-    stage2_results: List[Dict[str, Any]],
-    chairman_model: str,
+    stage2_result: Dict[str, Any], # Changed to Dict
+    chairman: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """
-    Stage 3: Chairman synthesizes final response.
+    persona = fetch_persona(PERSONA_CACHE, chairman.get("persona_path", ""))
+    stage_limits = chairman.get("stage_limits", {}).get("stage3", {})
+    timeout = stage_limits.get("timeout", 90.0)
+    max_tokens = stage_limits.get("max_output_tokens", 900)
 
-    Args:
-        user_query: The original user query
-        stage1_results: Individual model responses from Stage 1
-        stage2_results: Rankings from Stage 2
-        chairman_model: The active chairman model identifier
+    # Filter Valid Stage 1 inputs
+    valid_stage1 = [r for r in stage1_results if r.get("status") == "ok"]
+    
+    if not valid_stage1:
+        return {
+            "status": "failed",
+            "model": "system",
+            "response": "所有模型在第一阶段均未能生成有效回答，无法进行总结。",
+            "error": {"code": "ALL_STAGE1_FAILED", "message": "No valid stage 1 answers"}
+        }
 
-    Returns:
-        Dict with 'model' and 'response' keys
-    """
-    # Build comprehensive context for chairman
     stage1_text = "\n\n".join(
         [
-            f"Model: {result['model']}\nResponse: {result['response']}"
-            for result in stage1_results
+            f"{result.get('councilor_name')} ({result.get('model')}):\n{result.get('answer_markdown')}\n评审卡: {json.dumps(result.get('judge_card', {}), ensure_ascii=False)}"
+            for result in valid_stage1
         ]
     )
 
-    stage2_text = "\n\n".join(
-        [
-            f"Model: {result['model']}\nRanking: {result['ranking']}"
-            for result in stage2_results
-        ]
+    stage2_text = ""
+    skipped_reason_map = {
+        "all_stage1_failed": "所有模型第一阶段均失败（理论上不应运行到此）",
+        "insufficient_candidates": "有效候选方案少于2个，无需排序",
+        "all_judges_failed": "所有评审员在排序阶段均运行失败"
+    }
+
+    if stage2_result.get("skipped"):
+        reason_code = stage2_result.get("skipped_reason")
+        reason_text = skipped_reason_map.get(reason_code, reason_code)
+        stage2_text = f"（阶段二已跳过：{reason_text}，请直接基于阶段一回答进行总结）"
+    else:
+        # Process Reviews
+        reviews_text_parts = []
+        for result in stage2_result.get("reviews", []):
+            ranking_summary = " > ".join(result.get("ranking", []))
+            scores_summary = result.get("scores") if result.get("scores") else "None"
+            rationale_summary = result.get("rationale") if result.get("rationale") else "None"
+            reviews_text_parts.append(
+                f"Model: {result['model']}\nRanking: {ranking_summary}\nScores: {scores_summary}\nRationale: {rationale_summary}"
+            )
+        stage2_text = "\n\n".join(reviews_text_parts)
+
+    system_prompt = (
+        f"{persona}\n"
+        f"{chairman.get('judge_system_prompt', '')}\n"
+        "保持简洁、公允，无需自我介绍或复述问题。"
     )
 
-    chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.
+    chairman_prompt = f"""
+用户问题：{user_query}
 
-Original Question: {user_query}
-
-STAGE 1 - Individual Responses:
+阶段一答案与评审卡：
 {stage1_text}
 
-STAGE 2 - Peer Rankings:
+阶段二匿名排序与打分：
 {stage2_text}
 
-Your task as Chairman is to synthesize all of this information into a single, comprehensive, accurate answer to the user's original question. Consider:
-- The individual responses and their insights
-- The peer rankings and what they reveal about response quality
-- Any patterns of agreement or disagreement
-
-Now synthesize your answer to the question above."""
+请综合给出精炼的最终回答，可列出关键行动要点与风险提示，保持原问题语言。
+"""
 
     messages = [
-        {
-            "role": "system",
-            "content": f'You must answer in the exact same language as this question: "{user_query}". The responses you see may be in various languages - ignore their languages and focus only on their content. Your synthesized answer must be in the same language as the original question.',
-        },
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": chairman_prompt},
     ]
 
-    # Query the chairman model
-    response = await query_model(chairman_model, messages)
+    try:
+        response = await query_model(
+            chairman["model"], messages, timeout=timeout, max_output_tokens=max_tokens
+        )
+    
+        if response is None:
+             raise ValueError("No response from chairman")
 
-    if response is None:
-        # Fallback if chairman fails
+        actual_model = response.get("model", chairman["model"])
         return {
-            "model": "error",
-            "response": "Error: Unable to generate final synthesis.",
+            "status": "ok",
+            "model": actual_model, 
+            "response": response.get("content", "")
         }
-
-    # Use actual model from response if available
-    actual_model = response.get("model", chairman_model)
-    return {"model": actual_model, "response": response.get("content", "")}
-
-
-def parse_ranking_from_text(ranking_text: str) -> List[str]:
-    """
-    Parse the FINAL RANKING section from the model's response.
-
-    Args:
-        ranking_text: The full text response from the model
-
-    Returns:
-        List of response labels in ranked order
-    """
-    import re
-
-    # Look for "FINAL RANKING:" section
-    if "FINAL RANKING:" in ranking_text:
-        # Extract everything after "FINAL RANKING:"
-        parts = ranking_text.split("FINAL RANKING:")
-        if len(parts) >= 2:
-            ranking_section = parts[1]
-            # Try to extract numbered list format (e.g., "1. Response A")
-            # This pattern looks for: number, period, optional space, "Response X"
-            numbered_matches = re.findall(r"\d+\.\s*Response [A-Z]", ranking_section)
-            if numbered_matches:
-                # Extract just the "Response X" part
-                return [
-                    re.search(r"Response [A-Z]", m).group() for m in numbered_matches
-                ]
-
-            # Fallback: Extract all "Response X" patterns in order
-            matches = re.findall(r"Response [A-Z]", ranking_section)
-            return matches
-
-    # Fallback: try to find any "Response X" patterns in order
-    matches = re.findall(r"Response [A-Z]", ranking_text)
-    return matches
+    except Exception as e:
+        return {
+            "status": "failed",
+            "model": chairman["model"],
+            "response": f"最终总结生成失败: {str(e)}",
+            "error": {"code": "CHAIRMAN_FAILED", "message": str(e)}
+        }
 
 
 def calculate_aggregate_rankings(
-    stage2_results: List[Dict[str, Any]], label_to_model: Dict[str, str]
+    stage2_results: List[Dict[str, Any]], anon_to_councilor: Dict[str, str]
 ) -> List[Dict[str, Any]]:
-    """
-    Calculate aggregate rankings across all models.
-
-    Args:
-        stage2_results: Rankings from each model
-        label_to_model: Mapping from anonymous labels to model names
-
-    Returns:
-        List of dicts with model name and average rank, sorted best to worst
-    """
     from collections import defaultdict
-
-    # Track positions for each model
     model_positions = defaultdict(list)
 
     for ranking in stage2_results:
-        ranking_text = ranking["ranking"]
+        ranking_list = ranking.get("ranking")
+        if not ranking_list or ranking.get("error"):
+            continue
 
-        # Parse the ranking from the structured format
-        parsed_ranking = parse_ranking_from_text(ranking_text)
-
-        for position, label in enumerate(parsed_ranking, start=1):
-            if label in label_to_model:
-                model_name = label_to_model[label]
+        for position, anon_id in enumerate(ranking_list, start=1):
+            if anon_id in anon_to_councilor:
+                model_name = anon_to_councilor[anon_id]
                 model_positions[model_name].append(position)
 
-    # Calculate average position for each model
     aggregate = []
     for model, positions in model_positions.items():
         if positions:
             avg_rank = sum(positions) / len(positions)
             aggregate.append(
                 {
-                    "model": model,
+                    "councilor_id": model,
                     "average_rank": round(avg_rank, 2),
                     "rankings_count": len(positions),
                 }
             )
 
-    # Sort by average rank (lower is better)
     aggregate.sort(key=lambda x: x["average_rank"])
-
     return aggregate
 
 
-async def generate_conversation_title(user_query: str) -> str:
-    """
-    Generate a short title for a conversation based on the first user message.
-
-    Args:
-        user_query: The first user message
-
-    Returns:
-        A short title (3-5 words)
-    """
-    title_prompt = f"""Generate a very short title (3-5 words maximum) that summarizes the following question.
+def calculate_conversation_title_prompt(user_query: str) -> str:
+     return f"""Generate a very short title (3-5 words maximum) that summarizes the following question.
 The title should be concise and descriptive. Do not use quotes or punctuation in the title.
 IMPORTANT: Generate the title in the SAME LANGUAGE as the question below.
 
@@ -306,73 +920,56 @@ Question: {user_query}
 
 Title:"""
 
+
+async def generate_conversation_title(user_query: str) -> str:
+    title_prompt = calculate_conversation_title_prompt(user_query)
     messages = [{"role": "user", "content": title_prompt}]
 
-    # Use gemini-2.5-flash for title generation (fast and cheap)
-    response = await query_model("google/gemini-2.5-flash", messages, timeout=30.0)
+    try:
+        response = await query_model("kwaipilot/kat-coder-pro:free", messages, timeout=30.0)
 
-    if response is None:
-        # Fallback to a generic title
+        if response is None:
+            return "New Conversation"
+
+        title = response.get("content", "New Conversation").strip()
+        title = title.strip("\"'")
+        if len(title) > 50:
+            title = title[:47] + "..."
+
+        return title
+    except Exception:
         return "New Conversation"
-
-    title = response.get("content", "New Conversation").strip()
-
-    # Clean up the title - remove quotes, limit length
-    title = title.strip("\"'")
-
-    # Truncate if too long
-    if len(title) > 50:
-        title = title[:47] + "..."
-
-    return title
 
 
 async def run_full_council(
-    user_query: str, council_models: List[str], chairman_model: str
-) -> Tuple[List, List, Dict, Dict]:
-    """
-    Run the complete 3-stage council process.
+    user_query: str, councilors: List[Dict[str, Any]], chairman: Dict[str, Any]
+) -> Tuple[List, Dict, Dict, Dict]:
+    # Stage 1
+    stage1_results = await stage1_collect_responses(user_query, councilors)
 
-    Args:
-        user_query: The user's question
-        council_models: List of active council models
-        chairman_model: The active chairman model identifier
+    # Use active models for ranking (using councilors models)
+    # Note: stage2_collect_rankings now expects full councilor objects to read timeouts
+    
+    # Stage 2 (Unified Dict)
+    stage2_result = await stage2_collect_rankings(
+        user_query, stage1_results, councilors
+    )
 
-    Returns:
-        Tuple of (stage1_results, stage2_results, stage3_result, metadata)
-    """
-    # Stage 1: Collect individual responses
-    stage1_results = await stage1_collect_responses(user_query, council_models)
-
-    # If no models responded successfully, return error
-    if not stage1_results:
-        return (
-            [],
-            [],
-            {
-                "model": "error",
-                "response": "All models failed to respond. Please try again.",
-            },
-            {},
+    # Aggregate Rankings (if not skipped)
+    aggregate_rankings = []
+    if not stage2_result.get("skipped"):
+         aggregate_rankings = calculate_aggregate_rankings(
+            stage2_result.get("reviews", []), stage2_result.get("anon_map", {})
         )
 
-    # Stage 2: Collect rankings
-    stage2_results, label_to_model = await stage2_collect_rankings(
-        user_query, stage1_results, council_models
-    )
-
-    # Calculate aggregate rankings
-    aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
-
-    # Stage 3: Synthesize final answer
+    # Stage 3
     stage3_result = await stage3_synthesize_final(
-        user_query, stage1_results, stage2_results, chairman_model
+        user_query, stage1_results, stage2_result, chairman
     )
 
-    # Prepare metadata
     metadata = {
-        "label_to_model": label_to_model,
+        "anon_to_councilor": stage2_result.get("anon_map", {}),
         "aggregate_rankings": aggregate_rankings,
     }
 
-    return stage1_results, stage2_results, stage3_result, metadata
+    return stage1_results, stage2_result, stage3_result, metadata

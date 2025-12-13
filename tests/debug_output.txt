@@ -1,0 +1,41 @@
+DRIVER EXCEPTION:
+Traceback (most recent call last):
+  File "debug_test.py", line 14, in <module>
+    import httpx
+  File "D:\ProgramData\Anaconda3\lib\site-packages\httpx\__init__.py", line 2, in <module>
+    from ._api import delete, get, head, options, patch, post, put, request, stream
+  File "D:\ProgramData\Anaconda3\lib\site-packages\httpx\_api.py", line 4, in <module>
+    from ._client import Client
+  File "D:\ProgramData\Anaconda3\lib\site-packages\httpx\_client.py", line 30, in <module>
+    from ._transports.default import AsyncHTTPTransport, HTTPTransport
+  File "D:\ProgramData\Anaconda3\lib\site-packages\httpx\_transports\default.py", line 30, in <module>
+    import httpcore
+  File "D:\ProgramData\Anaconda3\lib\site-packages\httpcore\__init__.py", line 1, in <module>
+    from ._api import request, stream
+  File "D:\ProgramData\Anaconda3\lib\site-packages\httpcore\_api.py", line 5, in <module>
+    from ._sync.connection_pool import ConnectionPool
+  File "D:\ProgramData\Anaconda3\lib\site-packages\httpcore\_sync\__init__.py", line 1, in <module>
+    from .connection import HTTPConnection
+  File "D:\ProgramData\Anaconda3\lib\site-packages\httpcore\_sync\connection.py", line 12, in <module>
+    from .._synchronization import Lock
+  File "D:\ProgramData\Anaconda3\lib\site-packages\httpcore\_synchronization.py", line 13, in <module>
+    import trio
+  File "D:\ProgramData\Anaconda3\lib\site-packages\trio\__init__.py", line 19, in <module>
+    from ._core import TASK_STATUS_IGNORED as TASK_STATUS_IGNORED  # isort: skip
+  File "D:\ProgramData\Anaconda3\lib\site-packages\trio\_core\__init__.py", line 21, in <module>
+    from ._local import RunVar
+  File "D:\ProgramData\Anaconda3\lib\site-packages\trio\_core\_local.py", line 5, in <module>
+    from . import _run
+  File "D:\ProgramData\Anaconda3\lib\site-packages\trio\_core\_run.py", line 36, in <module>
+    from ._traps import (
+  File "D:\ProgramData\Anaconda3\lib\site-packages\trio\_core\_traps.py", line 68, in <module>
+    RaiseCancelT = Callable[[], NoReturn]  # TypeAlias
+  File "D:\ProgramData\Anaconda3\lib\typing.py", line 755, in __getitem__
+    return self.__getitem_inner__(params)
+  File "D:\ProgramData\Anaconda3\lib\typing.py", line 251, in inner
+    return func(*args, **kwds)
+  File "D:\ProgramData\Anaconda3\lib\typing.py", line 774, in __getitem_inner__
+    result = _type_check(result, msg)
+  File "D:\ProgramData\Anaconda3\lib\typing.py", line 135, in _type_check
+    raise TypeError(f"Plain {arg} is not valid as type argument")
+TypeError: Plain typing.NoReturn is not valid as type argument
