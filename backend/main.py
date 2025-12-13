@@ -29,8 +29,8 @@ from council import (
     calculate_aggregate_rankings,
     set_persona_cache,
 )
-from config import COUNCILORS, CHAIRMAN, COUNCIL_SIZE, COUNCILOR_MAP
-from validation import validate_council_health, select_active_chairman
+from config import COUNCILORS, CHAIRMAN, COUNCIL_SIZE, COUNCILOR_MAP, HEALTH_STARTUP_CHECK
+from validation import get_council_health_status, refresh_council_health, select_active_chairman
 from persona_loader import preload_personas
 # Constants
 MAX_MESSAGE_LENGTH = 1000
@@ -199,8 +199,17 @@ async def startup_event():
     cache = preload_personas([*COUNCILORS, CHAIRMAN])
     set_persona_cache(cache)
     global ACTIVE_COUNCIL, ACTIVE_CHAIRMAN
-    ACTIVE_COUNCIL = await validate_council_health(COUNCILORS, COUNCIL_SIZE)
-    ACTIVE_CHAIRMAN = await select_active_chairman(CHAIRMAN)
+    
+    # Check if startup probe is enabled
+    if HEALTH_STARTUP_CHECK:
+        print("Startup health check ENABLED. Probing models...", flush=True)
+        await refresh_council_health(COUNCILORS)
+    else:
+        print("Startup health check DISABLED. Initializing with unknown status.", flush=True)
+
+    # Initialize from cache (will be unknown if no check, or results if checked)
+    ACTIVE_COUNCIL = get_council_health_status(COUNCILORS)
+    ACTIVE_CHAIRMAN = select_active_chairman(CHAIRMAN)
 
 
 @app.get("/")
@@ -271,14 +280,22 @@ async def get_councilors(refresh: bool = False):
     Returns list of councilors and the chairman.
     """
     global ACTIVE_COUNCIL
+    
+    meta = {}
     if refresh:
-        print("Forcing health check refresh...", flush=True)
-        ACTIVE_COUNCIL = await validate_council_health(COUNCILORS, COUNCIL_SIZE, force_refresh=True)
+        # Calls HealthManager.refresh_all, returns meta (skipped, next_allowed, etc)
+        # Include Chairman in refresh!
+        meta = await refresh_council_health([*COUNCILORS, CHAIRMAN])
+    
+    # Always get fresh status from memory (respects TTL, Cooldown)
+    ACTIVE_COUNCIL = get_council_health_status(COUNCILORS)
+    ACTIVE_CHAIRMAN = select_active_chairman(CHAIRMAN)
     
     return {
-        "version": "2.0-health-v2",
+        "version": "2.1-health-v3",
         "councilors": sanitize_councilor_public(ACTIVE_COUNCIL),
         "chairman": sanitize_councilor_public([ACTIVE_CHAIRMAN])[0] if ACTIVE_CHAIRMAN else None,
+        "meta": meta
     }
 
 
@@ -297,10 +314,21 @@ async def create_conversation(request: CreateConversationRequest):
     global ACTIVE_COUNCIL, ACTIVE_CHAIRMAN
     
     # Ensure we have active models (fallback if cache empty)
-    if not ACTIVE_COUNCIL or not ACTIVE_CHAIRMAN:
-        print("Cache empty, validating models for new conversation...", flush=True)
-        ACTIVE_COUNCIL = await validate_council_health(COUNCILORS, COUNCIL_SIZE)
-        ACTIVE_CHAIRMAN = await select_active_chairman(CHAIRMAN)
+    # ACTIVE_COUNCIL is initialized on startup.
+    # But if it's empty/all unhealthy, maybe we force a refresh here?
+    # User spec: "Startup... unknown".
+    # If I create conversation, I want healthy models.
+    # Let's allow one auto-refresh if we have NO active models at all?
+    # "Cache empty, validating..." 
+    # If status is unknown, we might want to check.
+    # However, for a NEW conversation, we probably want at least one healthy.
+    # Let's perform a single check if default list is empty.
+    current_actives = [c for c in ACTIVE_COUNCIL if c.get("healthy") is True]
+    if not current_actives:
+        print("No healthy models found for new conversation, attempting refresh...", flush=True)
+        await refresh_council_health(COUNCILORS)
+        ACTIVE_COUNCIL = get_council_health_status(COUNCILORS)
+        ACTIVE_CHAIRMAN = select_active_chairman(CHAIRMAN)
 
     conversation_id = str(uuid.uuid4())
     # v2: Store active_councilor_ids
@@ -402,16 +430,44 @@ def resolve_target_councilors(
     needs_migration = False
     ignored_ids = []
     
-    # Helper to check health (using global ACTIVE_COUNCIL state)
-    # We assume ACTIVE_COUNCIL is up to date or we trust the config.
-    # Actually, we should check the `ACTIVE_COUNCIL` list for health status.
-    # Map valid IDs to their health status
-    health_map = {c["id"]: c.get("healthy", True) for c in ACTIVE_COUNCIL}
+    # Helper to check health (using dynamic HealthManager state)
+    # We fetch fresh status for the map
+    # This ensures even if ACTIVE_COUNCIL global is stale, we get latest state
+    # (e.g. if cooldown expired 1ms ago)
+    import validation
+    # This is a bit heavy (rebuilding list), but safe.
+    # To optimize, we could just query HealthManager for specific IDs.
+    # But get_council_health_status is fast (dict lookup).
+    # Update global ACTIVE_COUNCIL as side effect? Maybe.
+    current_council_status = validation.get_council_health_status(ACTIVE_COUNCIL) # Use ACTIVE_COUNCIL as pool def source
+    
+    health_map = {c["id"]: c.get("healthy", True) for c in current_council_status}
     
     def is_healthy(cid):
         # STRICT requirement: "healthy === True".
-        # If not in ACTIVE_COUNCIL map, we default to FALSE because we haven't validated it.
-        # This prevents "unknown" councilors from being assumed healthy.
+        # If "unknown", healthy is False?
+        # In HealthManager: status="unknown" -> healthy=False.
+        # So unknown models are ignored. This matches "Startup default disabled".
+        # But wait, if startup check is False, everything is unknown.
+        # This means NO ONE can start a conversation until they visit home page (get_councilors) or manual refresh?
+        # If I POST to /api/conversations directly on fresh boot, it might fail to find healthy models?
+        # User spec: "Startup... unknown... stale=true"
+        # If unknown -> healthy=False, then `default_ids` will be empty.
+        # This might be too strict.
+        # Let's check HealthManager.get_status().
+        # "healthy": effective_status == "healthy"
+        # So yes, unknown is NOT healthy.
+        # If so, we need to ensure at least one check if we have 0 healthy?
+        # Or blindly trust config if unknown?
+        # User: "Passive... Runtime updates".
+        # If I send a message, and everyone is unknown, and I filter them out... I have 0 councilors.
+        # Then `run_full_council` fails or complains.
+        # We should probably allow "unknown" to be candidate if we have no choices?
+        # Or better: "unknown" status should be treated as "candidate for trial" (optimistic)?
+        # User defined: "healthy = (health_status=='healthy')".
+        # So strictly speaking, unknown is not healthy.
+        # But for 'resolve', maybe we accept unknown?
+        # Let's stick to strict for now, but if 'default_ids' ends up empty, we might have an issue.
         return health_map.get(cid, False) is True
     
     # 1. Payload Overrides
@@ -477,11 +533,18 @@ def resolve_target_councilors(
                  return [COUNCILOR_MAP[cid] for cid in valid_migrated], needs_migration, ignored_ids
             
     # 3. Global Default (Fallback)
-    # Use all active councilors from config
-    # We assume all in COUNCILORS are active per user instruction
-    # 3. Global Default (Fallback)
     # Use all ACTIVE and HEALTHY councilors
-    default_ids = [c["id"] for c in ACTIVE_COUNCIL if c.get("healthy") is True]
+    # If strictly healthy is required, and on startup all are unknown...
+    # We should fallback to "all councilors" if valid_count == 0? 
+    # Or rely on client to refresh?
+    # Let's allow ACTIVE_COUNCIL (which is cached) to be the source.
+    # If strict is applied, and we have 0, we might return empty list.
+    default_ids = [c["id"] for c in current_council_status if c.get("healthy") is True]
+    
+    # Fallback: If 0 healthy (e.g. startup), but we have candidates in status 'unknown'?
+    # Logic: if len(default_ids) < 2 (insufficient), maybe include 'unknown'?
+    # Let's keep it strict for now. If user sees 0 active, they will refresh.
+    
     return [COUNCILOR_MAP[cid] for cid in default_ids], True, ignored_ids # Mark as needing migration/save
 
 
