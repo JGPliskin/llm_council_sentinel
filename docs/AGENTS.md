@@ -43,22 +43,26 @@ LLM Council is an asynchronous, multi-stage deliberation engine where a "Council
 ### 3.1 Health Check & Safety Workflow
 The system ensures reliability by filtering out dead models *before* they cause errors.
 
-1.  **Startup / Refresh**:
-    -   **Startup**: By default, no pings are sent. Models start as `unknown` (stale) to save tokens.
-    -   **Passive Read**: `GET /api/councilors` returns cached status (TTL 1 hour).
-    -   **Active Refresh**: `GET /api/councilors?refresh=true` triggers parallel probes for all councilors + Chairman.
-    -   **Runtime Updates**: Successful/Failed execution during conversation automatically updates health status.
-    -   **Circuit Breaker**: 
-        -   **Transient**: 2 failures -> Cooldown (120s+).
-        -   **Hard**: 401/403/404 -> Immediately Unhealthy.
-    -   **Result**: Returns full list annotated with `healthy`, `health_error`, `cooldown_until`.
-2.  **API Exposure**:
-    -   `/api/councilors` returns this annotated list.
+1.  **Trigger Points (Refresh Logic)**:
+    *   **Startup**: Checks `HEALTH_STARTUP_CHECK`. If enabled, backend probes all models on boot.
+    *   **Frontend - Home Page (New Conversation)**: The UI explicitly requests `GET /api/councilors?refresh=true`. This ensures the user sees the latest status before starting a new chat.
+    *   **Frontend - Existing Conversation**: The UI requests `GET /api/councilors` (cached) to avoid unnecessary delays.
+    *   **Manual**: User can trigger a refresh via UI controls if implemented.
+    *   **Note**: Creating a conversation (POST) or Deleting conversations does *not* trigger a backend refresh.
+
+2.  **Runtime Health State**:
+    *   **Passive Read**: API returns cached status (TTL ~1 hour).
+    *   **Execution Updates**: Every message generation attempt updates the specific model's health record (Success -> Healthy, Failure -> Error/Count).
+    *   **Circuit Breaker**:
+        *   **Transient**: 2 consecutive failures -> Cooldown (Backoff: 120s, 300s...).
+        *   **Hard**: 401/403/404 -> Immediately Unhealthy.
+    *   **Result**: Returns full list annotated with `healthy`, `health_error`, `cooldown_until`.
+
 3.  **Execution Guard** (`resolve_target_councilors`):
-    -   When a user sends a message, they send `councilor_ids`.
-    -   **Strict Check**: The backend verifies `is_healthy(id)`.
-    -   **Default Safety**: If an ID is unknown or map lookup fails, it defaults to **`False` (Unhealthy)**.
-    -   **Filtering**: Only healthy IDs are passed to the Stage 1 engine. Unhealthy ones are returned in `ignored_ids`.
+    *   When a user sends a message, they send `councilor_ids`.
+    *   **Strict Check**: The backend verifies `is_healthy(id)`.
+    *   **Default Safety**: If an ID is unknown or map lookup fails, it defaults to **`False` (Unhealthy)**.
+    *   **Filtering**: Only healthy IDs are passed to the Stage 1 engine. Unhealthy ones are returned in `ignored_ids`.
 
 ### 3.2 The 3-Stage Deliberation Pipeline
 
