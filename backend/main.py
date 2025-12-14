@@ -323,12 +323,11 @@ async def create_conversation(request: CreateConversationRequest):
     # If status is unknown, we might want to check.
     # However, for a NEW conversation, we probably want at least one healthy.
     # Let's perform a single check if default list is empty.
+    # Ensure we have active models (fallback if cache empty)
+    # ACTIVE_COUNCIL is initialized on startup.
+    # We do NOT force refresh here to avoid latency/blocking.
+    # If no healthy models, default_ids will be empty, which is handled downstream.
     current_actives = [c for c in ACTIVE_COUNCIL if c.get("healthy") is True]
-    if not current_actives:
-        print("No healthy models found for new conversation, attempting refresh...", flush=True)
-        await refresh_council_health(COUNCILORS)
-        ACTIVE_COUNCIL = get_council_health_status(COUNCILORS)
-        ACTIVE_CHAIRMAN = select_active_chairman(CHAIRMAN)
 
     conversation_id = str(uuid.uuid4())
     # v2: Store active_councilor_ids
