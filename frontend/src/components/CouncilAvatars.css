@@ -82,7 +82,7 @@
 .model-avatar.selected .avatar-wrapper {
   box-shadow: 
     0 0 0 3px var(--model-color, #4a90e2),
-    0 4px 6px -1px rgba(var(--model-color-rgb), 0.3); /* Fallback to known color if var fails */
+    0 4px 6px -1px rgba(var(--model-color-rgb), 0.3); /* Uses injected RGB var */
   opacity: 1;
   transform: scale(1.05);
 }
@@ -135,7 +135,7 @@
   align-items: center;
   justify-content: center;
   color: white;
-  z-index: 10;
+  z-index: 20; /* Increased to stay above avatar */
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
   border: 2px solid white;
 }

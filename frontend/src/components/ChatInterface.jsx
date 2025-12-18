@@ -294,10 +294,15 @@ export default function ChatInterface({
                 if (!lastMsg.stage1) lastMsg.stage1 = [];
 
                 const item = event.data;
-                // Robust matching: id or model
+                // Robust matching: Prefer strict ID match. Only fallback to model if IDs are missing.
                 const index = lastMsg.stage1.findIndex(
-                  r => (r.councilor_id && r.councilor_id === item.councilor_id) ||
-                    (r.model && r.model === item.model)
+                  r => {
+                    const rId = r.councilor_id;
+                    const itemId = item.councilor_id;
+                    if (rId && itemId) return rId === itemId; // Strict ID match
+                    // Fallback to model match only if one lacks ID (legacy/error)
+                    return (r.model && r.model === item.model);
+                  }
                 );
 
                 if (index !== -1) {
@@ -677,9 +682,17 @@ export default function ChatInterface({
                       {(() => {
                         const messageCouncilors = msg.stage1 && msg.stage1.length > 0
                           ? msg.stage1.map(r => {
-                            const known = councilorLookup[r.councilor_id] || councilorLookup[r.model];
-                            return known || { id: r.councilor_id || r.model, name: r.councilor_name, model: r.model };
+                            const known = councilorLookup[r.councilor_id]; // Strict lookup by ID
+                            // Only fallback to model lookup if ID lookup COMPLETELY failed and model is unique-ish? 
+                            // Actually, fallback to model is dangerous for display if models are shared.
+                            // If known failed, construct a temp object using the specific response data
+                            return known || {
+                              id: r.councilor_id || r.model,
+                              name: r.councilor_name || r.name, // Use name from response
+                              model: r.model
+                            };
                           })
+                          // If stage1 not ready, fallback to conversation active list
                           : effectiveCouncilIds.map(id => councilorLookup[id] || { id, name: councilorLookup[id]?.name, model: councilorLookup[id]?.model || id });
 
                         const messageCouncilModels = messageCouncilors.map(c => c.model || c.id);

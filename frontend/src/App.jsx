@@ -116,8 +116,9 @@ function AppContent() {
                 return {
                   ...prev,
                   // We can store run-specific councilors here to help UI lookup
-                  // Or just update the active_councilor_ids
-                  resolved_councilors: event.resolved_councilors
+                  // v2: Update active_councilor_ids so that ChatInterface knows what to render (e.g. thinking state)
+                  resolved_councilors: event.resolved_councilors,
+                  active_councilor_ids: event.resolved_councilor_ids
                 };
               });
               break;

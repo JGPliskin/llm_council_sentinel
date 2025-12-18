@@ -299,7 +299,9 @@ async def _request_stage1_bounded(
                 parsed = parse_stage1_json(raw_text)
                 judge_card = enforce_judge_card_constraints(parsed.get("judge_card", {}))
                 parsed["judge_card"] = judge_card
-                parsed["councilor_id"] = parsed.get("councilor_id") or councilor["id"]
+                # STRICT: Always overwrite councilor_id with our authoritative ID.
+                # Do not trust the model to know its own internal system ID.
+                parsed["councilor_id"] = councilor["id"]
                 parsed["answer_markdown"] = parsed.get("answer_markdown", "").strip()
                 
                 # Summary Logic

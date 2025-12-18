@@ -90,6 +90,30 @@ const stringToColor = (str) => {
   return "#" + "00000".substring(0, 6 - c.length) + c;
 };
 
+// Helper to convert hex to rgb values (e.g. "255, 99, 71")
+const hexToRgb = (hex) => {
+  if (!hex || typeof hex !== 'string') return "128, 128, 128"; // Default gray
+
+  // Remove hash if present
+  hex = hex.replace(/^#/, '');
+
+  // Handle shorthand (e.g. "FFF")
+  if (hex.length === 3) {
+    hex = hex.split('').map(c => c + c).join('');
+  }
+
+  // Validate length
+  if (hex.length !== 6) return "128, 128, 128";
+
+  const r = parseInt(hex.substring(0, 2), 16);
+  const g = parseInt(hex.substring(2, 4), 16);
+  const b = parseInt(hex.substring(4, 6), 16);
+
+  if (isNaN(r) || isNaN(g) || isNaN(b)) return "128, 128, 128";
+
+  return `${r}, ${g}, ${b}`;
+};
+
 export const ModelAvatar = ({
   modelId,
   item, // Full councilor object if available
@@ -132,6 +156,9 @@ export const ModelAvatar = ({
     config = { ...config, name: item.name };
   }
 
+  // Calculate RGB for CSS variable
+  const colorRgb = hexToRgb(config.color);
+
   // Avatar Logic
   // Source: item.avatar -> config.Icon -> config.shortName
   const avatarSource = item?.avatar;
@@ -173,7 +200,10 @@ export const ModelAvatar = ({
             ${selectable && !isDisabled ? (isSelected ? "selected" : "deselected") : ""}
           `}
           onClick={handleClick}
-          style={{ "--model-color": config.color }}
+          style={{
+            "--model-color": config.color,
+            "--model-color-rgb": colorRgb
+          }}
         >
           <div className="avatar-wrapper">
             <Avatar className="h-12 w-12 cursor-pointer transition-all">
@@ -311,7 +341,7 @@ export const CouncilAvatars = ({
                 }}
                 status={modelStatuses[item.model]}
                 isChairman={item.model === chairmanModel}
-                selectable={selectable && !chairmanModel}
+                selectable={selectable}
                 isSelected={selectable ? selectedIds.has(item.id) : false}
               />
             ))}

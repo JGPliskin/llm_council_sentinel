@@ -36,6 +36,17 @@ LLM Council is an asynchronous, multi-stage deliberation engine where a "Council
 | **`Stage1.jsx`** | Proposal View | - Renders initial markdown answers side-by-side. |
 | **`Stage2.jsx`** | Peer Review | - **Tabbed Interface**: Shows raw reviews.<br>- **Ranking**: Visualizes "Ranked 1st", "Ranked 2nd" etc.<br>- **Disclosure**: Shows real names but notes they were anonymous during review. |
 
+### 2.3 Active Councilors (Configuration)
+
+The specific personas loaded in the current system (defined in `backend/config.py`):
+
+| ID | Name | Role | Model | Persona / Style |
+| :--- | :--- | :--- | :--- | :--- |
+| **`immanuel_kant`** | 康德 | Councilor | `openai/gpt-oss-20b:free` | **Moral Philosopher**: Prioritizes universal ethics, categorial imperatives, and logical consistency. Judge style: Analytical, focus on long-term robustness. |
+| **`donald_trump`** | 特朗普 | Councilor | `openai/gpt-oss-20b:free` | **Pragmatist/Populist**: Focuses on "America First" style realism, direct benefits, strength, and deal-making. Judge style: Executive execution, risk isolation. |
+| **`hideo_kojima`** | 小岛秀夫 | Councilor | `openai/gpt-oss-20b:free` | **Auteur/Visionary**: Emphasizes narrative, connectivity, complex systems, and artistic integrity. Judge style: Academic rigor, source verification. |
+| **`chairman`** | 共识主席 | **Chairman** | `amazon/nova-2-lite-v1:free` | **Synthesizer**: Neutral moderator. Detects consensus, highlights unresolvable conflicts, and provides the final actionable verdict. |
+
 ---
 
 ## 3. Detailed Logic & Workflows
@@ -72,7 +83,7 @@ The system ensures reliability by filtering out dead models *before* they cause 
 *   **Retry Logic**: 2 Attempts per model.
     *   **Network Failure**: Backoff and retry.
     *   **JSON Failure**: Updates prompt with "Your previous reply was invalid..." and retries.
-*   **Output**: List of JSON objects containing `answer_markdown` and a structured `judge_card`.
+*   **Output Contract** (strict JSON, no fences): `councilor_id` (forced by backend), `answer_markdown`, `answer_summary` (auto-truncated to 500 chars if missing/long), and `judge_card` with `stance/core_reasons/assumptions/risks/actionables`. Lists are capped at 50 chars per item and the whole `judge_card` is compressed to ≤600 chars. Network/logic successes update `health_manager` as healthy; transport errors mark the model unhealthy.
 
 #### Stage 2: Anonymized Peer Review
 *   **Anonymization**:
@@ -80,9 +91,9 @@ The system ensures reliability by filtering out dead models *before* they cause 
     *   Process: Assigns `anon_1`, `anon_2` etc. randomly (or structurally).
     *   Map: Stores `anon_id -> real_councilor_id` for later de-anonymization.
 *   **Review Process**:
-    *   Each Councilor (Judge) executes a "Ranking Task".
+    *   Each Councilor (Judge) executes a "Ranking Task" using persona-specific judge prompts.
     *   **Prompt**: "You are a judge. Strict JSON. Rank these anonymous responses...".
-    *   **Constraint**: Must include ALL `anon_ids` exactly once.
+    *   **Constraint**: Must include ALL `anon_ids` exactly once; allowed keys only `ranking/scores/rationale`, scores must be 1-10 ints, rationale trimmed to 600 chars. Payload uses only `answer_summary` + `judge_card` to preserve anonymity.
 *   **Fallback**:
     *   If fewer than 2 valid Stage 1 candidates exist, Stage 2 is **Skipped** (`insufficient_candidates`).
     *   If all judges fail, Stage 2 is marked skipped (`all_judges_failed`).
@@ -104,6 +115,17 @@ The system ensures reliability by filtering out dead models *before* they cause 
     *   **Unavailable**: `healthy !== true`. Hidden by default.
     *   **Selected**: Green badge overlay.
     *   **Disabled**: Opacity 0.4, Grayscale, blocked interaction.
+
+### 3.4 API & Streaming Surface
+- **Rate Limits**: `5/min` for `/api/conversations/{id}/message` and `/.../message/stream` via SlowAPI, keyed by real IP (`X-Forwarded-For` aware).
+- **Input Guardrails**: `content` must be non-empty and ≤1000 chars; violations return structured JSON errors (`CONTENT_TOO_LONG`, `VALIDATION_ERROR`).
+- **Admin Auth**: `DELETE` and bulk-delete endpoints expect `X-Admin-Token`, but `verify_admin` currently short-circuits to a debug token (no real protection).
+- **Endpoints**:
+  - `GET /api/councilors` (`/api/models` alias) with optional `refresh` to force health probes; returns `meta` and annotated chairman.
+  - Conversations: list/create/get; delete single or bulk (≤50 IDs) with ID validation. Creation uses cached active councilors; no auto health refresh.
+- **SSE Stream** (`/message/stream`): emits `meta` (resolved/ignored IDs, chairman, spec `stage2_v1.2`), `stage1_start/item/complete`, `stage2_start` (with anon map or skip reason) + incremental `stage2_item`, `stage2_complete` (includes anon map + aggregate rankings), `stage3_start/complete`, `title_complete`, and final `complete`. Metadata is persisted alongside the assistant message.
+- **Schema Migration**: `resolve_target_councilors` filters unhealthy IDs; legacy `active_models` are migrated to `active_councilor_ids` (v2) with a `.bak` copy before overwrite. Ignored IDs are returned in SSE meta.
+- **Title Generation**: First user message triggers async title creation via `kwaipilot/kat-coder-pro:free`, truncated to 50 chars; falls back to "New Conversation" on failure.
 
 ## 4. Configuration Rules
 
