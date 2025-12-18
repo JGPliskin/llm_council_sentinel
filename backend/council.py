@@ -243,6 +243,7 @@ async def _request_stage1_bounded(
         "  {\n"
         "    \"councilor_id\": <string>,\n"
         "    \"answer_markdown\": <string>,\n"
+        "    \"answer_summary\": <string, 纯文本摘要, 500字以内>,\n"
         "    \"judge_card\": {\n"
         "      \"stance\": <string>,\n"
         "      \"core_reasons\": <list, 至少2条>,\n"
@@ -252,7 +253,8 @@ async def _request_stage1_bounded(
         "    }\n"
         "  }\n"
         "- 列表每项不超过50个中文字符。\n"
-        "- judge_card 整体序列化长度需<=600字符，若超出请合并/抽象信息后再压缩，不要生硬截断。"
+        "- judge_card 整体序列化长度需<=600字符，若超出请合并/抽象信息后再压缩，不要生硬截断。\n"
+        "- answer_summary 必须是对回答的客观陈述，不包含立场评判，严格控制在500字以内。"
     )
 
     user_message = (
@@ -299,6 +301,23 @@ async def _request_stage1_bounded(
                 parsed["judge_card"] = judge_card
                 parsed["councilor_id"] = parsed.get("councilor_id") or councilor["id"]
                 parsed["answer_markdown"] = parsed.get("answer_markdown", "").strip()
+                
+                # Summary Logic
+                am = parsed.get("answer_markdown", "")
+                summary = parsed.get("answer_summary", "")
+                
+                if not summary and am:
+                    # Fallback logic: truncate markdown
+                    # Remove markdown symbols for cleaner summary if possible (simple approach)
+                    # Just truncate for stability
+                    summary = am[:500]
+                
+                # Strict Truncation
+                if summary:
+                    summary = str(summary)[:500]
+                
+                parsed["answer_summary"] = summary
+
                 parsed["model"] = response.get("model", councilor["model"])
                 parsed["councilor_name"] = councilor.get("name")
                 parsed["status"] = "ok"
@@ -380,7 +399,9 @@ async def _request_stage1_bounded(
 
 
 async def stage1_collect_responses(
-    user_query: str, councilors: List[Dict[str, Any]]
+    user_query: str, 
+    councilors: List[Dict[str, Any]],
+    on_result: Optional[Callable[[Dict[str, Any]], Any]] = None
 ) -> List[Dict[str, Any]]:
     """Stage 1: Collect initial responses from all councilors with strict control."""
     semaphore = asyncio.Semaphore(DEFAULT_CONCURRENCY_STAGE1)
@@ -417,13 +438,24 @@ async def stage1_collect_responses(
                 try:
                     res = task.result()
                     results.append(res)
+                    if on_result:
+                        if asyncio.iscoroutinefunction(on_result):
+                            await on_result(res)
+                        else:
+                            on_result(res)
                 except Exception as e:
                     # Should verify if this happens; _request_stage1_bounded handles most.
-                    results.append({
+                    err_res = {
                         "councilor_id": councilors[i]["id"],
                         "status": "failed",
                         "error": {"code": "UNEXPECTED_ERROR", "message": str(e)}
-                    })
+                    }
+                    results.append(err_res)
+                    if on_result:
+                        if asyncio.iscoroutinefunction(on_result):
+                             await on_result(err_res)
+                        else:
+                             on_result(err_res)
             else:
                 # Task was pending and cancelled
                 results.append({
@@ -441,17 +473,52 @@ async def stage1_collect_responses(
         
     else:
         # No strict stage deadline, just gather all
-        # But we still use gather to respect exceptions if any, 
-        # though _request_stage1_bounded catches logic errors.
+        # To support streaming, we can't just use gather(*tasks).
+        # We need as_completed or similar, OR just attach callbacks to the tasks?
+        # But we also need to respect the list order for the final return.
+        # Let's use as_completed for the side effects, but gather for the final list?
+        # Actually, if we use gather, we wait for all.
+        # To stream, we must process as they finish.
+        # We can use `asyncio.as_completed` but mapping back to ID is tricky if we lose index.
+        # Better: Wrap the task to call the callback itself?
+        # Or iterate as_completed.
+        # Let's wrap the coroutine with a reporter helper?
+        # No, let's just use `asyncio.as_completed` to fire events, and `gather` to get final ordered list.
+        # Note: `as_completed` returns an iterator of futures.
+        
+        # Parallel strategy: yield via callback as they complete
+        if on_result:
+             for f in asyncio.as_completed(tasks):
+                 try:
+                     res = await f
+                     if asyncio.iscoroutinefunction(on_result):
+                         await on_result(res)
+                     else:
+                         on_result(res)
+                 except Exception as e:
+                     # This exception comes from the task itself
+                     # But _request_stage1_bounded handles exceptions internally and returns dict.
+                     # So strictly, this shouldn't raise unless cancellation or bug.
+                     # We can't identify WHO failed easily here without mapping.
+                     # But wait, `res` IS the result dict containing councilor_id.
+                     # If generic exception, we don't have ID. 
+                     # _request_stage1_bounded guarantees dict return.
+                     pass 
+        
+        # Now gather for final ordered list (all should be done)
         results = await asyncio.gather(*tasks, return_exceptions=True)
         final_results = []
         for i, res in enumerate(results):
              if isinstance(res, Exception):
-                 final_results.append({
+                 err_res = {
                     "councilor_id": councilors[i]["id"],
                     "status": "failed",
                     "error": {"code": "UNHANDLED_EXCEPTION", "message": str(res)}
-                 })
+                 }
+                 final_results.append(err_res)
+                 # Note: if on_result was used, this exception might have been swallowed or raised during as_completed loop?
+                 # If as_completed raised, we might have missed calling on_result for this one.
+                 # Let's ensure strictness: _request_stage1_bounded should NOT raise.
              else:
                  final_results.append(res)
         return final_results
@@ -478,33 +545,65 @@ def _build_judge_cards(stage1_results: List[Dict[str, Any]]) -> Tuple[List[Dict[
         
         anon_to_councilor_id[anon_id] = councilor_id
 
+        # New Payload Structure: Summary + Card
+        payload = {
+            "answer_summary": result.get("answer_summary", ""),
+            "judge_card": result.get("judge_card", {})
+        }
+
         judge_cards.append(
             {
                 "anon_id": anon_id,
-                "payload": result["judge_card"]
+                "payload": payload
             }
         )
 
     return judge_cards, anon_to_councilor_id
 
 
-def _build_ranking_messages(user_query: str, judge_cards: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    """Build messages instructing judges to return structured JSON rankings."""
+def _build_ranking_messages(
+    user_query: str, 
+    judge_cards: List[Dict[str, Any]],
+    persona_text: str,
+    rubric_text: str
+) -> List[Dict[str, str]]:
+    """
+    Build messages using 3-layer system prompt:
+    1. Judge Persona
+    2. Judge Rubric
+    3. JSON Guard
+    """
+    
+    # Layer 3: JSON Guard (Strictest)
+    json_guard = (
+        "HARD CONSTRAINTS (MUST FOLLOW):\n"
+        "1) Output EXACTLY ONE JSON object and nothing else.\n"
+        "2) NO markdown fences, NO commentary.\n"
+        "3) Allowed top-level fields ONLY: ranking, scores, rationale.\n"
+        "4) 'ranking' field is REQUIRED. It must include ALL anon_ids exactly once.\n"
+        "5) 'scores' (optional) must be 1-10 integers keyed by anon_id only.\n"
+        "6) 'rationale' (optional) must be a string.\n"
+        "ANY extra keys at top level = INVALID."
+    )
+    
+    # Combine Systems
+    # persona_text from caching logic
+    full_system_prompt = (
+        f"--- ROLE ---\n{persona_text}\n\n"
+        f"--- RUBRIC ---\n{rubric_text}\n\n"
+        f"--- FORMAT ---\n{json_guard}"
+    )
+
     ranking_instructions = {
         "task": "rank_responses",
         "question": user_query,
-        "judge_cards": judge_cards,
-        "response_format": {
-            "ranking": "Array of anon_id strings ordered best to worst (required). Include ALL anon_ids exactly once.",
-            "scores": "Optional object mapping anon_id to integer 1-10",
-            "rationale": "Optional explanation in any format (no length constraints)",
-        },
+        "candidates": judge_cards, # Changed key to generic 'candidates' or keep judge_cards? logic used judge_cards.
     }
 
     messages = [
         {
             "role": "system",
-            "content": "Always reply with a single JSON object and nothing else. No markdown fences.",
+            "content": full_system_prompt,
         },
         {
             "role": "user",
@@ -561,6 +660,19 @@ def _parse_ranking_response(
         "scores": filtered_scores,
         "rationale": rationale,
     }
+    
+    # Strict Key Validation: Subset check
+    # Top keys must be subset of allowed
+    current_keys = set(data.keys())
+    allowed_keys = {"ranking", "scores", "rationale"}
+    if not current_keys.issubset(allowed_keys):
+        extra = current_keys - allowed_keys
+        return None, f"Invalid extra keys found: {extra}"
+
+    # Truncate rationale if present
+    if parsed["rationale"]:
+        parsed["rationale"] = str(parsed["rationale"])[:600]
+
     return parsed, None
 
 
@@ -568,6 +680,7 @@ async def _collect_single_ranking_bounded(
     semaphore: asyncio.Semaphore,
     councilor_id: str,
     councilor_name: str,
+    councilor_obj: Dict[str, Any], # Added
     model: str,
     user_query: str,
     judge_cards: List[Dict[str, Any]],
@@ -576,7 +689,16 @@ async def _collect_single_ranking_bounded(
 ) -> Dict[str, Any]:
     """Collect ranking with semaphore, retry, and backoff."""
     
-    messages = _build_ranking_messages(user_query, judge_cards)
+    # Fetch Persona & Rubric
+    persona_path = councilor_obj.get("judge_persona_path") or councilor_obj.get("persona_path")
+    persona_text = fetch_persona(PERSONA_CACHE, persona_path)
+    rubric_text = councilor_obj.get("judge_system_prompt", "")
+    
+    # Limits
+    stage_limits = councilor_obj.get("stage_limits", {}).get("stage2", {})
+    max_tokens = stage_limits.get("max_output_tokens", 360)
+
+    messages = _build_ranking_messages(user_query, judge_cards, persona_text, rubric_text)
     
     last_error = None
     
@@ -585,7 +707,7 @@ async def _collect_single_ranking_bounded(
         response = None
         try:
             async with semaphore:
-                response = await query_model(model, messages, timeout=timeout)
+                response = await query_model(model, messages, timeout=timeout, max_output_tokens=max_tokens)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -670,7 +792,10 @@ async def _collect_single_ranking_bounded(
 
 
 async def stage2_collect_rankings(
-    user_query: str, stage1_results: List[Dict[str, Any]], councilors: List[Dict[str, Any]]
+    user_query: str, 
+    stage1_results: List[Dict[str, Any]], 
+    councilors: List[Dict[str, Any]],
+    on_result: Optional[Callable[[Dict[str, Any]], Any]] = None
 ) -> Dict[str, Any]:
     """
     Stage 2: Each model ranks the anonymized responses.
@@ -721,6 +846,7 @@ async def stage2_collect_rankings(
                 semaphore, 
                 councilor["id"],
                 councilor.get("name"),
+                councilor, # Pass full councilor object to access persona/rubric
                 model, 
                 user_query, 
                 judge_cards, 
@@ -745,13 +871,25 @@ async def stage2_collect_rankings(
         for councilor, task in tasks:
             if task in done:
                 try:
-                    completed_results.append(task.result())
+                    res = task.result()
+                    completed_results.append(res)
+                    if on_result:
+                        if asyncio.iscoroutinefunction(on_result):
+                            await on_result(res)
+                        else:
+                            on_result(res)
                 except Exception as e:
-                    completed_results.append({
+                    err = {
                         "judge_councilor_id": councilor["id"],
                         "model": councilor["model"],
                         "error": str(e) # Simplified error structure for Stage2 raw list
-                    })
+                    }
+                    completed_results.append(err)
+                    if on_result:
+                        if asyncio.iscoroutinefunction(on_result):
+                             await on_result(err)
+                        else:
+                             on_result(err)
             else:
                  completed_results.append({
                      "judge_councilor_id": councilor["id"],
@@ -762,6 +900,17 @@ async def stage2_collect_rankings(
                      }
                  })
     else:
+        # Callback logic for loose mode
+        if on_result:
+             for f in asyncio.as_completed(raw_tasks):
+                 try:
+                     res = await f
+                     if asyncio.iscoroutinefunction(on_result):
+                         await on_result(res)
+                     else:
+                         on_result(res)
+                 except: pass # handled in gather below
+
         results = await asyncio.gather(*raw_tasks, return_exceptions=True)
         for i, res in enumerate(results):
             if isinstance(res, Exception):

@@ -235,6 +235,7 @@ def sanitize_councilor_public(definitions: List[Dict[str, Any]]):
             "id": c["id"], 
             "name": c.get("name"), 
             "model": c.get("model"),
+            "avatar": c.get("avatar"),
             "active": c.get("active", True),
             "healthy": c.get("healthy", True),
             "health_error": c.get("health_error"),
@@ -637,6 +638,9 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
     is_first_message = len(conversation["messages"]) == 0
 
     async def event_generator():
+        # Shared queue for incremental events from callbacks
+        event_queue = asyncio.Queue()
+        
         try:
             # Add user message
             storage.add_user_message(conversation_id, body.content)
@@ -649,32 +653,107 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                 )
 
             # Resolution Logic
-            # We re-fetch or pass data? resolve_target_councilors is sync (using global COUNCILOR_MAP)
             active_councilors, needs_migration, ignored_ids = resolve_target_councilors(body.councilor_ids, conversation)
             
             # Emit Meta Event
             meta_payload = {
                 "type": "meta",
                 "resolved_councilor_ids": [c["id"] for c in active_councilors],
-                "ignored_ids": ignored_ids
+                "resolved_councilors": [
+                    {"id": c["id"], "name": c["name"], "avatar": c.get("avatar", ""), "model": c["model"]} 
+                    for c in active_councilors
+                ],
+                "chairman": {
+                    "id": CHAIRMAN["id"], 
+                    "name": CHAIRMAN["name"], 
+                    "avatar": CHAIRMAN.get("avatar", ""),
+                    "model": CHAIRMAN["model"]
+                },
+                "ignored_ids": ignored_ids,
+                "spec_version": "stage2_v1.2",
             }
             yield f"data: {json.dumps(meta_payload)}\n\n"
             
             active_chairman_id = conversation.get("active_chairman") or CHAIRMAN.get("id")
             active_chairman = CHAIRMAN if active_chairman_id == CHAIRMAN.get("id") else CHAIRMAN
 
-            # Stage 1: Collect responses
+            # --- Stage 1: Collect responses ---
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses(body.content, active_councilors)
+            
+            # Callback that puts items into the queue (NOT a generator)
+            async def on_stage1_item(item):
+                await event_queue.put(f"data: {json.dumps({'type': 'stage1_item', 'data': item})}\n\n")
+
+            # Start stage1 task
+            stage1_task = asyncio.create_task(
+                stage1_collect_responses(
+                    body.content, 
+                    active_councilors, 
+                    on_result=on_stage1_item
+                )
+            )
+            
+            # Drain queue while stage1 task is running
+            while not stage1_task.done() or not event_queue.empty():
+                try:
+                    # Wait for events with timeout to check task status
+                    event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
+                    yield event
+                    event_queue.task_done()
+                except asyncio.TimeoutError:
+                    # No event available, continue loop to check if task is done
+                    continue
+            
+            # Get stage1 results
+            stage1_results = await stage1_task
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
-            # Stage 2: Collect rankings (Unified Dict)
-            yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
+            # --- Stage 2: Collect rankings ---
+            valid_c = [r for r in stage1_results if r.get("status") == "ok"]
+            is_skipped = len(valid_c) < 2
             
-            # Use active_councilors objects, NOT models
-            stage2_result = await stage2_collect_rankings(
-                body.content, stage1_results, active_councilors
-            )
+            if is_skipped:
+                # Skipped Case
+                yield f"data: {json.dumps({'type': 'stage2_start', 'skipped': True, 'skipped_reason': 'insufficient_candidates'})}\n\n"
+                
+                stage2_result = await stage2_collect_rankings(
+                    body.content, stage1_results, active_councilors
+                )
+            else:
+                # Normal Case
+                anon_map_payload = {}
+                count = 1
+                for res in stage1_results:
+                    if res.get("status") == "ok":
+                         anon_map_payload[f"anon_{count}"] = res.get("councilor_id")
+                         count += 1
+                
+                yield f"data: {json.dumps({'type': 'stage2_start', 'anon_map': anon_map_payload})}\n\n"
+            
+                # Callback for stage2 items (NOT a generator)
+                async def on_stage2_item(item):
+                    await event_queue.put(f"data: {json.dumps({'type': 'stage2_item', 'data': item})}\n\n")
+                
+                # Start stage2 task
+                stage2_task = asyncio.create_task(
+                    stage2_collect_rankings(
+                        body.content, 
+                        stage1_results, 
+                        active_councilors,
+                        on_result=on_stage2_item
+                    )
+                )
+                
+                # Drain queue while stage2 task is running
+                while not stage2_task.done() or not event_queue.empty():
+                    try:
+                        event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
+                        yield event
+                        event_queue.task_done()
+                    except asyncio.TimeoutError:
+                        continue
+                
+                stage2_result = await stage2_task
             
             aggregate_rankings = []
             if not stage2_result.get("skipped"):
@@ -682,10 +761,10 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                     stage2_result.get("reviews", []), stage2_result.get("anon_map", {})
                 )
 
-            # Emit stage2_complete with the unified dict
+            # Emit stage2_complete
             yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_result, 'metadata': {'anon_to_councilor': stage2_result.get('anon_map', {}), 'aggregate_rankings': aggregate_rankings}})}\n\n"
 
-            # Stage 3: Synthesize final answer
+            # --- Stage 3: Synthesize final answer ---
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
             stage3_result = await stage3_synthesize_final(
                 body.content, stage1_results, stage2_result, active_chairman
@@ -702,6 +781,7 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
             metadata = {
                 "anon_to_councilor": stage2_result.get("anon_map", {}),
                 "aggregate_rankings": aggregate_rankings,
+                "spec_version": "stage2_v1.2"
             }
             storage.add_assistant_message(
                 conversation_id, stage1_results, stage2_result, stage3_result, metadata
@@ -728,6 +808,8 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
         except Exception as e:
             # Send error event
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+
 
     return StreamingResponse(
         event_generator(),

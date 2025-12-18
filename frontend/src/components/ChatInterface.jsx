@@ -15,9 +15,9 @@ import { MAX_MESSAGE_LENGTH, api } from "@/api";
 
 // Default model configuration (mirrors backend ids for graceful fallback)
 const DEFAULT_COUNCILORS = [
-  { id: "hefei-strategist", name: "合肥策略官", model: "meituan/longcat-flash-chat:free" },
-  { id: "qinling-engineer", name: "秦岭工程师", model: "nvidia/nemotron-nano-9b-v2:free" },
-  { id: "lingnan-researcher", name: "岭南研究员", model: "kwaipilot/kat-coder-pro:free" },
+  { id: "immanuel_kant", name: "康德", model: "openai/gpt-oss-20b:free" },
+  { id: "donald_trump", name: "特朗普", model: "openai/gpt-oss-20b:free" },
+  { id: "hideo_kojima", name: "小岛秀夫", model: "openai/gpt-oss-20b:free" },
 ];
 const DEFAULT_CHAIRMAN = { id: "chairman", name: "共识主席", model: "amazon/nova-2-lite-v1:free" };
 
@@ -204,10 +204,277 @@ export default function ChatInterface({
     }
   };
 
+  const consoleLog = (type, data) => {
+    // Helper for debugging
+    // console.log(`[Stream] ${type}`, data);
+  }
+
+  const handleSendMessage = async (content, councilorIds = null) => {
+    if (!conversationId) return;
+
+    setIsLoading(true);
+    try {
+      // Optimistically add user message to UI
+      const userMessage = { role: "user", content };
+      setCurrentConversation((prev) => ({
+        ...prev,
+        messages: [...prev.messages, userMessage],
+      }));
+
+      // Create a partial assistant message that will be updated progressively
+      const assistantMessage = {
+        role: "assistant",
+        stage1: null,
+        stage2: null,
+        stage3: null,
+        metadata: {},
+        loading: {
+          stage1: false,
+          stage2: false,
+          stage3: false,
+        },
+      };
+
+      // Add the partial assistant message
+      setCurrentConversation((prev) => ({
+        ...prev,
+        messages: [...prev.messages, assistantMessage],
+      }));
+
+      // Send message with streaming
+      await api.sendMessageStream(
+        conversationId,
+        content,
+        (eventType, event) => {
+          // consoleLog(eventType, event);
+
+          switch (eventType) {
+            case "meta":
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+                if (!lastMsg) return prev;
+
+                // Update metadata
+                lastMsg.metadata = {
+                  ...lastMsg.metadata,
+                  resolved_councilors: event.resolved_councilors,
+                  resolved_councilor_ids: event.resolved_councilor_ids
+                };
+
+                // IMMEDIATELY Initialize Stage 1 with placeholders
+                if (event.resolved_councilors && event.resolved_councilors.length > 0) {
+                  lastMsg.stage1 = event.resolved_councilors.map(c => ({
+                    councilor_id: c.id,
+                    model: c.model,
+                    councilor_name: c.name,
+                    status: "thinking",
+                    answer_markdown: "" // Placeholder content
+                  }));
+                  lastMsg.loading.stage1 = true;
+                }
+                return { ...prev, messages };
+              });
+              break;
+
+            case "stage1_start":
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+                lastMsg.loading.stage1 = true;
+                if (!lastMsg.stage1) lastMsg.stage1 = []; // Should have been init by meta
+                return { ...prev, messages };
+              });
+              break;
+
+            case "stage1_item":
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+                if (!lastMsg.stage1) lastMsg.stage1 = [];
+
+                const item = event.data;
+                // Robust matching: id or model
+                const index = lastMsg.stage1.findIndex(
+                  r => (r.councilor_id && r.councilor_id === item.councilor_id) ||
+                    (r.model && r.model === item.model)
+                );
+
+                if (index !== -1) {
+                  // Merge into existing placeholder/item
+                  const existing = lastMsg.stage1[index];
+                  lastMsg.stage1[index] = {
+                    ...existing,
+                    ...item,
+                    status: item.status || "thinking"
+                  };
+                } else {
+                  // Fallback: append if not found (shouldn't happen if meta synced)
+                  lastMsg.stage1.push(item);
+                }
+                return { ...prev, messages };
+              });
+              break;
+
+            case "stage1_complete":
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+                // Use backend final list but try to preserve our ephemeral state if needed? 
+                // Usually backend list is authoritative and sorted.
+                lastMsg.stage1 = event.data;
+                lastMsg.loading.stage1 = false;
+                return { ...prev, messages };
+              });
+              break;
+
+            case "stage2_start":
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+                lastMsg.loading.stage2 = true;
+
+                // Initialize Stage 2 placeholders
+                // Judges usually same as resolved_councilors unless overridden
+                const judges = lastMsg.metadata?.resolved_councilors || [];
+
+                // If anon_map provided, merge it
+                if (event.anon_map) {
+                  lastMsg.metadata = { ...lastMsg.metadata, anon_to_councilor: event.anon_map };
+                }
+
+                // Init items with Thinking state
+                lastMsg.stage2 = judges.map(c => ({
+                  judge_councilor_id: c.id,
+                  model: c.model,
+                  councilor_name: c.name,
+                  status: "thinking",
+                  ranking: [],
+                  scores: {}
+                }));
+
+                if (event.skipped) {
+                  lastMsg.skipped = true;
+                  lastMsg.skipped_reason = event.skipped_reason;
+                  lastMsg.loading.stage2 = false;
+                }
+                return { ...prev, messages };
+              });
+              break;
+
+            case "stage2_item":
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+                if (!lastMsg.stage2) lastMsg.stage2 = [];
+
+                const item = event.data;
+                // Stage 2 item key: judge_councilor_id
+                const index = lastMsg.stage2.findIndex(
+                  r => (r.judge_councilor_id && r.judge_councilor_id === item.judge_councilor_id) ||
+                    (r.model && r.model === item.model) ||
+                    // Legacy fallback if item only has councilor_id
+                    (item.councilor_id && r.judge_councilor_id === item.councilor_id)
+                );
+
+                if (index !== -1) {
+                  const existing = lastMsg.stage2[index];
+                  lastMsg.stage2[index] = {
+                    ...existing,
+                    ...item,
+                    status: "completed" // Got data -> completed
+                  };
+                } else {
+                  lastMsg.stage2.push(item);
+                }
+                return { ...prev, messages };
+              });
+              break;
+
+            case "stage2_complete":
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+
+                if (event.data.skipped) {
+                  // if skipped, just use what we have or empty
+                  lastMsg.stage2 = event.data.reviews || [];
+                  lastMsg.skipped = true;
+                } else {
+                  lastMsg.stage2 = event.data.reviews;
+                }
+
+                lastMsg.metadata = {
+                  ...lastMsg.metadata,
+                  ...event.metadata,
+                  anon_to_councilor: event.data.anon_map || lastMsg.metadata.anon_to_councilor
+                };
+                lastMsg.loading.stage2 = false;
+
+                return { ...prev, messages };
+              });
+              break;
+
+            case "stage3_start":
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+                lastMsg.loading.stage3 = true;
+                return { ...prev, messages };
+              });
+              break;
+
+            case "stage3_complete":
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+                lastMsg.stage3 = event.data;
+                lastMsg.loading.stage3 = false;
+                return { ...prev, messages };
+              });
+              break;
+
+            case "title_complete":
+              // Reload conversations to get updated title
+              loadConversations();
+              break;
+
+            case "complete":
+              // Stream complete, reload conversations list
+              loadConversations();
+              setIsLoading(false);
+              break;
+
+            case "error":
+              console.error("Stream error:", event.message);
+              setIsLoading(false);
+              break;
+
+            default:
+              console.log("Unknown event type:", eventType);
+          }
+        },
+        councilorIds
+      );
+    } catch (error) {
+      console.error("Failed to send message:", error);
+      // Remove optimistic messages on error
+      setCurrentConversation((prev) => ({
+        ...prev,
+        messages: prev.messages.slice(0, -2),
+      }));
+      setIsLoading(false);
+    }
+  };
+
   const councilorLookup = {};
-  councilors.forEach((c) => {
-    councilorLookup[c.id] = c;
-    councilorLookup[c.model] = c;
+  // Merge global councilors with resolved ones from current conversation run
+  // Priority: resolved_councilors > global councilors (later entries override earlier)
+  const lookupSource = [...councilors, ...(conversation?.resolved_councilors || [])];
+
+  lookupSource.forEach((c) => {
+    if (c.id) councilorLookup[c.id] = c;
+    if (c.model) councilorLookup[c.model] = c;
   });
 
   // Determine effective models (use conversation-specific ones if active, otherwise defaults)
@@ -408,20 +675,60 @@ export default function ChatInterface({
 
                       {/* Council Avatars */}
                       {(() => {
-                        const messageCouncilModels = msg.stage1 && msg.stage1.length > 0
-                          ? msg.stage1.map(r => r.model)
-                          : effectiveCouncilModels;
+                        const messageCouncilors = msg.stage1 && msg.stage1.length > 0
+                          ? msg.stage1.map(r => {
+                            const known = councilorLookup[r.councilor_id] || councilorLookup[r.model];
+                            return known || { id: r.councilor_id || r.model, name: r.councilor_name, model: r.model };
+                          })
+                          : effectiveCouncilIds.map(id => councilorLookup[id] || { id, name: councilorLookup[id]?.name, model: councilorLookup[id]?.model || id });
+
+                        const messageCouncilModels = messageCouncilors.map(c => c.model || c.id);
 
                         const messageChairmanModel = msg.stage3 && msg.stage3.model
                           ? msg.stage3.model
                           : effectiveChairmanModel;
+
+                        const getModelStatuses = (msg, councilorModels, chairmanModel) => {
+                          const statuses = {};
+                          if (!msg) return statuses;
+
+                          // Default all to idle
+                          councilorModels.forEach(m => statuses[m] = "idle");
+                          if (chairmanModel) statuses[chairmanModel] = "idle";
+
+                          // Stage 1 Status
+                          if (msg.loading?.stage1) {
+                            councilorModels.forEach(m => statuses[m] = "thinking");
+                          }
+
+                          if (msg.stage1 && Array.isArray(msg.stage1)) {
+                            msg.stage1.forEach(res => {
+                              // Try to match by model ID first, then councilor ID
+                              const key = res.model || res.councilor_id;
+                              if (key) {
+                                if (res.status === "ok") statuses[key] = "completed";
+                                else if (res.status === "failed") statuses[key] = "error";
+                              }
+                            });
+                          }
+
+                          // Stage 3 Status
+                          if (msg.loading?.stage3) {
+                            if (chairmanModel) statuses[chairmanModel] = "thinking";
+                          }
+                          if (msg.stage3) {
+                            if (chairmanModel) statuses[chairmanModel] = "completed";
+                          }
+
+                          return statuses;
+                        };
 
                         return (msg.stage1 ||
                           msg.stage2 ||
                           msg.stage3 ||
                           msg.loading) && (
                             <CouncilAvatars
-                              councilModels={messageCouncilModels}
+                              councilors={messageCouncilors}
                               chairmanModel={messageChairmanModel}
                               activeModel={activeModel}
                               onSelectModel={handleSelectModel}
@@ -447,6 +754,8 @@ export default function ChatInterface({
                             responses={msg.stage1}
                             activeModel={activeModel}
                             onSelectModel={handleSelectModel}
+                            councilorLookup={councilorLookup}
+                            metadata={msg.metadata}
                           />
                         )}
                       </div>
@@ -470,6 +779,7 @@ export default function ChatInterface({
                             onSelectModel={handleSelectModel}
                             scrollToStage2={scrollToStage2}
                             councilorLookup={councilorLookup}
+                            metadata={msg.metadata}
                           />
                         )}
                       </div>
