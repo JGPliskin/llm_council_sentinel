@@ -21,7 +21,10 @@ from config import (
     DEFAULT_STAGE2_TIMEOUT,
     STAGE1_DEADLINE,
     STAGE2_DEADLINE,
+    STAGE1_DEADLINE,
+    STAGE2_DEADLINE,
     COUNCILOR_MAP,
+    GLOBAL_MODEL_MAP,
 )
 from health import health_manager
 
@@ -167,58 +170,59 @@ def get_retry_after(response_dict: Optional[Dict[str, Any]]) -> Optional[float]:
     return None
 
 
-async def _bounded_query(
-    semaphore: asyncio.Semaphore,
-    query_fn: Callable[..., Any],
-    *args,
-) -> Dict[str, Any]:
-    """
-    Execute a query with strict semaphore acquisition per attempt.
-    Handles max 2 attempts (1 initial + 1 retry) across both network and logic failures.
-    """
-    
-    last_result = None
-    
-    # Total attempts = 2
-    for attempt in range(2):
-        try:
-            async with semaphore:
-                # Execute the wrapped function (which includes logic + optional internal JSON retry if needed,
-                # but here we unify the retry logic so query_fn should perform ONE shot)
-                # Actually, to support "Different Prompt on Retry", query_fn needs to know the attempt number or context.
-                # However, the requirement is "Total 2 attempts". 
-                # So we pass 'attempt' and 'last_result' to query_fn if we want logic inside.
-                # Simplification: We move the "query + validate" logic completely inside here? No, too coupled.
-                # Better: query_fn handles the API call + Validation. If it returns a "Success" dict, we stop.
-                # If it returns a "Failure" dict, we decide to retry.
-                
-                # To support changing prompts (repair), we can ask query_fn to handle the "make call" part
-                # but we need to control the loop here.
-                # Let's trust query_fn to do ONE request.
-                
-                # We need to construct the args potentially differently on retry (repair prompt).
-                # This suggests the caller should pass a 'factory' or we handle the logic inline.
-                # Given strict requirements, let's keep logic inline in _request_stage1 but bounded here?
-                # No, _bounded_query is best as a generic wrapper if we just pass a coroutine.
-                # But we can't pass a coroutine because it's already created. We need a factory.
-                
-                pass # Placeholder for thought, resuming implementation below.
-            
-            # Since we need to modify args (add repair prompt) on retry, `_bounded_query` is best utilized 
-            # as a "Slot Manager". The complexities of "JSON Repair" vs "Network Retry" suggest
-            # we should implement the loop inside `_request_stage1` and strictly acquire semaphore there.
-            # But the requirement says "Semaphore context manager must wrap the entire retry loop... wait, no, 
-            # User said: 'Acquire semaphore per attempt... Release ... before backoff'".
-            
-            # So, `_bounded_query` isn't generic enough if the prompt changes.
-            # I will inline the semaphore usage into `_request_stage1` and `_collect_single_ranking` macros.
-            # This is cleaner.
-            pass
 
-        except asyncio.CancelledError:
-            raise
+# -------------------------------------------------------------------------
+# Concurrency & Routing Helpers
+# -------------------------------------------------------------------------
 
-    return {} # Should not be reached logic-wise if inlined.
+class ModelConcurrencyManager:
+    """Manages per-model concurrency semantics."""
+    def __init__(self):
+        self._semaphores: Dict[str, asyncio.Semaphore] = {}
+        self._lock = asyncio.Lock()
+
+    async def get_semaphore(self, model_id: str) -> asyncio.Semaphore:
+        # Fast path
+        if model_id in self._semaphores:
+            return self._semaphores[model_id]
+            
+        async with self._lock:
+            if model_id not in self._semaphores:
+                # Look up limit from Global Pool, default to 3
+                # If model not in pool, default to 3
+                cfg = GLOBAL_MODEL_MAP.get(model_id, {})
+                limit = cfg.get("concurrency_limit", 3)
+                self._semaphores[model_id] = asyncio.Semaphore(limit)
+            return self._semaphores[model_id]
+
+model_concurrency_manager = ModelConcurrencyManager()
+
+
+def select_best_model(candidates: List[str], excluded: set) -> Optional[str]:
+    """
+    Select the first healthy model from candidates that is not excluded.
+    Strict On-Demand Routing.
+    """
+    for mid in candidates:
+        if mid in excluded:
+            continue
+        status = health_manager.get_status(mid)
+        if status.get("health_status") == "healthy":
+            return mid
+    
+    # If no healthy model found, should we return the first non-excluded one 
+    # (if it's unknown)? Or strictly fail?
+    # Spec says: "Unknown strict unavailable".
+    # But if ALL are unavailable?
+    # The caller will handle None as failure.
+    return None
+
+def get_candidates(obj: Dict[str, Any]) -> List[str]:
+    """Helper to get candidates from councilor/chairman object."""
+    c = obj.get("model_candidates", [])
+    if not c and obj.get("model"):
+        c = [obj["model"]]
+    return c
 
 
 # Redefining _request_stage1 to handle the loop + semaphore
@@ -243,6 +247,7 @@ async def _request_stage1_bounded(
         "  {\n"
         "    \"councilor_id\": <string>,\n"
         "    \"answer_markdown\": <string>,\n"
+        "    \"answer_summary\": <string, 纯文本摘要, 500字以内>,\n"
         "    \"judge_card\": {\n"
         "      \"stance\": <string>,\n"
         "      \"core_reasons\": <list, 至少2条>,\n"
@@ -252,7 +257,8 @@ async def _request_stage1_bounded(
         "    }\n"
         "  }\n"
         "- 列表每项不超过50个中文字符。\n"
-        "- judge_card 整体序列化长度需<=600字符，若超出请合并/抽象信息后再压缩，不要生硬截断。"
+        "- judge_card 整体序列化长度需<=600字符，若超出请合并/抽象信息后再压缩，不要生硬截断。\n"
+        "- answer_summary 必须是对回答的客观陈述，不包含立场评判，严格控制在500字以内。"
     )
 
     user_message = (
@@ -260,127 +266,147 @@ async def _request_stage1_bounded(
         "请依据 persona 直接作答，并填充 judge_card。"
     )
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_message},
-    ]
+    candidates = get_candidates(councilor)
+    excluded_models = set()
+    attempted_models = [] # Track for metadata/history
 
     last_error = None
     
-    for attempt in range(2):
-        # 1. Acquire Semaphore & Execute
-        response = None
-        try:
-            async with semaphore:
-                # Check cancellation immediately upon entering
-                # (although `async with` doesn't pause, `await query_model` does)
-                response = await query_model(
-                    councilor["model"], messages, timeout=timeout, max_output_tokens=max_tokens
-                )
-        except asyncio.CancelledError:
-            raise # Strict Exit
-        except Exception:
-            # Should not happen as query_model returns dict, but just in case
-            pass
-
-        # 2. Validation Logic
-        success = False
-        parsed_result = None
+    # Outer Loop: Candidate Selection
+    while True:
+        # A. Select Model
+        selected_model = select_best_model(candidates, excluded_models)
         
-        should_retry_network = False
-        should_retry_json = False
-        
-        if response and not response.get("error"):
-            # Try parsing
-            raw_text = response.get("content", "")
-            try:
-                parsed = parse_stage1_json(raw_text)
-                judge_card = enforce_judge_card_constraints(parsed.get("judge_card", {}))
-                parsed["judge_card"] = judge_card
-                parsed["councilor_id"] = parsed.get("councilor_id") or councilor["id"]
-                parsed["answer_markdown"] = parsed.get("answer_markdown", "").strip()
-                parsed["model"] = response.get("model", councilor["model"])
-                parsed["councilor_name"] = councilor.get("name")
-                parsed["status"] = "ok"
-                parsed_result = parsed
-                success = True
-                
-                # Runtime Health: Success
-                # Note: We update status even if parsing failed? No, parsing is logic, not model health.
-                # However, model returning bad JSON might be "unhealthy" (degraded)?
-                # Spec: "A. Transient ... Network ... B. Determine ... 404".
-                # Bad JSON is arguably "execution success, validation failure".
-                # Let's count it as success for *connection* health (it replied).
-                # So we update success=True immediately if network was fine.
-                health_manager.update_status(councilor["model"], True, source="runtime")
-                
-            except Exception as e:
-                # JSON/Validation Failure
-                last_error = f"JSON Parse/Validation Error: {str(e)}"
-                should_retry_json = True
-                # Still consider healthy backend
-                health_manager.update_status(councilor["model"], True, source="runtime")
-                
-        else:
-            # Network/API Failure
-            last_error = f"Network/API Error: {response.get('content') if response else 'No response'}"
-            status_code = response.get('status_code') if response else None
-            # Runtime Health: Failure
-            health_manager.update_status(councilor["model"], False, last_error, status_code, source="runtime")
-            should_retry_network = True
-
-        # 3. Decision
-        if success:
-            return parsed_result
-        
-        # If last attempt, we are done
-        if attempt == 1:
+        if not selected_model:
+            # No healthy models available
+            # If we haven't tried anything yet, and maybe all are "unknown" but we are strict?
+            # Or if we exhausted all.
+            # We fail.
             break
             
-        # 4. Prepare Logic for Next Attempt (if allowed)
-        if should_retry_network:
-            if not is_retryable_error(response):
-                # Fatal error (e.g. 401), stop immediately
-                break
-            # Backoff for network
-            retry_after = get_retry_after(response)
-            delay = retry_after if retry_after else random.uniform(0.8, 2.0)
+        model_sem = await model_concurrency_manager.get_semaphore(selected_model)
+        
+        # Inner Loop: Logic Retry (JSON Repair) on SPECIFIC model
+        # We allow 2 logic attempts per model.
+        # If network fails, we break inner immediately to switch candidate.
+        
+        model_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ]
+        
+        model_success = False
+        parsed_result = None
+        
+        for logic_attempt in range(2):
+            response = None
             try:
-                await asyncio.sleep(delay)
+                # Double Locking
+                async with semaphore: # Stage Limit
+                    async with model_sem: # Model Limit
+                        response = await query_model(
+                            selected_model, model_messages, timeout=timeout, max_output_tokens=max_tokens
+                        )
             except asyncio.CancelledError:
                 raise
-            # Messages remain same for network retry
+            except Exception as e:
+                # Fallback for unexpected exceptions
+                 response = {"error": True, "content": str(e)}
 
-        elif should_retry_json:
-            # No sleep needed for logic retry (or maybe tiny yield), but usually it's fine to proceed.
-            # User comment: "Exception: JSON-repair retry can reuse the same slot if no backoff is needed (optional)."
-            # Implementation: We released slot. We re-acquire. This is safer for fairness.
+            if selected_model not in attempted_models:
+                attempted_models.append(selected_model)
             
-            # Update messages with repair prompt
-            repair_prompt = (
-                "上一轮输出未提供可解析的 JSON，请直接输出符合约束的 JSON 对象，"
-                "不要添加多余文字或代码块。确保 core_reasons 至少两条、列表项<=50字、judge_card 长度<=600。"
-            )
-            # Remove previous repair attempts if any (though loop is max 2 so simple append works)
-            messages.append({"role": "user", "content": repair_prompt})
+            # Validation
+            success = False
+            should_retry_json = False
             
-    # If we exited loop without success
+            if response and not response.get("error"):
+                # Network Success
+                health_manager.update_status(selected_model, True, source="runtime")
+                
+                # Logic Validation
+                raw_text = response.get("content", "")
+                try:
+                    parsed = parse_stage1_json(raw_text)
+                    judge_card = enforce_judge_card_constraints(parsed.get("judge_card", {}))
+                    parsed["judge_card"] = judge_card
+                    parsed["councilor_id"] = councilor["id"]
+                    parsed["answer_markdown"] = parsed.get("answer_markdown", "").strip()
+                    
+                    # Summary Logic
+                    am = parsed.get("answer_markdown", "")
+                    summary = parsed.get("answer_summary", "")
+                    if not summary and am: summary = am[:500]
+                    if summary: summary = str(summary)[:500]
+                    parsed["answer_summary"] = summary
+
+                    parsed["model"] = response.get("model", selected_model) # Actual used model
+                    parsed["councilor_name"] = councilor.get("name")
+                    parsed["status"] = "ok"
+                    
+                    # Metadata
+                    parsed["attempted_models"] = attempted_models
+                    parsed["fallback_used"] = (selected_model != candidates[0])
+                    
+                    parsed_result = parsed
+                    success = True
+                    model_success = True
+                    
+                except Exception as e:
+                    last_error = f"JSON Parse Error ({selected_model}): {str(e)}"
+                    should_retry_json = True
+                    # Logic error doesn't mark model unhealthy
+            else:
+                # Network Failure
+                err_msg = response.get('content') if response else 'No response'
+                last_error = f"Network Error ({selected_model}): {err_msg}"
+                status_code = response.get('status_code') if response else None
+                
+                health_manager.update_status(selected_model, False, err_msg, status_code, source="runtime")
+                excluded_models.add(selected_model) # In-Flight Exclusion
+                break # Break inner loop, try next candidate
+                
+            if success:
+                return parsed_result
+            
+            if should_retry_json:
+                if logic_attempt == 0:
+                    # Repair
+                    repair_prompt = (
+                        "上一轮输出未提供可解析的 JSON，请直接输出符合约束的 JSON 对象，"
+                        "不要添加多余文字或代码块。确保 core_reasons 至少两条、列表项<=50字、judge_card 长度<=600。"
+                    )
+                    model_messages.append({"role": "user", "content": repair_prompt})
+                    # Loop continues to logic_attempt 1
+                else:
+                    # 2nd failure
+                    excluded_models.add(selected_model)
+                    break
+        
+        # End of Inner Loop
+        # If we are here, we either succeeded (returned already) or failed (break)
+        # If failed, we seek next candidate in Outer Loop
+            
+    # If we exited without returning
     return {
         "councilor_id": councilor["id"],
         "councilor_name": councilor.get("name"),
-        "model": councilor["model"],
+        "model": councilor["model"], # Default requested
         "status": "failed",
         "error": {
             "code": "EXECUTION_ERROR",
-            "message": str(last_error or "Unknown error"),
-            "retryable": True # Marked as retryable for upstream, though we exhausted retries here
+            "message": str(last_error or "All candidates failed"),
+            "retryable": True
         },
         "answer_markdown": "",
+        "attempted_models": attempted_models
     }
 
 
 async def stage1_collect_responses(
-    user_query: str, councilors: List[Dict[str, Any]]
+    user_query: str, 
+    councilors: List[Dict[str, Any]],
+    on_result: Optional[Callable[[Dict[str, Any]], Any]] = None
 ) -> List[Dict[str, Any]]:
     """Stage 1: Collect initial responses from all councilors with strict control."""
     semaphore = asyncio.Semaphore(DEFAULT_CONCURRENCY_STAGE1)
@@ -417,13 +443,24 @@ async def stage1_collect_responses(
                 try:
                     res = task.result()
                     results.append(res)
+                    if on_result:
+                        if asyncio.iscoroutinefunction(on_result):
+                            await on_result(res)
+                        else:
+                            on_result(res)
                 except Exception as e:
                     # Should verify if this happens; _request_stage1_bounded handles most.
-                    results.append({
+                    err_res = {
                         "councilor_id": councilors[i]["id"],
                         "status": "failed",
                         "error": {"code": "UNEXPECTED_ERROR", "message": str(e)}
-                    })
+                    }
+                    results.append(err_res)
+                    if on_result:
+                        if asyncio.iscoroutinefunction(on_result):
+                             await on_result(err_res)
+                        else:
+                             on_result(err_res)
             else:
                 # Task was pending and cancelled
                 results.append({
@@ -441,17 +478,52 @@ async def stage1_collect_responses(
         
     else:
         # No strict stage deadline, just gather all
-        # But we still use gather to respect exceptions if any, 
-        # though _request_stage1_bounded catches logic errors.
+        # To support streaming, we can't just use gather(*tasks).
+        # We need as_completed or similar, OR just attach callbacks to the tasks?
+        # But we also need to respect the list order for the final return.
+        # Let's use as_completed for the side effects, but gather for the final list?
+        # Actually, if we use gather, we wait for all.
+        # To stream, we must process as they finish.
+        # We can use `asyncio.as_completed` but mapping back to ID is tricky if we lose index.
+        # Better: Wrap the task to call the callback itself?
+        # Or iterate as_completed.
+        # Let's wrap the coroutine with a reporter helper?
+        # No, let's just use `asyncio.as_completed` to fire events, and `gather` to get final ordered list.
+        # Note: `as_completed` returns an iterator of futures.
+        
+        # Parallel strategy: yield via callback as they complete
+        if on_result:
+             for f in asyncio.as_completed(tasks):
+                 try:
+                     res = await f
+                     if asyncio.iscoroutinefunction(on_result):
+                         await on_result(res)
+                     else:
+                         on_result(res)
+                 except Exception as e:
+                     # This exception comes from the task itself
+                     # But _request_stage1_bounded handles exceptions internally and returns dict.
+                     # So strictly, this shouldn't raise unless cancellation or bug.
+                     # We can't identify WHO failed easily here without mapping.
+                     # But wait, `res` IS the result dict containing councilor_id.
+                     # If generic exception, we don't have ID. 
+                     # _request_stage1_bounded guarantees dict return.
+                     pass 
+        
+        # Now gather for final ordered list (all should be done)
         results = await asyncio.gather(*tasks, return_exceptions=True)
         final_results = []
         for i, res in enumerate(results):
              if isinstance(res, Exception):
-                 final_results.append({
+                 err_res = {
                     "councilor_id": councilors[i]["id"],
                     "status": "failed",
                     "error": {"code": "UNHANDLED_EXCEPTION", "message": str(res)}
-                 })
+                 }
+                 final_results.append(err_res)
+                 # Note: if on_result was used, this exception might have been swallowed or raised during as_completed loop?
+                 # If as_completed raised, we might have missed calling on_result for this one.
+                 # Let's ensure strictness: _request_stage1_bounded should NOT raise.
              else:
                  final_results.append(res)
         return final_results
@@ -478,33 +550,65 @@ def _build_judge_cards(stage1_results: List[Dict[str, Any]]) -> Tuple[List[Dict[
         
         anon_to_councilor_id[anon_id] = councilor_id
 
+        # New Payload Structure: Summary + Card
+        payload = {
+            "answer_summary": result.get("answer_summary", ""),
+            "judge_card": result.get("judge_card", {})
+        }
+
         judge_cards.append(
             {
                 "anon_id": anon_id,
-                "payload": result["judge_card"]
+                "payload": payload
             }
         )
 
     return judge_cards, anon_to_councilor_id
 
 
-def _build_ranking_messages(user_query: str, judge_cards: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    """Build messages instructing judges to return structured JSON rankings."""
+def _build_ranking_messages(
+    user_query: str, 
+    judge_cards: List[Dict[str, Any]],
+    persona_text: str,
+    rubric_text: str
+) -> List[Dict[str, str]]:
+    """
+    Build messages using 3-layer system prompt:
+    1. Judge Persona
+    2. Judge Rubric
+    3. JSON Guard
+    """
+    
+    # Layer 3: JSON Guard (Strictest)
+    json_guard = (
+        "HARD CONSTRAINTS (MUST FOLLOW):\n"
+        "1) Output EXACTLY ONE JSON object and nothing else.\n"
+        "2) NO markdown fences, NO commentary.\n"
+        "3) Allowed top-level fields ONLY: ranking, scores, rationale.\n"
+        "4) 'ranking' field is REQUIRED. It must include ALL anon_ids exactly once.\n"
+        "5) 'scores' (optional) must be 1-10 integers keyed by anon_id only.\n"
+        "6) 'rationale' (optional) must be a string.\n"
+        "ANY extra keys at top level = INVALID."
+    )
+    
+    # Combine Systems
+    # persona_text from caching logic
+    full_system_prompt = (
+        f"--- ROLE ---\n{persona_text}\n\n"
+        f"--- RUBRIC ---\n{rubric_text}\n\n"
+        f"--- FORMAT ---\n{json_guard}"
+    )
+
     ranking_instructions = {
         "task": "rank_responses",
         "question": user_query,
-        "judge_cards": judge_cards,
-        "response_format": {
-            "ranking": "Array of anon_id strings ordered best to worst (required). Include ALL anon_ids exactly once.",
-            "scores": "Optional object mapping anon_id to integer 1-10",
-            "rationale": "Optional explanation in any format (no length constraints)",
-        },
+        "candidates": judge_cards, # Changed key to generic 'candidates' or keep judge_cards? logic used judge_cards.
     }
 
     messages = [
         {
             "role": "system",
-            "content": "Always reply with a single JSON object and nothing else. No markdown fences.",
+            "content": full_system_prompt,
         },
         {
             "role": "user",
@@ -561,6 +665,19 @@ def _parse_ranking_response(
         "scores": filtered_scores,
         "rationale": rationale,
     }
+    
+    # Strict Key Validation: Subset check
+    # Top keys must be subset of allowed
+    current_keys = set(data.keys())
+    allowed_keys = {"ranking", "scores", "rationale"}
+    if not current_keys.issubset(allowed_keys):
+        extra = current_keys - allowed_keys
+        return None, f"Invalid extra keys found: {extra}"
+
+    # Truncate rationale if present
+    if parsed["rationale"]:
+        parsed["rationale"] = str(parsed["rationale"])[:600]
+
     return parsed, None
 
 
@@ -568,109 +685,131 @@ async def _collect_single_ranking_bounded(
     semaphore: asyncio.Semaphore,
     councilor_id: str,
     councilor_name: str,
-    model: str,
+    councilor_obj: Dict[str, Any],
+    default_model: str, # Renamed for clarity
     user_query: str,
     judge_cards: List[Dict[str, Any]],
     expected_anon_ids: List[str],
     timeout: float
 ) -> Dict[str, Any]:
-    """Collect ranking with semaphore, retry, and backoff."""
+    """Collect ranking with fallback routing."""
     
-    messages = _build_ranking_messages(user_query, judge_cards)
+    # Fetch Persona & Rubric
+    persona_path = councilor_obj.get("judge_persona_path") or councilor_obj.get("persona_path")
+    persona_text = fetch_persona(PERSONA_CACHE, persona_path)
+    rubric_text = councilor_obj.get("judge_system_prompt", "")
     
+    # Limits
+    stage_limits = councilor_obj.get("stage_limits", {}).get("stage2", {})
+    max_tokens = stage_limits.get("max_output_tokens", 360)
+
+    messages = _build_ranking_messages(user_query, judge_cards, persona_text, rubric_text)
+    
+    candidates = get_candidates(councilor_obj)
+    excluded_models = set()
+    attempted_models = []
+
     last_error = None
     
-    for attempt in range(2):
-        # 1. Acquire & Execute
-        response = None
-        try:
-            async with semaphore:
-                response = await query_model(model, messages, timeout=timeout)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            pass
-            
-        # 2. Validation
-        success = False
-        parsed_result = None
-        should_retry_network = False
-        should_retry_json = False
-        
-        attempt_res = {
-            "judge_councilor_id": councilor_id,
-            "judge_councilor_name": councilor_name,
-            "model": response.get("model", model) if response else model,
-            "raw_response": response.get("content", "") if response else ""
-        }
-        
-        if response and not response.get("error"):
-            parsed, error = _parse_ranking_response(attempt_res["raw_response"], expected_anon_ids)
-            if error:
-                last_error = f"JSON/Usage Error: {error}"
-                should_retry_json = True
-                # Logic error but network success
-                health_manager.update_status(model, True, source="runtime")
-            else:
-                attempt_res.update(parsed)
-                parsed_result = attempt_res
-                success = True
-                health_manager.update_status(model, True, source="runtime")
-        else:
-            last_error = f"Network/API Error: {response.get('content') if response else 'No response'}"
-            status_code = response.get('status_code') if response else None
-            health_manager.update_status(model, False, last_error, status_code, source="runtime")
-            should_retry_network = True
-            
-        # 3. Decision
-        if success:
-            return parsed_result
-            
-        if attempt == 1:
+    while True: # Outer Loop: Candidates
+        selected_model = select_best_model(candidates, excluded_models)
+        if not selected_model:
             break
             
-        # 4. Retry Setup
-        if should_retry_network:
-            if not is_retryable_error(response):
-                break
-            # Backoff
-            retry_after = get_retry_after(response)
-            delay = retry_after if retry_after else random.uniform(0.8, 2.0)
+        model_sem = await model_concurrency_manager.get_semaphore(selected_model)
+        
+        current_messages = messages # Start fresh for this model (though logically same)
+        
+        # Inner Loop: Logic Retry
+        for logic_attempt in range(2):
+            response = None
             try:
-                await asyncio.sleep(delay)
+                async with semaphore:
+                    async with model_sem:
+                        response = await query_model(selected_model, current_messages, timeout=timeout, max_output_tokens=max_tokens)
             except asyncio.CancelledError:
                 raise
-        elif should_retry_json:
-            # JSON Repair
-            retry_messages = messages + [
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "error": last_error,
-                            "instruction": f"Your previous reply was invalid. Reply again with ONLY the JSON object. You must include these anon_ids exactly once: {expected_anon_ids}",
-                        },
-                        ensure_ascii=False,
-                    ),
-                }
-            ]
-            messages = retry_messages
-            # Re-acquire semaphore in next loop
+            except Exception as e:
+                response = {"error": True, "content": str(e)}
+
+            if selected_model not in attempted_models:
+                attempted_models.append(selected_model)
+
+            # Validation
+            success = False
+            parsed_result = None
+            should_retry_json = False
+            
+            attempt_res = {
+                "judge_councilor_id": councilor_id,
+                "judge_councilor_name": councilor_name,
+                "model": response.get("model", selected_model) if response else selected_model,
+                "raw_response": response.get("content", "") if response else ""
+            }
+            
+            if response and not response.get("error"):
+                # Network OK
+                health_manager.update_status(selected_model, True, source="runtime")
+                
+                parsed, error = _parse_ranking_response(attempt_res["raw_response"], expected_anon_ids)
+                if error:
+                    last_error = f"JSON/Usage Error ({selected_model}): {error}"
+                    should_retry_json = True
+                else:
+                    attempt_res.update(parsed)
+                    attempt_res["fallback_used"] = (selected_model != candidates[0])
+                    parsed_result = attempt_res
+                    success = True
+            else:
+                # Network Fail
+                err_msg = response.get('content') if response else 'No response'
+                last_error = f"Network Error ({selected_model}): {err_msg}"
+                status_code = response.get('status_code') if response else None 
+                health_manager.update_status(selected_model, False, err_msg, status_code, source="runtime")
+                excluded_models.add(selected_model)
+                break # Break inner, next candidate
+                
+            if success:
+                return parsed_result
+                
+            if should_retry_json:
+                if logic_attempt == 0:
+                   # Repair
+                   retry_msg = {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "error": last_error,
+                                "instruction": f"Your previous reply was invalid. Reply again with ONLY the JSON object. You must include these anon_ids exactly once: {expected_anon_ids}",
+                            },
+                            ensure_ascii=False,
+                        ),
+                    }
+                   # Append to NEW list to avoid mutating shared `messages`
+                   current_messages = messages + [retry_msg]
+                else:
+                   # 2nd fail
+                   excluded_models.add(selected_model)
+                   break
             
     # Fail
     return {
         "judge_councilor_id": councilor_id,
-        "model": model,
+        "model": default_model,
         "error": {
             "code": "EXECUTION_ERROR",
-            "message": str(last_error),
+            "message": str(last_error or "All candidates failed"),
             "retryable": True
-        }
+        },
+        "attempted_models": attempted_models
     }
 
 
 async def stage2_collect_rankings(
-    user_query: str, stage1_results: List[Dict[str, Any]], councilors: List[Dict[str, Any]]
+    user_query: str, 
+    stage1_results: List[Dict[str, Any]], 
+    councilors: List[Dict[str, Any]],
+    on_result: Optional[Callable[[Dict[str, Any]], Any]] = None
 ) -> Dict[str, Any]:
     """
     Stage 2: Each model ranks the anonymized responses.
@@ -721,6 +860,7 @@ async def stage2_collect_rankings(
                 semaphore, 
                 councilor["id"],
                 councilor.get("name"),
+                councilor, # Pass full councilor object to access persona/rubric
                 model, 
                 user_query, 
                 judge_cards, 
@@ -745,13 +885,25 @@ async def stage2_collect_rankings(
         for councilor, task in tasks:
             if task in done:
                 try:
-                    completed_results.append(task.result())
+                    res = task.result()
+                    completed_results.append(res)
+                    if on_result:
+                        if asyncio.iscoroutinefunction(on_result):
+                            await on_result(res)
+                        else:
+                            on_result(res)
                 except Exception as e:
-                    completed_results.append({
+                    err = {
                         "judge_councilor_id": councilor["id"],
                         "model": councilor["model"],
                         "error": str(e) # Simplified error structure for Stage2 raw list
-                    })
+                    }
+                    completed_results.append(err)
+                    if on_result:
+                        if asyncio.iscoroutinefunction(on_result):
+                             await on_result(err)
+                        else:
+                             on_result(err)
             else:
                  completed_results.append({
                      "judge_councilor_id": councilor["id"],
@@ -762,6 +914,17 @@ async def stage2_collect_rankings(
                      }
                  })
     else:
+        # Callback logic for loose mode
+        if on_result:
+             for f in asyncio.as_completed(raw_tasks):
+                 try:
+                     res = await f
+                     if asyncio.iscoroutinefunction(on_result):
+                         await on_result(res)
+                     else:
+                         on_result(res)
+                 except: pass # handled in gather below
+
         results = await asyncio.gather(*raw_tasks, return_exceptions=True)
         for i, res in enumerate(results):
             if isinstance(res, Exception):
@@ -878,33 +1041,77 @@ async def stage3_synthesize_final(
         {"role": "user", "content": chairman_prompt},
     ]
 
-    try:
-        response = await query_model(
-            chairman["model"], messages, timeout=timeout, max_output_tokens=max_tokens
-        )
+    candidates = get_candidates(chairman)
+    excluded_models = set()
+    attempted_models = []
     
-        if response and not response.get('error'):
-             health_manager.update_status(chairman["model"], True, source="runtime")
-             
-             actual_model = response.get("model", chairman["model"])
-             return {
-                "status": "ok",
-                "model": actual_model, 
-                "response": response.get("content", "")
-             }
-        else:
-             error_msg = response.get("content") if response else "No response from chairman"
-             status_code = response.get('status_code') if response else None
-             health_manager.update_status(chairman["model"], False, error_msg, status_code, source="runtime")
-             raise ValueError(error_msg)
+    last_error = None
 
-    except Exception as e:
-        return {
-            "status": "failed",
-            "model": chairman["model"],
-            "response": f"最终总结生成失败: {str(e)}",
-            "error": {"code": "CHAIRMAN_FAILED", "message": str(e)}
-        }
+    while True: # Outer Loop: Candidates
+        selected_model = select_best_model(candidates, excluded_models)
+        if not selected_model:
+            break
+            
+        model_sem = await model_concurrency_manager.get_semaphore(selected_model)
+        
+        # Inner Loop: Retry (Simple retries for Stage 3, usually logic errors are rare here as it's freeform text, 
+        # but network errors are common. JSON not strict here.)
+        # Actually Stage 3 output is text, no JSON guard.
+        # So we just try once or retry network?
+        # Let's do 2 attempts for network robustness.
+        
+        for attempt in range(2):
+            response = None
+            try:
+                # Double Locking
+                # No stage limit semaphore passed to stage3? 
+                # stage3_synthesize_final is usually run alone.
+                # But we should respect model concurrency.
+                async with model_sem:
+                    response = await query_model(
+                        selected_model, messages, timeout=timeout, max_output_tokens=max_tokens
+                    )
+            except Exception as e:
+                response = {"error": True, "content": str(e)}
+
+            if selected_model not in attempted_models:
+                attempted_models.append(selected_model)
+
+            if response and not response.get('error'):
+                 health_manager.update_status(selected_model, True, source="runtime")
+                 
+                 actual_model = response.get("model", selected_model)
+                 return {
+                    "status": "ok",
+                    "model": actual_model, 
+                    "response": response.get("content", ""),
+                    "attempted_models": attempted_models,
+                    "fallback_used": (selected_model != candidates[0])
+                 }
+            else:
+                 error_msg = response.get("content") if response else "No response from chairman"
+                 last_error = f"{selected_model}: {error_msg}"
+                 status_code = response.get('status_code') if response else None
+                 health_manager.update_status(selected_model, False, last_error, status_code, source="runtime")
+                 
+                 # Network Retry Logic
+                 if attempt == 0 and is_retryable_error(response):
+                     retry_after = get_retry_after(response)
+                     delay = retry_after if retry_after else 1.0
+                     await asyncio.sleep(delay)
+                     continue # Retry inner
+                 else:
+                     # 2nd fail or fatal
+                     excluded_models.add(selected_model)
+                     break # Break inner
+                     
+    return {
+        "status": "failed",
+        "model": chairman["model"],
+        "response": f"最终总结生成失败: {str(last_error)}",
+        "error": {"code": "CHAIRMAN_FAILED", "message": str(last_error)},
+        "attempted_models": attempted_models
+    }
 
 
 def calculate_aggregate_rankings(

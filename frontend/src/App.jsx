@@ -110,11 +110,39 @@ function AppContent() {
         content,
         (eventType, event) => {
           switch (eventType) {
+            case "meta":
+              // Store updated councilor info for this run
+              setCurrentConversation((prev) => {
+                return {
+                  ...prev,
+                  // We can store run-specific councilors here to help UI lookup
+                  // v2: Update active_councilor_ids so that ChatInterface knows what to render (e.g. thinking state)
+                  resolved_councilors: event.resolved_councilors,
+                  active_councilor_ids: event.resolved_councilor_ids
+                };
+              });
+              break;
+
             case "stage1_start":
               setCurrentConversation((prev) => {
                 const messages = [...prev.messages];
                 const lastMsg = messages[messages.length - 1];
                 lastMsg.loading.stage1 = true;
+                lastMsg.stage1 = []; // Init empty for accumulating items
+                return { ...prev, messages };
+              });
+              break;
+
+            case "stage1_item":
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+                if (!lastMsg.stage1) lastMsg.stage1 = [];
+                // Deduplicate by councilor_id to prevent duplicate keys
+                const existingIds = new Set(lastMsg.stage1.map(r => r.councilor_id));
+                if (!existingIds.has(event.data.councilor_id)) {
+                  lastMsg.stage1.push(event.data);
+                }
                 return { ...prev, messages };
               });
               break;
@@ -123,7 +151,7 @@ function AppContent() {
               setCurrentConversation((prev) => {
                 const messages = [...prev.messages];
                 const lastMsg = messages[messages.length - 1];
-                lastMsg.stage1 = event.data;
+                lastMsg.stage1 = event.data; // Replace with final authoritative list
                 lastMsg.loading.stage1 = false;
                 return { ...prev, messages };
               });
@@ -134,6 +162,29 @@ function AppContent() {
                 const messages = [...prev.messages];
                 const lastMsg = messages[messages.length - 1];
                 lastMsg.loading.stage2 = true;
+                lastMsg.stage2 = []; // Init for items
+                // Handle early metadata if present
+                if (event.anon_map) {
+                  lastMsg.metadata = { ...lastMsg.metadata, anon_to_councilor: event.anon_map };
+                }
+                if (event.skipped) {
+                  lastMsg.skipped = true;
+                  lastMsg.skipped_reason = event.skipped_reason;
+                }
+                return { ...prev, messages };
+              });
+              break;
+
+            case "stage2_item":
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+                if (!lastMsg.stage2) lastMsg.stage2 = [];
+                // Deduplicate by judge_councilor_id
+                const existingJudgeIds = new Set(lastMsg.stage2.map(r => r.judge_councilor_id));
+                if (!existingJudgeIds.has(event.data.judge_councilor_id)) {
+                  lastMsg.stage2.push(event.data);
+                }
                 return { ...prev, messages };
               });
               break;
@@ -142,8 +193,25 @@ function AppContent() {
               setCurrentConversation((prev) => {
                 const messages = [...prev.messages];
                 const lastMsg = messages[messages.length - 1];
-                lastMsg.stage2 = event.data;
-                lastMsg.metadata = event.metadata;
+                // Event data is the full unified dict now (with reviews field)
+                // BUT my ChatInterface/Stage2 expects an array of reviews.
+                // stage2_result dict structure: { skipped, skipped_reason, reviews, anon_map, judge_failures }
+                // So I should assign event.data.reviews to lastMsg.stage2
+
+                if (event.data.skipped) {
+                  lastMsg.stage2 = event.data.reviews || []; // Might be empty
+                  lastMsg.skipped = true;
+                  lastMsg.skipped_reason = event.data.skipped_reason;
+                } else {
+                  lastMsg.stage2 = event.data.reviews;
+                }
+
+                lastMsg.metadata = {
+                  ...lastMsg.metadata,
+                  ...event.metadata,
+                  // If stage2_complete brings updated anon_map, ensure it's set
+                  anon_to_councilor: event.data.anon_map
+                };
                 lastMsg.loading.stage2 = false;
 
                 // Update conversation active_councilor_ids if provided

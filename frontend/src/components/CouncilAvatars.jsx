@@ -90,7 +90,31 @@ const stringToColor = (str) => {
   return "#" + "00000".substring(0, 6 - c.length) + c;
 };
 
-const ModelAvatar = ({
+// Helper to convert hex to rgb values (e.g. "255, 99, 71")
+const hexToRgb = (hex) => {
+  if (!hex || typeof hex !== 'string') return "128, 128, 128"; // Default gray
+
+  // Remove hash if present
+  hex = hex.replace(/^#/, '');
+
+  // Handle shorthand (e.g. "FFF")
+  if (hex.length === 3) {
+    hex = hex.split('').map(c => c + c).join('');
+  }
+
+  // Validate length
+  if (hex.length !== 6) return "128, 128, 128";
+
+  const r = parseInt(hex.substring(0, 2), 16);
+  const g = parseInt(hex.substring(2, 4), 16);
+  const b = parseInt(hex.substring(4, 6), 16);
+
+  if (isNaN(r) || isNaN(g) || isNaN(b)) return "128, 128, 128";
+
+  return `${r}, ${g}, ${b}`;
+};
+
+export const ModelAvatar = ({
   modelId,
   item, // Full councilor object if available
   isActive,
@@ -107,8 +131,8 @@ const ModelAvatar = ({
 
   // Logic for health/disabled state
   // If item is provided, use it. Otherwise assume healthy (legacy behavior).
-  // STRICT: healthy === true. (null/undefined/false = disabled)
-  const isHealthy = item ? item.healthy === true : true;
+  // Treat as healthy unless explicitly set to false (backward compat)
+  const isHealthy = item ? item.healthy !== false : true;
   const healthError = item?.health_error || "Unavailable";
 
   // If item is unhealthy, force disabled state look
@@ -131,6 +155,15 @@ const ModelAvatar = ({
     // Override name from backend config if present
     config = { ...config, name: item.name };
   }
+
+  // Calculate RGB for CSS variable
+  const colorRgb = hexToRgb(config.color);
+
+  // Avatar Logic
+  // Source: item.avatar -> config.Icon -> config.shortName
+  const avatarSource = item?.avatar;
+  const isUrl = avatarSource && (avatarSource.startsWith("http") || avatarSource.startsWith("/"));
+  // If not URL, assume emoji/text
 
   const statusText = {
     idle: "",
@@ -167,11 +200,23 @@ const ModelAvatar = ({
             ${selectable && !isDisabled ? (isSelected ? "selected" : "deselected") : ""}
           `}
           onClick={handleClick}
-          style={{ "--model-color": config.color }}
+          style={{
+            "--model-color": config.color,
+            "--model-color-rgb": colorRgb
+          }}
         >
           <div className="avatar-wrapper">
             <Avatar className="h-12 w-12 cursor-pointer transition-all">
-              {IconComponent ? (
+              {isUrl ? (
+                // Use standard img tag if AvatarImage not available or just assume it renders img
+                <img src={avatarSource} alt={config.name} className="h-full w-full object-cover" />
+              ) : avatarSource ? (
+                <AvatarFallback
+                  style={{ backgroundColor: config.color, color: "white", fontSize: "1.5rem" }}
+                >
+                  {avatarSource}
+                </AvatarFallback>
+              ) : IconComponent ? (
                 <div className="flex h-full w-full items-center justify-center p-2">
                   <IconComponent size={32} />
                 </div>
@@ -253,14 +298,22 @@ export const CouncilAvatars = ({
   // Normalize input: Prefer `councilors` objects. Fallback to `councilModels` strings.
   let items = [];
   if (councilors && councilors.length > 0) {
-    items = councilors;
+    // Deduplicate by id, keeping first occurrence
+    const seen = new Set();
+    items = councilors.filter(c => {
+      const key = c.id || c.model;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   } else if (councilModels && councilModels.length > 0) {
     items = councilModels.map(mid => ({ id: mid, model: mid, healthy: true }));
   }
 
-  // Filter available vs unavailable (strict healthy check)
-  const available = items.filter(c => c.active !== false && c.healthy === true);
-  const unavailable = items.filter(c => c.active !== false && c.healthy !== true);
+  // Filter available vs unavailable
+  // If healthy is not explicitly set to false, treat as available (for backward compat)
+  const available = items.filter(c => c.active !== false && c.healthy !== false);
+  const unavailable = items.filter(c => c.active !== false && c.healthy === false);
 
   // Unavailable count logic
   const hiddenCount = unavailable.length;
@@ -273,9 +326,9 @@ export const CouncilAvatars = ({
 
           {/* Available Row */}
           <div className="avatars-row flex-wrap justify-center">
-            {available.map((item) => (
+            {available.map((item, index) => (
               <ModelAvatar
-                key={item.id}
+                key={`${item.id || item.model}-${index}`}
                 modelId={item.model} // Pass model string for visual lookup
                 item={item}          // Pass full item for health status etc.
                 isActive={activeModel === item.model}
@@ -288,7 +341,7 @@ export const CouncilAvatars = ({
                 }}
                 status={modelStatuses[item.model]}
                 isChairman={item.model === chairmanModel}
-                selectable={selectable && !chairmanModel}
+                selectable={selectable}
                 isSelected={selectable ? selectedIds.has(item.id) : false}
               />
             ))}
@@ -308,9 +361,9 @@ export const CouncilAvatars = ({
 
               {showUnavailable && (
                 <div className="avatars-row flex-wrap justify-center mt-2 p-3 bg-muted/10 rounded-lg border border-dashed border-muted">
-                  {unavailable.map((item) => (
+                  {unavailable.map((item, index) => (
                     <ModelAvatar
-                      key={item.id}
+                      key={`unavail-${item.id || item.model}-${index}`}
                       modelId={item.model}
                       item={item}
                       isActive={false}
