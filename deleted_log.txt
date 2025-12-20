@@ -1,0 +1,9 @@
+commit 3d85d586bab2a5abbeb8324f8a574cbc53c6123d
+Author: JGPliskin <ljdeovertop@163.com>
+Date:   Thu Dec 18 17:33:49 2025 +0800
+
+    feat: Implement Stage 2 UI components, reasoning model tests, backend council logic, and persona definitions.
+
+ delete mode 100644 backend/personas/hefei_strategist.md
+ delete mode 100644 backend/personas/lingnan_researcher.md
+ delete mode 100644 backend/personas/qinling_engineer.md
