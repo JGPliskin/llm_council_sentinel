@@ -29,7 +29,7 @@ from council import (
     calculate_aggregate_rankings,
     set_persona_cache,
 )
-from config import COUNCILORS, CHAIRMAN, COUNCIL_SIZE, COUNCILOR_MAP, HEALTH_STARTUP_CHECK
+from config import COUNCILORS, CHAIRMAN, COUNCIL_SIZE, COUNCILOR_MAP, HEALTH_STARTUP_CHECK, HEALTH_TTL_SECONDS
 from validation import get_council_health_status, refresh_council_health, select_active_chairman
 from persona_loader import preload_personas
 # Constants
@@ -193,6 +193,20 @@ class Conversation(BaseModel):
     schema_version: Optional[int] = 1 # v1=1 (implicit), v2=2
 
 
+
+async def periodically_refresh_health():
+    """Background task to refresh health periodically."""
+    while True:
+        try:
+            print("Executing scheduled health refresh...", flush=True)
+            # Refresh global pool
+            await refresh_council_health()
+        except Exception as e:
+            print(f"Scheduled refresh failed: {e}", flush=True)
+        
+        # Wait for next cycle
+        await asyncio.sleep(HEALTH_TTL_SECONDS)
+
 @app.on_event("startup")
 async def startup_event():
     """Preload personas and validate default council lineup."""
@@ -200,14 +214,10 @@ async def startup_event():
     set_persona_cache(cache)
     global ACTIVE_COUNCIL, ACTIVE_CHAIRMAN
     
-    # Check if startup probe is enabled
-    if HEALTH_STARTUP_CHECK:
-        print("Startup health check ENABLED. Probing models...", flush=True)
-        await refresh_council_health(COUNCILORS)
-    else:
-        print("Startup health check DISABLED. Initializing with unknown status.", flush=True)
+    # Start background health refresh (Runs immediately first time)
+    asyncio.create_task(periodically_refresh_health())
 
-    # Initialize from cache (will be unknown if no check, or results if checked)
+    # Initialize from cache (will be unknown initially until first refresh completes)
     ACTIVE_COUNCIL = get_council_health_status(COUNCILORS)
     ACTIVE_CHAIRMAN = select_active_chairman(CHAIRMAN)
 

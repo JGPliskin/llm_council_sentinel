@@ -6,7 +6,7 @@ from typing import List, Optional, Dict, Any, Tuple
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from openrouter import query_model
-from config import COUNCIL_SIZE, PROBE_TIMEOUT_SECONDS
+from config import COUNCIL_SIZE, PROBE_TIMEOUT_SECONDS, GLOBAL_MODEL_POOL
 from health import health_manager
 
 
@@ -85,19 +85,69 @@ async def validate_council_health(
 
 # Let's change this function to ONLY return list, and leave explicit refresh to a new function or strict force_refresh param behavior.
 
-def get_council_health_status(pool: List[Dict[str, str]]) -> List[Dict[str, Any]]:
-    """Read-only view of health status."""
+
+def get_council_health_status(pool: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Read-only view of health status.
+    Aggregates health: Councilor is healthy if ANY candidate is healthy.
+    """
     annotated_pool = []
     for councilor in pool:
         c = councilor.copy()
-        status = health_manager.get_status(c["model"])
-        c.update(status)
+        
+        # Determine candidates
+        candidates = c.get("model_candidates", [])
+        if not candidates and c.get("model"):
+            candidates = [c["model"]]
+            
+        # Check if any candidate is healthy
+        is_any_healthy = False
+        healthiest_record = None
+        
+        # We also want to expose which model is likely to be picked (the first healthy one)
+        active_model = None
+        
+        for mid in candidates:
+            status = health_manager.get_status(mid)
+            if status.get("health_status") == "healthy":
+                is_any_healthy = True
+                if not active_model:
+                    active_model = mid
+                # If we found a healthy one, we can stop checking for "is_any_healthy"
+                # but we might want to capture the status of the *active* one for display details
+                healthiest_record = status
+                break
+            
+            # Keep the last one just in case all fail, so we have something to show
+            if healthiest_record is None:
+                healthiest_record = status
+        
+        if not healthiest_record:
+             # Should not happen if candidates list is not empty
+             healthiest_record = {"health_status": "unknown", "healthy": False}
+
+        # If any is healthy, mark overall as healthy (or use the active model's status)
+        # If all fail, use the last checked model's status (likely unhealthy/cooldown)
+        
+        c.update(healthiest_record)
+        
+        # Override status if we found a healthy one (though healthiest_record should handle it)
+        # Explicitly set active model Metadata
+        if active_model:
+            c["active_model"] = active_model
+        else:
+             c["active_model"] = candidates[0] if candidates else None
+             
         annotated_pool.append(c)
     return annotated_pool
 
-async def refresh_council_health(pool: List[Dict[str, str]]) -> Dict[str, Any]:
-    """Force refresh and return meta."""
-    models = [c["model"] for c in pool]
+async def refresh_council_health(pool: List[Dict[str, str]] = None) -> Dict[str, Any]:
+    """
+    Force refresh ALL models in the Global Pool.
+    The 'pool' argument is kept for compatibility but ignored for the refresh scope.
+    """
+    # We refresh EVERYTHING in the GLOBAL_MODEL_POOL to ensure availability
+    models = [m["id"] for m in GLOBAL_MODEL_POOL]
     return await health_manager.refresh_all(models, check_model_health_probe, force=True)
 
 
@@ -115,5 +165,31 @@ def select_active_chairman(chairman: Dict[str, str]) -> Dict[str, str]:
     # So we just return strict status.
     
     c = chairman.copy()
-    c.update(status)
+    
+    candidates = c.get("model_candidates", [])
+    if not candidates and c.get("model"):
+        candidates = [c["model"]]
+        
+    # Same aggregation logic
+    healthiest_record = None
+    active_model = None
+    
+    for mid in candidates:
+        status = health_manager.get_status(mid)
+        if status.get("health_status") == "healthy":
+            healthiest_record = status
+            active_model = mid
+            break
+        if healthiest_record is None:
+             healthiest_record = status
+             
+    if not healthiest_record:
+         healthiest_record = {"health_status": "unknown", "healthy": False}
+         
+    c.update(healthiest_record)
+    if active_model:
+        c["active_model"] = active_model
+    else:
+        c["active_model"] = candidates[0] if candidates else None
+
     return c

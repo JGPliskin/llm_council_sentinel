@@ -32,12 +32,69 @@ DEFAULT_STAGE2_TIMEOUT = 180.0
 STAGE1_DEADLINE = None
 STAGE2_DEADLINE = None
 
+# ----------------------------
+# Global Model Pool & Routing
+# ----------------------------
+GLOBAL_MODEL_POOL = [
+    {
+        "id": "openai/gpt-oss-20b:free",
+        "name": "GPT-OSS 20B (Free)",
+        "concurrency_limit": 4,
+        "category": "general"
+    },
+    {
+        "id": "tngtech/tng-r1t-chimera:free",
+        "name": "TNG R1T Chimera (Free)",
+        "concurrency_limit": 3,
+        "category": "reasoning"
+    },
+    {
+        "id": "tngtech/deepseek-r1t2-chimera:free",
+        "name": "DeepSeek R1T2 Chimera (Free)",
+        "concurrency_limit": 3,
+        "category": "reasoning"
+    },
+    {
+        "id": "nvidia/nemotron-nano-9b-v2:free",
+        "name": "Nemotron Nano 9B (Free)",
+        "concurrency_limit": 5,
+        "category": "fast"
+    },
+    {
+        "id": "z-ai/glm-4.5-air:free",
+        "name": "GLM 4.5 Air (Free)",
+        "concurrency_limit": 3,
+        "category": "general"
+    },
+    {
+        "id": "amazon/nova-2-lite-v1:free",
+        "name": "Amazon Nova 2 Lite (Free)",
+        "concurrency_limit": 3,
+        "category": "fast"
+    },
+    {
+        "id": "alibaba/tongyi-deepresearch-30b-a3b:free",
+        "name": "Tongyi DeepResearch 30B (Free)",
+        "concurrency_limit": 2,
+        "category": "research"
+    },
+]
+
+GLOBAL_MODEL_MAP = {m["id"]: m for m in GLOBAL_MODEL_POOL}
+
 # Councilor definitions with personas and stage limits
 COUNCILORS = [
     {
         "id": "immanuel_kant",
         "name": "康德",
         "model": "openai/gpt-oss-20b:free",
+        "model_candidates": [
+            "openai/gpt-oss-20b:free",
+            "tngtech/tng-r1t-chimera:free",
+            "tngtech/deepseek-r1t2-chimera:free",
+            "nvidia/nemotron-nano-9b-v2:free",
+            "z-ai/glm-4.5-air:free",
+        ],
         "avatar": "🧠",
         "persona_path": "backend/personas/immanuel_kant.md",
         "judge_persona_path": "backend/personas/immanuel_kant_judge.md",
@@ -54,6 +111,13 @@ COUNCILORS = [
         "id": "donald_trump",
         "name": "特朗普",
         "model": "openai/gpt-oss-20b:free",
+        "model_candidates": [
+            "openai/gpt-oss-20b:free",
+            "tngtech/tng-r1t-chimera:free",
+            "tngtech/deepseek-r1t2-chimera:free",
+            "nvidia/nemotron-nano-9b-v2:free",
+            "z-ai/glm-4.5-air:free",
+        ],
         "avatar": "🧱",
         "persona_path": "backend/personas/donald_trump.md",
         "judge_persona_path": "backend/personas/donald_trump_judge.md",
@@ -70,6 +134,13 @@ COUNCILORS = [
         "id": "hideo_kojima",
         "name": "小岛秀夫",
         "model": "openai/gpt-oss-20b:free",
+        "model_candidates": [
+            "openai/gpt-oss-20b:free",
+            "tngtech/tng-r1t-chimera:free",
+            "tngtech/deepseek-r1t2-chimera:free",
+            "nvidia/nemotron-nano-9b-v2:free",
+            "z-ai/glm-4.5-air:free",
+        ],
         "avatar": "🎮",
         "persona_path": "backend/personas/hideo_kojima.md",
         "judge_persona_path": "backend/personas/hideo_kojima_judge.md",
@@ -88,6 +159,15 @@ CHAIRMAN = {
     "id": "chairman",
     "name": "共识主席",
     "model": "amazon/nova-2-lite-v1:free",
+    "model_candidates": [
+        "amazon/nova-2-lite-v1:free",
+        "alibaba/tongyi-deepresearch-30b-a3b:free",
+        "openai/gpt-oss-20b:free",
+        "tngtech/tng-r1t-chimera:free",
+        "tngtech/deepseek-r1t2-chimera:free",
+        "nvidia/nemotron-nano-9b-v2:free",
+        "z-ai/glm-4.5-air:free",
+    ],
     "avatar": "🪶",
     "persona_path": "backend/personas/chairman.md",
     "judge_system_prompt": (
