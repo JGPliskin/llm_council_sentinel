@@ -15,6 +15,7 @@ function AppContent() {
   const { t } = useTranslation();
   const [conversations, setConversations] = useState([]);
   const [currentConversation, setCurrentConversation] = useState(null);
+  const [activeThinking, setActiveThinking] = useState({}); // { [cid]: { title, history } }
   const [isLoading, setIsLoading] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
@@ -76,6 +77,9 @@ function AppContent() {
     if (!conversationId) return;
 
     setIsLoading(true);
+    // Reset thinking state for new turn
+    setActiveThinking({});
+
     try {
       // Optimistically add user message to UI
       const userMessage = { role: "user", content };
@@ -147,13 +151,61 @@ function AppContent() {
               });
               break;
 
+            case "thinking":
+              // Handle thinking stream update
+              // event.delta contains the title
+              // event.councilor_id is the key
+              // event.stage = stage1/stage2
+              // Logic: Update title, Append to context-aware log
+
+              // We need to update activeThinking state in AppContent
+              // But we can't access setState from *inside* handleSendMessage easily if we defined it locally?
+              // YES we can, it's a closure.
+
+              setActiveThinking(prev => {
+                const cid = event.councilor_id;
+                const model = event.model;
+                const key = cid || model;
+                if (!key) return prev;
+
+                const existing = prev[key] || { title: "", history: [] };
+
+                // Avoid Duplicate History if title didn't change?
+                // Actually stream sends same title? distinct titles.
+                // Log only if distinct from last history entry?
+                // Spec says: "Thinking... [Title]"
+                // We overwrite title (bubble). We append to history.
+
+                let newHistory = existing.history;
+                // Only append if title is different from last one or it's the first
+                const lastHist = newHistory[newHistory.length - 1];
+                if (!lastHist || lastHist.title !== event.delta) {
+                  newHistory = [...newHistory, { title: event.delta, t: event.t }];
+                }
+
+                return {
+                  ...prev,
+                  [key]: {
+                    title: event.delta,
+                    history: newHistory
+                  }
+                };
+              });
+              break;
+
             case "stage1_complete":
               setCurrentConversation((prev) => {
                 const messages = [...prev.messages];
                 const lastMsg = messages[messages.length - 1];
-                lastMsg.stage1 = event.data; // Replace with final authoritative list
+                lastMsg.stage1 = event.data;
                 lastMsg.loading.stage1 = false;
                 return { ...prev, messages };
+              });
+              // Clear thinking titles for all (Stage 1 Done)
+              setActiveThinking(prev => {
+                const next = { ...prev };
+                Object.keys(next).forEach(k => next[k] = { ...next[k], title: null });
+                return next;
               });
               break;
 
@@ -234,10 +286,19 @@ function AppContent() {
 
             case "stage3_complete":
               setCurrentConversation((prev) => {
+                if (!prev.messages || prev.messages.length === 0) return prev;
                 const messages = [...prev.messages];
                 const lastMsg = messages[messages.length - 1];
+                if (!lastMsg) return prev; // Guard against undefined
                 lastMsg.stage3 = event.data;
                 lastMsg.loading.stage3 = false;
+
+                // Clear active thinking on stage completion
+                if (activeThinking.chairman) {
+                  const { chairman, ...rest } = activeThinking;
+                  setActiveThinking(rest);
+                }
+
                 return { ...prev, messages };
               });
               break;
@@ -417,6 +478,7 @@ function AppContent() {
           isLoading={isLoading}
           onNewConversation={handleNewConversation}
           conversationId={conversationId}
+          activeThinking={activeThinking}
         />
       </div>
 

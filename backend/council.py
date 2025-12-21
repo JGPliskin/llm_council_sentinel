@@ -12,7 +12,7 @@ import httpx
 # Ensure backend directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from openrouter import query_model
+from openrouter import query_model, stream_model
 from persona_loader import fetch_persona
 from config import (
     DEFAULT_CONCURRENCY_STAGE1,
@@ -27,6 +27,26 @@ from config import (
     GLOBAL_MODEL_MAP,
 )
 from health import health_manager
+
+THINKING_TOOL_DEF = [
+    {
+        "type": "function",
+        "function": {
+            "name": "emit_thinking",
+            "description": "Emit a thinking step title. Use this to outline your thinking process before providing the final answer.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "The concise title of the thinking step (6-18 characters, verb + object)."
+                    }
+                },
+                "required": ["title"]
+            }
+        }
+    }
+]
 
 # Persona cache is injected at startup by the application
 PERSONA_CACHE: Dict[str, str] = {}
@@ -229,7 +249,8 @@ def get_candidates(obj: Dict[str, Any]) -> List[str]:
 async def _request_stage1_bounded(
     semaphore: asyncio.Semaphore,
     councilor: Dict[str, Any],
-    user_query: str
+    user_query: str,
+    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None
 ) -> Dict[str, Any]:
     
     persona = fetch_persona(PERSONA_CACHE, councilor.get("persona_path", ""))
@@ -304,9 +325,31 @@ async def _request_stage1_bounded(
                 # Double Locking
                 async with semaphore: # Stage Limit
                     async with model_sem: # Model Limit
-                        response = await query_model(
-                            selected_model, model_messages, timeout=timeout, max_output_tokens=max_tokens
-                        )
+                        # Check Capabilities
+                        model_cfg = GLOBAL_MODEL_MAP.get(selected_model, {})
+                        caps = model_cfg.get("capabilities", {})
+                        
+                        can_think = caps.get("thinking", False)
+                        
+                        if can_think and on_thinking:
+                            # Wrap callback to inject councilor context
+                            async def _think_cb(title: str):
+                                if on_thinking:
+                                    # on_thinking from main.py is async, so we await it
+                                    await on_thinking(councilor["id"], "stage1", title, selected_model)
+
+                            response = await stream_model(
+                                selected_model, 
+                                model_messages, 
+                                on_thinking=_think_cb,
+                                timeout=timeout, 
+                                max_output_tokens=max_tokens,
+                                tools=THINKING_TOOL_DEF
+                            )
+                        else:
+                            response = await query_model(
+                                selected_model, model_messages, timeout=timeout, max_output_tokens=max_tokens
+                            )
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -406,7 +449,8 @@ async def _request_stage1_bounded(
 async def stage1_collect_responses(
     user_query: str, 
     councilors: List[Dict[str, Any]],
-    on_result: Optional[Callable[[Dict[str, Any]], Any]] = None
+    on_result: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None
 ) -> List[Dict[str, Any]]:
     """Stage 1: Collect initial responses from all councilors with strict control."""
     semaphore = asyncio.Semaphore(DEFAULT_CONCURRENCY_STAGE1)
@@ -416,7 +460,7 @@ async def stage1_collect_responses(
     # Note: Using a mapping to track who is who is safer if order matters, 
     # but `gather` preserves order of input tasks.
     tasks = [
-        asyncio.create_task(_request_stage1_bounded(semaphore, c, user_query))
+        asyncio.create_task(_request_stage1_bounded(semaphore, c, user_query, on_thinking))
         for c in councilors
     ]
     
@@ -690,7 +734,8 @@ async def _collect_single_ranking_bounded(
     user_query: str,
     judge_cards: List[Dict[str, Any]],
     expected_anon_ids: List[str],
-    timeout: float
+    timeout: float,
+    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None
 ) -> Dict[str, Any]:
     """Collect ranking with fallback routing."""
     
@@ -726,7 +771,26 @@ async def _collect_single_ranking_bounded(
             try:
                 async with semaphore:
                     async with model_sem:
-                        response = await query_model(selected_model, current_messages, timeout=timeout, max_output_tokens=max_tokens)
+                        # Check Capabilities
+                        model_cfg = GLOBAL_MODEL_MAP.get(selected_model, {})
+                        caps = model_cfg.get("capabilities", {})
+                        can_think = caps.get("thinking", False)
+                        
+                        if can_think and on_thinking:
+                            async def _think_cb(title: str):
+                                if on_thinking:
+                                    await on_thinking(councilor_id, "stage2", title, selected_model)
+                                    
+                            response = await stream_model(
+                                selected_model, 
+                                current_messages, 
+                                on_thinking=_think_cb, 
+                                timeout=timeout, 
+                                max_output_tokens=max_tokens,
+                                tools=THINKING_TOOL_DEF
+                            )
+                        else:
+                            response = await query_model(selected_model, current_messages, timeout=timeout, max_output_tokens=max_tokens)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -809,7 +873,8 @@ async def stage2_collect_rankings(
     user_query: str, 
     stage1_results: List[Dict[str, Any]], 
     councilors: List[Dict[str, Any]],
-    on_result: Optional[Callable[[Dict[str, Any]], Any]] = None
+    on_result: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None
 ) -> Dict[str, Any]:
     """
     Stage 2: Each model ranks the anonymized responses.
@@ -865,7 +930,8 @@ async def stage2_collect_rankings(
                 user_query, 
                 judge_cards, 
                 anon_ids, 
-                timeout
+                timeout,
+                on_thinking
             )
         )
         tasks.append((councilor, t))
@@ -971,6 +1037,7 @@ async def stage3_synthesize_final(
     stage1_results: List[Dict[str, Any]],
     stage2_result: Dict[str, Any], # Changed to Dict
     chairman: Dict[str, Any],
+    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None
 ) -> Dict[str, Any]:
     persona = fetch_persona(PERSONA_CACHE, chairman.get("persona_path", ""))
     stage_limits = chairman.get("stage_limits", {}).get("stage3", {})
@@ -1068,9 +1135,28 @@ async def stage3_synthesize_final(
                 # stage3_synthesize_final is usually run alone.
                 # But we should respect model concurrency.
                 async with model_sem:
-                    response = await query_model(
-                        selected_model, messages, timeout=timeout, max_output_tokens=max_tokens
-                    )
+                    # Check Capabilities
+                    model_cfg = GLOBAL_MODEL_MAP.get(selected_model, {})
+                    caps = model_cfg.get("capabilities", {})
+                    can_think = caps.get("thinking", False)
+                    
+                    if can_think and on_thinking:
+                        def _think_cb(title: str):
+                            if on_thinking:
+                                on_thinking(chairman["id"], "stage3", title, selected_model)
+
+                        response = await stream_model(
+                            selected_model, 
+                            messages, 
+                            on_thinking=_think_cb,
+                            timeout=timeout, 
+                            max_output_tokens=max_tokens,
+                            tools=THINKING_TOOL_DEF
+                        )
+                    else:
+                        response = await query_model(
+                            selected_model, messages, timeout=timeout, max_output_tokens=max_tokens
+                        )
             except Exception as e:
                 response = {"error": True, "content": str(e)}
 
@@ -1177,17 +1263,20 @@ async def generate_conversation_title(user_query: str) -> str:
 
 
 async def run_full_council(
-    user_query: str, councilors: List[Dict[str, Any]], chairman: Dict[str, Any]
+    user_query: str, 
+    councilors: List[Dict[str, Any]], 
+    chairman: Dict[str, Any],
+    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None
 ) -> Tuple[List, Dict, Dict, Dict]:
     # Stage 1
-    stage1_results = await stage1_collect_responses(user_query, councilors)
+    stage1_results = await stage1_collect_responses(user_query, councilors, on_thinking=on_thinking)
 
     # Use active models for ranking (using councilors models)
     # Note: stage2_collect_rankings now expects full councilor objects to read timeouts
     
     # Stage 2 (Unified Dict)
     stage2_result = await stage2_collect_rankings(
-        user_query, stage1_results, councilors
+        user_query, stage1_results, councilors, on_thinking=on_thinking
     )
 
     # Aggregate Rankings (if not skipped)
@@ -1199,7 +1288,7 @@ async def run_full_council(
 
     # Stage 3
     stage3_result = await stage3_synthesize_final(
-        user_query, stage1_results, stage2_result, chairman
+        user_query, stage1_results, stage2_result, chairman, on_thinking=on_thinking
     )
 
     metadata = {

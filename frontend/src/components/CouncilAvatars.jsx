@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback } from "./ui/avatar";
 import {
@@ -7,9 +7,14 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "./ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 import { Crown, ExternalLink, Check, ChevronDown, ChevronRight, AlertCircle, Ban } from "lucide-react";
 import { HuggingFace, LongCat, Aws } from "@lobehub/icons";
-import { useState } from "react";
+import ThinkingHistory from "./ThinkingHistory";
 import "./CouncilAvatars.css";
 
 // Zenmux invite URL
@@ -122,16 +127,18 @@ export const ModelAvatar = ({
   status = "idle",
   isChairman = false,
   selectable = false,
-  isSelected = false
+  isSelected = false,
+  thinkingTitle = null,
+  thinkingHistory = [],
 }) => {
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+
   if (!modelId || typeof modelId !== 'string') return null;
 
   // Try to get config, or generate fallback
   let config = MODEL_CONFIG[modelId];
 
   // Logic for health/disabled state
-  // If item is provided, use it. Otherwise assume healthy (legacy behavior).
-  // Treat as healthy unless explicitly set to false (backward compat)
   const isHealthy = item ? item.healthy !== false : true;
   const healthError = item?.health_error || "Unavailable";
 
@@ -140,7 +147,6 @@ export const ModelAvatar = ({
 
   if (!config) {
     // Generate fallback config
-    // Ensure safe split
     const parts = modelId.split("/");
     const shortName = parts.length > 1 ? parts[1].substring(0, 2).toUpperCase() : modelId.substring(0, 2).toUpperCase();
     const name = parts.length > 1 ? parts[1] : modelId;
@@ -152,7 +158,6 @@ export const ModelAvatar = ({
       Icon: null
     };
   } else if (item?.name) {
-    // Override name from backend config if present
     config = { ...config, name: item.name };
   }
 
@@ -160,10 +165,8 @@ export const ModelAvatar = ({
   const colorRgb = hexToRgb(config.color);
 
   // Avatar Logic
-  // Source: item.avatar -> config.Icon -> config.shortName
   const avatarSource = item?.avatar;
   const isUrl = avatarSource && (avatarSource.startsWith("http") || avatarSource.startsWith("/"));
-  // If not URL, assume emoji/text
 
   const statusText = {
     idle: "",
@@ -174,6 +177,7 @@ export const ModelAvatar = ({
 
   const IconComponent = config.Icon;
 
+  // Interaction handlers
   const handleTooltipClick = (e) => {
     e.stopPropagation();
     if (!isDisabled) {
@@ -186,83 +190,124 @@ export const ModelAvatar = ({
       e.stopPropagation();
       return;
     }
-    onClick && onClick(e);
+    // If not selectable, we prioritize onClick (external handler like chairman click)
+    // BUT we also want to show Dropdown if history exists?
+    // If external onClick exists, we might not be able to open Dropdown on click?
+    // Usually DropdownTrigger handles the click.
+    // If externally handled (e.g. selection toggle), Dropdown shouldn't open.
+    if (selectable || isChairman) {
+      // If in selection mode or chairman view mode, use external click
+      onClick && onClick(e);
+      return;
+    }
+    // Otherwise let DropdownTrigger handle it
   };
+
+  // Determine if we should show history popup
+  const hasHistory = thinkingHistory && thinkingHistory.length > 0;
+  // If selectable, we disable dropdown to allow selection toggle
+  const enableDropdown = hasHistory && !selectable && !isChairman; // Chairman in Stage 3 can have history too? Yes.
+
+  const avatarContent = (
+    <div
+      className={`model-avatar 
+        ${isActive ? "active" : ""} 
+        ${isChairman ? "chairman" : ""} 
+        ${isDisabled ? "disabled" : ""}
+        ${selectable && !isDisabled ? (isSelected ? "selected" : "deselected") : ""}
+      `}
+      onClick={handleClick}
+      style={{
+        "--model-color": config.color,
+        "--model-color-rgb": colorRgb
+      }}
+    >
+      <div className="avatar-wrapper">
+        <Avatar className="h-12 w-12 cursor-pointer transition-all">
+          {isUrl ? (
+            <img src={avatarSource} alt={config.name} className="h-full w-full object-cover" />
+          ) : avatarSource ? (
+            <AvatarFallback
+              style={{ backgroundColor: config.color, color: "white", fontSize: "1.5rem" }}
+            >
+              {avatarSource}
+            </AvatarFallback>
+          ) : IconComponent ? (
+            <div className="flex h-full w-full items-center justify-center p-2">
+              <IconComponent size={32} />
+            </div>
+          ) : (
+            <AvatarFallback
+              style={{ backgroundColor: config.color, color: "white" }}
+            >
+              {config.shortName}
+            </AvatarFallback>
+          )}
+        </Avatar>
+        {isChairman && (
+          <div className="chairman-badge">
+            <Crown size={12} />
+          </div>
+        )}
+
+        {/* Selection Checkmark */}
+        {selectable && isSelected && !isDisabled && (
+          <div className="selection-badge">
+            <Check size={12} strokeWidth={3} />
+          </div>
+        )}
+
+        {/* Disabled Icon */}
+        {isDisabled && (
+          <div className="disabled-badge">
+            <Ban size={12} strokeWidth={3} />
+          </div>
+        )}
+
+        {/* Thinking Bubble */}
+        {thinkingTitle && (
+          <div className="thinking-bubble">
+            {thinkingTitle}
+          </div>
+        )}
+
+      </div>
+      <div className="model-info">
+        <div className="model-name">{config.name}</div>
+        {status !== "idle" && (
+          <div className={`model-status status-${status}`}>
+            {statusText[status]}
+          </div>
+        )}
+        {isDisabled && (
+          <div className="model-status status-error flex gap-1 items-center justify-center">
+            <AlertCircle size={8} /> Unavailable
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  // Wrap with Dropdown if enabled
+  const wrappedAvatar = enableDropdown ? (
+    <DropdownMenu open={dropdownOpen} onOpenChange={setDropdownOpen}>
+      <DropdownMenuTrigger asChild>
+        {avatarContent}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent className="p-0 border-none bg-background shadow-xl" side="bottom" align="center">
+        <ThinkingHistory
+          history={thinkingHistory}
+          councilorName={config.name}
+          modelName={modelId}
+        />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  ) : avatarContent;
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <div
-          className={`model-avatar 
-            ${isActive ? "active" : ""} 
-            ${isChairman ? "chairman" : ""} 
-            ${isDisabled ? "disabled" : ""}
-            ${selectable && !isDisabled ? (isSelected ? "selected" : "deselected") : ""}
-          `}
-          onClick={handleClick}
-          style={{
-            "--model-color": config.color,
-            "--model-color-rgb": colorRgb
-          }}
-        >
-          <div className="avatar-wrapper">
-            <Avatar className="h-12 w-12 cursor-pointer transition-all">
-              {isUrl ? (
-                // Use standard img tag if AvatarImage not available or just assume it renders img
-                <img src={avatarSource} alt={config.name} className="h-full w-full object-cover" />
-              ) : avatarSource ? (
-                <AvatarFallback
-                  style={{ backgroundColor: config.color, color: "white", fontSize: "1.5rem" }}
-                >
-                  {avatarSource}
-                </AvatarFallback>
-              ) : IconComponent ? (
-                <div className="flex h-full w-full items-center justify-center p-2">
-                  <IconComponent size={32} />
-                </div>
-              ) : (
-                <AvatarFallback
-                  style={{ backgroundColor: config.color, color: "white" }}
-                >
-                  {config.shortName}
-                </AvatarFallback>
-              )}
-            </Avatar>
-            {isChairman && (
-              <div className="chairman-badge">
-                <Crown size={12} />
-              </div>
-            )}
-
-            {/* Selection Checkmark */}
-            {selectable && isSelected && !isDisabled && (
-              <div className="selection-badge">
-                <Check size={12} strokeWidth={3} />
-              </div>
-            )}
-
-            {/* Disabled Icon */}
-            {isDisabled && (
-              <div className="disabled-badge">
-                <Ban size={12} strokeWidth={3} />
-              </div>
-            )}
-
-          </div>
-          <div className="model-info">
-            <div className="model-name">{config.name}</div>
-            {status !== "idle" && (
-              <div className={`model-status status-${status}`}>
-                {statusText[status]}
-              </div>
-            )}
-            {isDisabled && (
-              <div className="model-status status-error flex gap-1 items-center justify-center">
-                <AlertCircle size={8} /> Unavailable
-              </div>
-            )}
-          </div>
-        </div>
+        {wrappedAvatar}
       </TooltipTrigger>
       <TooltipContent className="cursor-pointer max-w-[200px]" onClick={handleTooltipClick}>
         {isDisabled ? (
@@ -273,6 +318,7 @@ export const ModelAvatar = ({
           <div className="flex items-center gap-1.5">
             <span className="font-mono text-xs">{modelId}</span>
             <ExternalLink size={10} className="opacity-60" />
+            {hasHistory && <div className="text-[10px] text-muted-foreground mt-1">Click to view thinking history</div>}
           </div>
         )}
       </TooltipContent>
@@ -281,12 +327,13 @@ export const ModelAvatar = ({
 };
 
 export const CouncilAvatars = ({
-  councilModels, // Keep for backward compat support (array of strings)
-  councilors,    // New prop: full objects
+  councilModels,
+  councilors,
   chairmanModel,
   activeModel,
   onSelectModel,
   modelStatuses = {},
+  thinkingStates = {}, // New Prop: { id_or_model: { title: "", history: [] } }
   onChairmanClick,
   selectable = false,
   selectedIds = new Set(),
@@ -295,10 +342,9 @@ export const CouncilAvatars = ({
   const { t } = useTranslation();
   const [showUnavailable, setShowUnavailable] = useState(false);
 
-  // Normalize input: Prefer `councilors` objects. Fallback to `councilModels` strings.
+  // Normalize input
   let items = [];
   if (councilors && councilors.length > 0) {
-    // Deduplicate by id, keeping first occurrence
     const seen = new Set();
     items = councilors.filter(c => {
       const key = c.id || c.model;
@@ -310,12 +356,8 @@ export const CouncilAvatars = ({
     items = councilModels.map(mid => ({ id: mid, model: mid, healthy: true }));
   }
 
-  // Filter available vs unavailable
-  // If healthy is not explicitly set to false, treat as available (for backward compat)
   const available = items.filter(c => c.active !== false && c.healthy !== false);
   const unavailable = items.filter(c => c.active !== false && c.healthy === false);
-
-  // Unavailable count logic
   const hiddenCount = unavailable.length;
 
   return (
@@ -324,30 +366,36 @@ export const CouncilAvatars = ({
         <div className="council-section w-full items-center">
           <div className="section-label mb-2">{t("councilMembers")}</div>
 
-          {/* Available Row */}
           <div className="avatars-row flex-wrap justify-center">
-            {available.map((item, index) => (
-              <ModelAvatar
-                key={`${item.id || item.model}-${index}`}
-                modelId={item.model} // Pass model string for visual lookup
-                item={item}          // Pass full item for health status etc.
-                isActive={activeModel === item.model}
-                onClick={() => {
-                  if (selectable && onToggleId) {
-                    onToggleId(item.id);
-                  } else {
-                    onSelectModel?.(item.model);
-                  }
-                }}
-                status={modelStatuses[item.model]}
-                isChairman={item.model === chairmanModel}
-                selectable={selectable}
-                isSelected={selectable ? selectedIds.has(item.id) : false}
-              />
-            ))}
+            {available.map((item, index) => {
+              // Extract thinking state
+              // We support lookup by ID or Model
+              const thinkState = thinkingStates[item.id] || thinkingStates[item.model] || {};
+
+              return (
+                <ModelAvatar
+                  key={`${item.id || item.model}-${index}`}
+                  modelId={item.model}
+                  item={item}
+                  isActive={activeModel === item.model}
+                  onClick={() => {
+                    if (selectable && onToggleId) {
+                      onToggleId(item.id);
+                    } else {
+                      onSelectModel?.(item.model);
+                    }
+                  }}
+                  status={modelStatuses[item.model]}
+                  isChairman={item.model === chairmanModel}
+                  selectable={selectable}
+                  isSelected={selectable ? selectedIds.has(item.id) : false}
+                  thinkingTitle={thinkState.title}
+                  thinkingHistory={thinkState.history}
+                />
+              )
+            })}
           </div>
 
-          {/* Unavailable Toggle Section */}
           {hiddenCount > 0 && (
             <div className="unavailable-section mt-4 w-full flex flex-col items-center">
               <button
@@ -367,9 +415,9 @@ export const CouncilAvatars = ({
                       modelId={item.model}
                       item={item}
                       isActive={false}
-                      onClick={() => { }} // Disabled interaction handled in component but failsafe here
+                      onClick={() => { }}
                       status="error"
-                      selectable={false} // Cannot select
+                      selectable={false}
                       isSelected={false}
                     />
                   ))}
@@ -383,13 +431,21 @@ export const CouncilAvatars = ({
         {chairmanModel && (
           <div className="chairman-section mt-4 pt-4 border-t border-border/50 w-full flex flex-col items-center">
             <div className="section-label mb-2">{t("chairman")}</div>
-            <ModelAvatar
-              modelId={chairmanModel}
-              isActive={activeModel === chairmanModel}
-              onClick={() => onChairmanClick?.(chairmanModel)}
-              status={modelStatuses[chairmanModel]}
-              isChairman={true}
-            />
+            {(() => {
+              const thinkState = thinkingStates[chairmanModel] || (chairmanModel.id ? thinkingStates[chairmanModel.id] : {});
+              return (
+                <ModelAvatar
+                  modelId={chairmanModel}
+                  isActive={activeModel === chairmanModel}
+                  onClick={() => onChairmanClick?.(chairmanModel)}
+                  status={modelStatuses[chairmanModel]}
+                  isChairman={true}
+                  thinkingTitle={thinkState.title}
+                  thinkingHistory={thinkState.history}
+                // Chairman usually not selectable in this view
+                />
+              );
+            })()}
           </div>
         )}
       </div>

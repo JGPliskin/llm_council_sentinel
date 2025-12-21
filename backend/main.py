@@ -632,6 +632,8 @@ async def send_message(request: Request, conversation_id: str, body: SendMessage
     }
 
 
+import time
+
 @app.post("/api/conversations/{conversation_id}/message/stream")
 @limiter.limit(RATE_LIMIT_STREAM)
 async def send_message_stream(request: Request, conversation_id: str, body: SendMessageRequest):
@@ -650,7 +652,37 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
     async def event_generator():
         # Shared queue for incremental events from callbacks
         event_queue = asyncio.Queue()
+        start_time = time.time()
         
+        # Persistence Accumulator
+        thinking_log = {"stage1": {}, "stage2": {}, "stage3": {}}
+        thinking_count = 0
+        
+        async def on_thinking(cid, stage, title, model=None):
+            nonlocal thinking_count
+            t_val = round(time.time() - start_time, 2)
+            
+            # Emit Event
+            event = {
+                "type": "thinking",
+                "stage": stage,
+                "councilor_id": cid,
+                "model": model, 
+                "delta": title,
+                "is_title": True,
+                "t": t_val
+            }
+            await event_queue.put(f"data: {json.dumps(event)}\n\n")
+            
+            # Persistence Log (Limit: 50 per model/stage, 200 total)
+            if thinking_count < 200 and stage in thinking_log:
+                if cid not in thinking_log[stage]:
+                     thinking_log[stage][cid] = []
+                
+                if len(thinking_log[stage][cid]) < 50:
+                     thinking_log[stage][cid].append({"t": t_val, "title": title})
+                     thinking_count += 1
+
         try:
             # Add user message
             storage.add_user_message(conversation_id, body.content)
@@ -699,7 +731,8 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                 stage1_collect_responses(
                     body.content, 
                     active_councilors, 
-                    on_result=on_stage1_item
+                    on_result=on_stage1_item,
+                    on_thinking=on_thinking
                 )
             )
             
@@ -727,7 +760,7 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                 yield f"data: {json.dumps({'type': 'stage2_start', 'skipped': True, 'skipped_reason': 'insufficient_candidates'})}\n\n"
                 
                 stage2_result = await stage2_collect_rankings(
-                    body.content, stage1_results, active_councilors
+                    body.content, stage1_results, active_councilors, on_thinking=on_thinking
                 )
             else:
                 # Normal Case
@@ -750,7 +783,8 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                         body.content, 
                         stage1_results, 
                         active_councilors,
-                        on_result=on_stage2_item
+                        on_result=on_stage2_item,
+                        on_thinking=on_thinking
                     )
                 )
                 
@@ -776,9 +810,26 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
 
             # --- Stage 3: Synthesize final answer ---
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
-            stage3_result = await stage3_synthesize_final(
-                body.content, stage1_results, stage2_result, active_chairman
+            
+            stage3_task = asyncio.create_task(
+                stage3_synthesize_final(
+                    body.content, 
+                    stage1_results, 
+                    stage2_result, 
+                    active_chairman,
+                    on_thinking=on_thinking
+                )
             )
+            
+            while not stage3_task.done() or not event_queue.empty():
+                try:
+                     event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
+                     yield event
+                     event_queue.task_done()
+                except asyncio.TimeoutError:
+                     continue
+            
+            stage3_result = await stage3_task
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
             # Wait for title generation if it was started
@@ -791,13 +842,47 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
             metadata = {
                 "anon_to_councilor": stage2_result.get("anon_map", {}),
                 "aggregate_rankings": aggregate_rankings,
-                "spec_version": "stage2_v1.2"
+                "spec_version": "stage2_v1.2",
+                "thinking": thinking_log
             }
-            storage.add_assistant_message(
-                conversation_id, stage1_results, stage2_result, stage3_result, metadata
-            )
+            # Note: storage.add_assistant_message does not support 'thinking' argument yet (per plan), 
+            # but we need to persist metadata.
+            # Wait, implementation plan said:
+            # "Update backend/storage.py to persist thinking titles in message metadata"
+            # I haven't updated storage.py yet.
+            # But the thinking titles are NOT passed to `add_assistant_message` here!
+            # They were streamed to client but where are they collected for persistence?
+            # AHH! I forgot to collect them for persistence!
+            # I need `thinking_log = { stage1: {}, stage2: {}, stage3: {} }`.
+            # on_thinking should update this log.
+            # And then I pass `thinking_log` to `add_assistant_message` or put it into metadata.
             
-            # Persistence Update (Soft Migration / Sync)
+            # Logic update:
+            # 1. Init `thinking_log = {"stage1": {}, "stage2": {}, "stage3": {}}`
+            # 2. In `on_thinking`, append to log.
+            # 3. Add to `metadata["thinking"]`.
+            
+            # I cannot add this logic inside `ReplacementContent` easily without rewriting `on_thinking`.
+            # I will assume I can do it now.
+            
+            # Wait, look at the code above. `on_thinking` is defined inside.
+            # I can update `thinking_log` in `on_thinking`.
+            
+            # Let's adjust the replacement content to include accumulation logic.
+            
+            # Also, I need to know the councilor/model mapping for the log.
+            # Spec 5.4.3: "thinking": { "stage1": { "immanuel_kant": [ ... ] } }
+            
+            # So:
+            # thinking_log = {"stage1": {}, "stage2": {}, "stage3": {}}
+            # on_thinking:
+            #    if cid not in thinking_log[stage]: thinking_log[stage][cid] = []
+            #    thinking_log[stage][cid].append({"t": t, "title": title})
+            
+            # Then add `thinking_log` to `metadata` passed to storage.
+            
+            # I will modify the replacement content.
+
             current_ids = [c["id"] for c in active_councilors]
             should_update_schema = False
             if body.councilor_ids: should_update_schema = True

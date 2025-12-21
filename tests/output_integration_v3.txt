@@ -1,0 +1,63 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.11, pytest-8.4.2, pluggy-1.5.0
+rootdir: F:\OneDrive\PY\ZYZ\project\llm_council_sentinel
+configfile: pytest.ini
+plugins: asyncio-1.0.0
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 0 items / 1 error
+
+=================================== ERRORS ====================================
+___________ ERROR collecting tests/test_backend_integration_sync.py ___________
+D:\ProgramData\Miniconda\Lib\typing.py:878: in __init__
+    code = compile(arg_to_compile, '<string>', 'eval')
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E     File "<string>", line 1
+E       (<MagicMock spec='str' id='1732959229648'>,)[0]
+E        ^
+E   SyntaxError: invalid syntax
+
+During handling of the above exception, another exception occurred:
+D:\ProgramData\Miniconda\Lib\site-packages\_pytest\python.py:498: in importtestmodule
+    mod = import_path(
+D:\ProgramData\Miniconda\Lib\site-packages\_pytest\pathlib.py:587: in import_path
+    importlib.import_module(module_name)
+D:\ProgramData\Miniconda\Lib\importlib\__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1204: in _gcd_import
+    ???
+<frozen importlib._bootstrap>:1176: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1147: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:690: in _load_unlocked
+    ???
+D:\ProgramData\Miniconda\Lib\site-packages\_pytest\assertion\rewrite.py:186: in exec_module
+    exec(co, module.__dict__)
+tests\test_backend_integration_sync.py:24: in <module>
+    from backend.main import send_message_stream
+backend\main.py:313: in <module>
+    @app.get("/api/conversations", response_model=List[ConversationMetadata])
+                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+D:\ProgramData\Miniconda\Lib\typing.py:376: in inner
+    return cached(*args, **kwds)
+           ^^^^^^^^^^^^^^^^^^^^^
+D:\ProgramData\Miniconda\Lib\typing.py:1591: in __getitem__
+    params = tuple(_type_check(p, msg) for p in params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+D:\ProgramData\Miniconda\Lib\typing.py:1591: in <genexpr>
+    params = tuple(_type_check(p, msg) for p in params)
+                   ^^^^^^^^^^^^^^^^^^^
+D:\ProgramData\Miniconda\Lib\typing.py:186: in _type_check
+    arg = _type_convert(arg, module=module, allow_special_forms=allow_special_forms)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+D:\ProgramData\Miniconda\Lib\typing.py:164: in _type_convert
+    return ForwardRef(arg, module=module, is_class=allow_special_forms)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+D:\ProgramData\Miniconda\Lib\typing.py:880: in __init__
+    raise SyntaxError(f"Forward reference must be an expression -- got {arg!r}")
+E   SyntaxError: Forward reference must be an expression -- got <MagicMock spec='str' id='1732959229648'>
+=========================== short test summary info ===========================
+ERROR tests/test_backend_integration_sync.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+============================== 1 error in 0.91s ===============================

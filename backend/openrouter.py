@@ -1,13 +1,128 @@
 """OpenRouter API client for making LLM requests."""
 
 import httpx
-from typing import List, Dict, Any, Optional
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+import json
+from typing import List, Dict, Any, Optional, Callable
+from backend.config import OPENROUTER_API_KEY, OPENROUTER_API_URL
 
-from config import OPENROUTER_API_KEY, OPENROUTER_API_URL
+async def stream_model(
+    model: str,
+    messages: List[Dict[str, str]],
+    on_thinking: Optional[Callable[[str], Any]] = None,
+    timeout: float = 120.0,
+    max_output_tokens: Optional[int] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Query a model with streaming enabled, handling thinking tool calls.
 
+    Args:
+        model: OpenRouter model identifier
+        messages: List of message dicts
+        on_thinking: Callback for thinking titles (arg: title_string)
+        timeout: Request timeout
+        max_output_tokens: Optional max output tokens
+        tools: Optional list of tool definitions
+
+    Returns:
+        Constructed response dict compatible with query_model, or None if failed.
+    """
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/Starttoaster/llm-council-sentinel",
+        "X-Title": "LLM Council Sentinel",
+    }
+
+    payload: Dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+    }
+    if max_output_tokens is not None:
+        payload["max_output_tokens"] = max_output_tokens
+    if tools:
+        payload["tools"] = tools
+
+    # Buffer for final content reconstruction
+    full_content = []
+    # Buffer for tool calls: index -> {name, arguments, id}
+    tool_call_buffer = {}
+    
+    # State tracking
+    response_model = model
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream("POST", OPENROUTER_API_URL, headers=headers, json=payload) as response:
+                response.raise_for_status()
+                
+                async for line in response.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    
+                    data_str = line[6:].strip()
+                    if data_str == "[DONE]":
+                        break
+                        
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                        
+                    if "model" in chunk:
+                        response_model = chunk["model"]
+                        
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    
+                    # 1. Handle Content
+                    if "content" in delta and delta["content"]:
+                        full_content.append(delta["content"])
+                        
+                            # 2. Handle Tool Calls (Thinking)
+                    if "tool_calls" in delta and delta["tool_calls"]:
+                        for tc in delta["tool_calls"]:
+                            idx = tc.get("index")
+                            if idx not in tool_call_buffer:
+                                tool_call_buffer[idx] = {"name": "", "arguments": "", "id": tc.get("id")}
+                            
+                            if "function" in tc:
+                                fn = tc["function"]
+                                if "name" in fn:
+                                    tool_call_buffer[idx]["name"] = fn["name"]
+                                if "arguments" in fn:
+                                    tool_call_buffer[idx]["arguments"] += fn["arguments"]
+
+                            args_str = tool_call_buffer[idx]["arguments"]
+                            try:
+                                args_json = json.loads(args_str)
+                                if "title" in args_json and on_thinking:
+                                    if not tool_call_buffer[idx].get("emitted"):
+                                        import inspect
+                                        if inspect.iscoroutinefunction(on_thinking):
+                                            await on_thinking(args_json["title"])
+                                        else:
+                                            on_thinking(args_json["title"])
+                                        tool_call_buffer[idx]["emitted"] = True
+                            except json.JSONDecodeError:
+                                pass
+
+        return {
+            'content': "".join(full_content),
+            'reasoning_details': None, 
+            'model': response_model,
+            'tool_calls': [
+                {**v, "arguments": v["arguments"]} for k,v in tool_call_buffer.items()
+            ]
+        }
+
+    except Exception as e:
+        print(f"Error streaming model {model}: {e}")
+        return {
+            'content': f"Error: {str(e)}",
+            'error': True,
+            'model': model
+        }
 
 async def query_model(
     model: str,
@@ -16,71 +131,14 @@ async def query_model(
     max_output_tokens: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    Query a single model via OpenRouter API.
-
-    Args:
-        model: OpenRouter model identifier (e.g., "openai/gpt-4o")
-        messages: List of message dicts with 'role' and 'content'
-        timeout: Request timeout in seconds
-        max_output_tokens: Optional max output tokens
-
-    Returns:
-        Response dict with 'content' and optional 'reasoning_details', or None if failed
+    Non-streaming query wrapper.
     """
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-    }
-    if max_output_tokens is not None:
-        payload["max_output_tokens"] = max_output_tokens
-
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                OPENROUTER_API_URL,
-                headers=headers,
-                json=payload
-            )
-            response.raise_for_status()
-
-            data = response.json()
-            message = data['choices'][0]['message']
-
-            return {
-                'content': message.get('content'),
-                'reasoning_details': message.get('reasoning_details'),
-                'model': data.get('model')  # Capture actual model used
-            }
-
-    except Exception as e:
-        print(f"Error querying model {model}: {e}")
-        status_code = None
-        headers = {}
-        error_payload = None
-
-        if isinstance(e, httpx.HTTPStatusError):
-            print(f"Response body: {e.response.text}")
-            status_code = e.response.status_code
-            headers = dict(e.response.headers)
-            try:
-                error_payload = e.response.json()
-            except Exception:
-                error_payload = e.response.text
-
-        return {
-            'content': f"Error: {str(e)}",
-            'error': True,
-            'model': model,  # Keep original model on error
-            'status_code': status_code,
-            'headers': headers,
-            'error_payload': error_payload
-        }
-
+    return await stream_model(
+        model=model,
+        messages=messages,
+        timeout=timeout,
+        max_output_tokens=max_output_tokens
+    )
 
 async def query_models_parallel(
     models: List[str],
@@ -90,7 +148,7 @@ async def query_models_parallel(
 ) -> Dict[str, Optional[Dict[str, Any]]]:
     """
     Query multiple models in parallel.
-
+    
     Args:
         models: List of OpenRouter model identifiers
         messages: List of message dicts to send to each model

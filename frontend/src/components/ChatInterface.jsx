@@ -21,12 +21,34 @@ const DEFAULT_COUNCILORS = [
 ];
 const DEFAULT_CHAIRMAN = { id: "chairman", name: "共识主席", model: "amazon/nova-2-lite-v1:free" };
 
+// Helper to transform persisted backend thinking log to frontend prop format
+const transformThinkingLog = (log) => {
+  if (!log) return {};
+  const result = {};
+  // Backend log structure: { stage1: { cid: [{t, title}, ...] }, stage2: ... }
+  ["stage1", "stage2", "stage3"].forEach(stage => {
+    if (!log[stage]) return;
+    Object.keys(log[stage]).forEach(cid => {
+      const entries = log[stage][cid]; // Array of {t, title}
+      if (!entries) return;
+
+      if (!result[cid]) {
+        result[cid] = { title: null, history: [] };
+      }
+      // Merge history
+      result[cid].history.push(...entries);
+    });
+  });
+  return result;
+};
+
 export default function ChatInterface({
   conversation,
   onSendMessage,
   isLoading,
   onNewConversation,
   conversationId,
+  activeThinking,
 }) {
   const { t } = useTranslation();
   const [input, setInput] = useState("");
@@ -36,6 +58,7 @@ export default function ChatInterface({
   // Model state
   const [councilors, setCouncilors] = useState(DEFAULT_COUNCILORS);
   const [chairman, setChairman] = useState(DEFAULT_CHAIRMAN);
+  // activeThinking is now a prop: activeThinking
 
   const messagesEndRef = useRef(null);
   const scrollAreaRef = useRef(null);
@@ -249,6 +272,27 @@ export default function ChatInterface({
           // consoleLog(eventType, event);
 
           switch (eventType) {
+            case "thinking":
+              setActiveThinking(prev => {
+                const cid = event.councilor_id; // Check ID first
+                const model = event.model;
+                // Prefer ID as key
+                const key = cid || model;
+                if (!key) return prev;
+
+                const existing = prev[key] || { title: "", history: [] };
+
+                // Update title and append to history
+                return {
+                  ...prev,
+                  [key]: {
+                    title: event.delta,
+                    history: [...existing.history, { title: event.delta, t: event.t }]
+                  }
+                };
+              });
+              break;
+
             case "meta":
               setCurrentConversation((prev) => {
                 const messages = [...prev.messages];
@@ -330,6 +374,12 @@ export default function ChatInterface({
                 lastMsg.stage1 = event.data;
                 lastMsg.loading.stage1 = false;
                 return { ...prev, messages };
+              });
+              // Clear titles
+              setActiveThinking(prev => {
+                const next = { ...prev };
+                Object.keys(next).forEach(k => next[k] = { ...next[k], title: null });
+                return next;
               });
               break;
 
@@ -418,6 +468,12 @@ export default function ChatInterface({
 
                 return { ...prev, messages };
               });
+              // Clear titles
+              setActiveThinking(prev => {
+                const next = { ...prev };
+                Object.keys(next).forEach(k => next[k] = { ...next[k], title: null });
+                return next;
+              });
               break;
 
             case "stage3_start":
@@ -436,6 +492,12 @@ export default function ChatInterface({
                 lastMsg.stage3 = event.data;
                 lastMsg.loading.stage3 = false;
                 return { ...prev, messages };
+              });
+              // Clear titles
+              setActiveThinking(prev => {
+                const next = { ...prev };
+                Object.keys(next).forEach(k => next[k] = { ...next[k], title: null });
+                return next;
               });
               break;
 
@@ -748,6 +810,9 @@ export default function ChatInterface({
                               onChairmanClick={handleChairmanClick}
                               modelStatuses={getModelStatuses(msg, messageCouncilModels, messageChairmanModel)}
                               isChairman={messageChairmanModel === activeModel}
+                              thinkingStates={msg.metadata?.thinking
+                                ? transformThinkingLog(msg.metadata.thinking)
+                                : (msg.loading ? activeThinking : {})}
                             />
                           );
                       })()}

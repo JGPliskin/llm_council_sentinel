@@ -1,9 +1,11 @@
 """Configuration for the LLM Council."""
 
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # OpenRouter API key
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -40,43 +42,50 @@ GLOBAL_MODEL_POOL = [
         "id": "openai/gpt-oss-20b:free",
         "name": "GPT-OSS 20B (Free)",
         "concurrency_limit": 4,
-        "category": "general"
+        "category": "general",
+        "capabilities": {"thinking": True, "mode": "tool"},
     },
     {
         "id": "tngtech/tng-r1t-chimera:free",
         "name": "TNG R1T Chimera (Free)",
         "concurrency_limit": 3,
-        "category": "reasoning"
+        "category": "reasoning",
+        "capabilities": {"thinking": True, "mode": "tool"},
     },
     {
         "id": "tngtech/deepseek-r1t2-chimera:free",
         "name": "DeepSeek R1T2 Chimera (Free)",
         "concurrency_limit": 3,
-        "category": "reasoning"
+        "category": "reasoning",
+        "capabilities": {"thinking": True, "mode": "tool"},
     },
     {
         "id": "nvidia/nemotron-nano-9b-v2:free",
         "name": "Nemotron Nano 9B (Free)",
         "concurrency_limit": 5,
-        "category": "fast"
+        "category": "fast",
+        "capabilities": {"thinking": True, "mode": "tool"},
     },
     {
         "id": "z-ai/glm-4.5-air:free",
         "name": "GLM 4.5 Air (Free)",
         "concurrency_limit": 3,
-        "category": "general"
+        "category": "general",
+        "capabilities": {"thinking": True, "mode": "tool"},
     },
     {
         "id": "amazon/nova-2-lite-v1:free",
         "name": "Amazon Nova 2 Lite (Free)",
         "concurrency_limit": 3,
-        "category": "fast"
+        "category": "fast",
+        "capabilities": {"thinking": True, "mode": "tool"},
     },
     {
         "id": "alibaba/tongyi-deepresearch-30b-a3b:free",
         "name": "Tongyi DeepResearch 30B (Free)",
         "concurrency_limit": 2,
-        "category": "research"
+        "category": "research",
+        "capabilities": {"thinking": True, "mode": "tool"},
     },
 ]
 

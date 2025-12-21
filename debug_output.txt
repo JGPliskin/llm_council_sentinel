@@ -1,0 +1,12 @@
+httpx imported successfully
+DRIVER EXCEPTION:
+Traceback (most recent call last):
+  File "F:\OneDrive\PY\ZYZ\project\llm_council_sentinel\tests\debug_test.py", line 18, in <module>
+    import test_concurrency_logic
+  File "F:\OneDrive\PY\ZYZ\project\llm_council_sentinel\.venv\Lib\site-packages\_pytest\assertion\rewrite.py", line 197, in exec_module
+    exec(co, module.__dict__)
+  File "F:\OneDrive\PY\ZYZ\project\llm_council_sentinel\tests\test_concurrency_logic.py", line 19, in <module>
+    import council
+  File "F:\OneDrive\PY\ZYZ\project\llm_council_sentinel\backend\council.py", line 15, in <module>
+    from openrouter import query_model, stream_model
+ImportError: cannot import name 'query_model' from 'openrouter' (F:\OneDrive\PY\ZYZ\project\llm_council_sentinel\backend\openrouter.py)
