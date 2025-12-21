@@ -1,5 +1,5 @@
 # Thinking 标题流 (Thinking Title Stream)
-> 版本：v0.3.1 | 状态：Ready to Implement
+> 版本：v0.3.2 | 状态：Ready to Implement
 
 ## 目录
 1. 概述
@@ -77,9 +77,10 @@
 ### 5.1 通道设计（Dual Channel + Freeze）
 - **通道 1：tool_calls**
   - `emit_thinking_title(title: string)`：输出标题。
-  - `emit_final(final: string)`：输出最终答案（可选）。
+  - `emit_final(final: string)`：输出最终答案（可选，默认不在 prompt 中要求）。
 - **通道 2：content 兜底**
-  - 若模型未调用 `emit_final` 直接输出文本，客户端必须接住。
+  - 最终答案**默认走 content**（可流式）。
+  - 若模型意外调用 `emit_final`，客户端仍需兜底接住。
 
 **冻结规则**：
 - 一旦进入 Answering（收到 `emit_final` 或 `content`），Thinking 面板冻结。
@@ -116,7 +117,7 @@ OpenRouter/OpenAI 的 `tool_calls[].function.arguments` 可能分片流式传输
 | **Idle** | 脚本启动 | 等待输入 | - |
 | **Waiting** | 请求发出 | **[FILLER] 启动** (每 2-4s 输出) | - |
 | **Thinking** | 收到 `emit_thinking_title` | **[REAL] 显示**，停止 Filler | 必须在 Answering 前 |
-| **Answering** | 收到 `emit_final` 或 `content` | **[LOCK] 冻结 Thinking**，流式输出答案 | **此后拒收任何 Title** |
+| **Answering** | 收到 `content`（或 `emit_final` 兜底） | **[LOCK] 冻结 Thinking**，流式输出答案 | **此后拒收任何 Title** |
 | **Finished** | 流结束 | 显示统计小结 | - |
 
 ### 6.2 流程图（ASCII）
@@ -129,7 +130,7 @@ OpenRouter/OpenAI 的 `tool_calls[].function.arguments` 可能分片流式传输
    │◄──────────────────────────────────────────┘
    │ buffer arguments -> JSON OK -> add [REAL]
    │
-   │                                tool_call: emit_final OR content
+   │                                content (primary) / emit_final (fallback)
    │◄──────────────────────────────────────────┐
    │ lock thinking -> stream final output
    │
@@ -150,6 +151,7 @@ OpenRouter/OpenAI 的 `tool_calls[].function.arguments` 可能分片流式传输
 ╰─────────────────────────────────────────────────────────────╯
 == Final Answer ==
 ...streaming final output...
+over
 
 [Stats] Titles: 4, Avg Gap: 6.2s
 ```
@@ -176,6 +178,16 @@ OpenRouter/OpenAI 的 `tool_calls[].function.arguments` 可能分片流式传输
 | 标题重复率 | < 10% |
 | 平均标题间隔 | 3–10 秒 |
 | 标题长度 | 6–18 字 |
+
+### 8.3 标题实时率评估表（肉眼验收）
+| 维度 | 观察点 | 合格标准 | 备注 |
+| :--- | :--- | :--- | :--- |
+| 首条标题 TTFB | 请求后多久出现 title | ≤10s（若无则靠 filler） | 体验优先 |
+| 标题数量 | 全程 title 数量 | ≥3 条 | 思考时间短可放宽 |
+| 标题频率 | title 间隔 | 3–10 秒 | <3s 视为刷屏 |
+| 断流情况 | 中途 title 消失 | 允许 1 次短停 | 断流过长需换模型 |
+| 回答阶段冻结 | content 出现后仍有 title | 不允许 | 违规则判失败 |
+| 最终答案 | content 完整输出 | 无断裂、无重复 | 结束标记为 "over" |
 
 ---
 
@@ -213,8 +225,9 @@ OpenRouter/OpenAI 的 `tool_calls[].function.arguments` 可能分片流式传输
 你需要通过调用工具 emit_thinking_title(title="...") 向用户汇报思考进度。
 
 规则：
-1. 思考过程要通过多次调用 emit_thinking_title 展现。
-2. 标题要简练（6–18字），像步骤名（如“分析数据”、“校验约束”）。
-3. 不要把推理过程写在 content 里，只在 content 输出最终答案（或调用 emit_final）。
+1. 思考过程要通过多次调用 emit_thinking_title 展现（至少 1 次）。
+2. 标题要简练（6–18字），像步骤名（如“分析数据”、“校验约束”），无标点。
+3. 不要把推理过程写在 content 里，最终答案直接输出在 content 中，不要调用 emit_final。
 4. 标题频率控制为每 3–10 秒一条，避免刷屏。
+5. 回答完毕必须输出 "over" 作为结束标记。
 ```

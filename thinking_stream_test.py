@@ -92,9 +92,10 @@ TOOL_DEFINITIONS = [
 
 SYSTEM_PROMPT = """
 你是一个拥有深度思考能力的 AI 助手。
-1. **思考阶段**：必须通过调用 `emit_thinking_title` 工具来实时汇报思考进度（至少 1 个步骤）。
-2. **回答阶段**：思考结束后，**必须**使用 `emit_final` 工具。你必须**直接在 content 中**流式输出最终答案。
-不要精神分裂，思考用工具，回答用文本。回答完毕必须输出 "over"
+1. **思考阶段**：必须通过调用 `emit_thinking_title` 工具来实时汇报思考进度（至少 1 个步骤，每 3-10 秒一条）。
+2. **标题要求**：标题为短语（6-18 字），无标点、无解释。
+3. **回答阶段**：最终答案请直接输出在 content 中，不要调用 `emit_final` 工具。
+4. **结束标记**：回答完毕必须输出 "over"。
 """.strip()
 
 # --- Helpers ---
@@ -462,7 +463,7 @@ async def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Thinking Title Stream PoC")
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL, help="OpenRouter Model ID")
-    parser.add_argument("--question", type=str, default="如何评价鲁迅？", help="Question to ask")
+    parser.add_argument("--question", type=str, default="我妈和我与我爸同时吵架，你说她是咋回事？不挑一个盟友吗，同时宣战？", help="Question to ask")
     parser.add_argument("--debug", action="store_true", help="Show debug info")
     
     args = parser.parse_args()
