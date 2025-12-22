@@ -6,11 +6,13 @@ import Stage2 from "./Stage2";
 import Stage3 from "./Stage3";
 import CouncilAvatars from "./CouncilAvatars";
 import ShareButton from "./ShareButton";
+import ThinkingConsole from "./ThinkingConsole";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { Brain } from "lucide-react";
 import { MAX_MESSAGE_LENGTH, api } from "@/api";
 
 // Default model configuration (mirrors backend ids for graceful fallback)
@@ -49,6 +51,8 @@ export default function ChatInterface({
   onNewConversation,
   conversationId,
   activeThinking,
+  enableThinking,
+  setEnableThinking,
 }) {
   const { t } = useTranslation();
   const [input, setInput] = useState("");
@@ -667,6 +671,22 @@ export default function ChatInterface({
                     >
                       {charCount}/{MAX_MESSAGE_LENGTH}
                     </div>
+                    {/* Brain Toggle for Empty State - Mirrored from main input */}
+                    <div className="absolute top-2 right-2 flex items-center gap-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={cn(
+                          "h-6 w-6 rounded-full transition-colors",
+                          enableThinking ? "bg-violet-100 text-violet-600 hover:bg-violet-200" : "text-slate-400 hover:text-slate-600"
+                        )}
+                        onClick={() => setEnableThinking && setEnableThinking(!enableThinking)}
+                        title={enableThinking ? t("disableThinking") : t("enableThinking")}
+                      >
+                        <Brain className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   </div>
                   <Button
                     type="submit"
@@ -892,6 +912,11 @@ export default function ChatInterface({
             </div>
           </ScrollArea>
 
+          {/* Thinking Console */}
+          {enableThinking && (
+            <ThinkingConsole activeThinking={activeThinking} councilorLookup={councilorLookup} />
+          )}
+
           {/* Only show input form if conversation is not complete (no stage3 response yet) */}
           {!conversation.messages.some(
             (msg) => msg.role === "assistant" && msg.stage3,
@@ -916,6 +941,21 @@ export default function ChatInterface({
                     rows={3}
                   />
                   {/* Character counter */}
+                  <div className="absolute top-2 right-2 flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        "h-6 w-6 rounded-full transition-colors",
+                        enableThinking ? "bg-violet-100 text-violet-600 hover:bg-violet-200" : "text-slate-400 hover:text-slate-600"
+                      )}
+                      onClick={() => setEnableThinking && setEnableThinking(!enableThinking)}
+                      title={enableThinking ? t("disableThinking") : t("enableThinking")}
+                    >
+                      <Brain className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                   <div
                     className={cn(
                       "absolute bottom-2 right-2 text-xs",

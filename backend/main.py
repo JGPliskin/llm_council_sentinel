@@ -160,6 +160,7 @@ class SendMessageRequest(BaseModel):
 
     content: str
     councilor_ids: Optional[List[str]] = None
+    enable_thinking: Optional[bool] = True
 
     @field_validator('content')
     @classmethod
@@ -588,7 +589,7 @@ async def send_message(request: Request, conversation_id: str, body: SendMessage
     active_chairman = CHAIRMAN if active_chairman_id == CHAIRMAN.get("id") else CHAIRMAN
 
     stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
-        body.content, active_councilors, active_chairman
+        body.content, active_councilors, active_chairman, enable_thinking=body.enable_thinking
     )
 
     # Add assistant message with all stages and metadata
@@ -659,6 +660,9 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
         thinking_count = 0
         
         async def on_thinking(cid, stage, title, model=None):
+            if not body.enable_thinking:
+                return
+
             nonlocal thinking_count
             t_val = round(time.time() - start_time, 2)
             
@@ -732,7 +736,8 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                     body.content, 
                     active_councilors, 
                     on_result=on_stage1_item,
-                    on_thinking=on_thinking
+                    on_thinking=on_thinking,
+                    enable_thinking=body.enable_thinking
                 )
             )
             
@@ -760,7 +765,7 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                 yield f"data: {json.dumps({'type': 'stage2_start', 'skipped': True, 'skipped_reason': 'insufficient_candidates'})}\n\n"
                 
                 stage2_result = await stage2_collect_rankings(
-                    body.content, stage1_results, active_councilors, on_thinking=on_thinking
+                    body.content, stage1_results, active_councilors, on_thinking=on_thinking, enable_thinking=body.enable_thinking
                 )
             else:
                 # Normal Case
@@ -784,7 +789,8 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                         stage1_results, 
                         active_councilors,
                         on_result=on_stage2_item,
-                        on_thinking=on_thinking
+                        on_thinking=on_thinking,
+                        enable_thinking=body.enable_thinking
                     )
                 )
                 
@@ -817,7 +823,8 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                     stage1_results, 
                     stage2_result, 
                     active_chairman,
-                    on_thinking=on_thinking
+                    on_thinking=on_thinking,
+                    enable_thinking=body.enable_thinking
                 )
             )
             
@@ -843,45 +850,10 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                 "anon_to_councilor": stage2_result.get("anon_map", {}),
                 "aggregate_rankings": aggregate_rankings,
                 "spec_version": "stage2_v1.2",
-                "thinking": thinking_log
             }
-            # Note: storage.add_assistant_message does not support 'thinking' argument yet (per plan), 
-            # but we need to persist metadata.
-            # Wait, implementation plan said:
-            # "Update backend/storage.py to persist thinking titles in message metadata"
-            # I haven't updated storage.py yet.
-            # But the thinking titles are NOT passed to `add_assistant_message` here!
-            # They were streamed to client but where are they collected for persistence?
-            # AHH! I forgot to collect them for persistence!
-            # I need `thinking_log = { stage1: {}, stage2: {}, stage3: {} }`.
-            # on_thinking should update this log.
-            # And then I pass `thinking_log` to `add_assistant_message` or put it into metadata.
-            
-            # Logic update:
-            # 1. Init `thinking_log = {"stage1": {}, "stage2": {}, "stage3": {}}`
-            # 2. In `on_thinking`, append to log.
-            # 3. Add to `metadata["thinking"]`.
-            
-            # I cannot add this logic inside `ReplacementContent` easily without rewriting `on_thinking`.
-            # I will assume I can do it now.
-            
-            # Wait, look at the code above. `on_thinking` is defined inside.
-            # I can update `thinking_log` in `on_thinking`.
-            
-            # Let's adjust the replacement content to include accumulation logic.
-            
-            # Also, I need to know the councilor/model mapping for the log.
-            # Spec 5.4.3: "thinking": { "stage1": { "immanuel_kant": [ ... ] } }
-            
-            # So:
-            # thinking_log = {"stage1": {}, "stage2": {}, "stage3": {}}
-            # on_thinking:
-            #    if cid not in thinking_log[stage]: thinking_log[stage][cid] = []
-            #    thinking_log[stage][cid].append({"t": t, "title": title})
-            
-            # Then add `thinking_log` to `metadata` passed to storage.
-            
-            # I will modify the replacement content.
+            storage.add_assistant_message(
+                conversation_id, stage1_results, stage2_result, stage3_result, metadata
+            )
 
             current_ids = [c["id"] for c in active_councilors]
             should_update_schema = False

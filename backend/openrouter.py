@@ -79,7 +79,7 @@ async def stream_model(
                     if "content" in delta and delta["content"]:
                         full_content.append(delta["content"])
                         
-                            # 2. Handle Tool Calls (Thinking)
+                    # 2. Handle Tool Calls (Thinking)
                     if "tool_calls" in delta and delta["tool_calls"]:
                         for tc in delta["tool_calls"]:
                             idx = tc.get("index")
@@ -93,19 +93,37 @@ async def stream_model(
                                 if "arguments" in fn:
                                     tool_call_buffer[idx]["arguments"] += fn["arguments"]
 
+                            # Robust Parsing of nested JSON in arguments
+                            # Arguments build up over time: "{" -> "{"title":..."
+                            # We only try to parse if we have a closing brace or seemingly complete JSON structure
+                            # Actually, standard is to wait for finish, but we want streaming titles.
+                            # So we try to parse what we have.
                             args_str = tool_call_buffer[idx]["arguments"]
-                            try:
-                                args_json = json.loads(args_str)
-                                if "title" in args_json and on_thinking:
-                                    if not tool_call_buffer[idx].get("emitted"):
-                                        import inspect
-                                        if inspect.iscoroutinefunction(on_thinking):
-                                            await on_thinking(args_json["title"])
-                                        else:
-                                            on_thinking(args_json["title"])
-                                        tool_call_buffer[idx]["emitted"] = True
-                            except json.JSONDecodeError:
-                                pass
+                            if args_str.strip():
+                                try:
+                                    # Attempt partial repair if needed? 
+                                    # For specific thinking pattern `{"title": "..."}`
+                                    # If it ends with quote, maybe it's complete string value?
+                                    # Simple attempt:
+                                    args_json = None
+                                    try:
+                                        args_json = json.loads(args_str)
+                                    except json.JSONDecodeError:
+                                        # If failed, maybe it's because it's incomplete. 
+                                        # We ignore incomplete JSON until next chunk.
+                                        pass
+                                    
+                                    if args_json and "title" in args_json and on_thinking:
+                                        if not tool_call_buffer[idx].get("emitted"):
+                                            # Found a title, emit it!
+                                            import inspect
+                                            if inspect.iscoroutinefunction(on_thinking):
+                                                await on_thinking(args_json["title"])
+                                            else:
+                                                on_thinking(args_json["title"])
+                                            tool_call_buffer[idx]["emitted"] = True
+                                except Exception:
+                                    pass
 
         return {
             'content': "".join(full_content),

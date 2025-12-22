@@ -250,7 +250,8 @@ async def _request_stage1_bounded(
     semaphore: asyncio.Semaphore,
     councilor: Dict[str, Any],
     user_query: str,
-    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None
+    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None,
+    enable_thinking: bool = True
 ) -> Dict[str, Any]:
     
     persona = fetch_persona(PERSONA_CACHE, councilor.get("persona_path", ""))
@@ -281,6 +282,13 @@ async def _request_stage1_bounded(
         "- judge_card 整体序列化长度需<=600字符，若超出请合并/抽象信息后再压缩，不要生硬截断。\n"
         "- answer_summary 必须是对回答的客观陈述，不包含立场评判，严格控制在500字以内。"
     )
+
+    if enable_thinking:
+        system_prompt += (
+            "\n\nIMPORTANT: You MUST call the `emit_thinking` tool MULTIPLE times (at least 3-5 times) "
+            "before and during your generation to explain your reasoning process. "
+            "Report your step-by-step thoughts via this tool."
+        )
 
     user_message = (
         f"用户问题：{user_query}\n"
@@ -450,7 +458,8 @@ async def stage1_collect_responses(
     user_query: str, 
     councilors: List[Dict[str, Any]],
     on_result: Optional[Callable[[Dict[str, Any]], Any]] = None,
-    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None
+    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None,
+    enable_thinking: bool = True
 ) -> List[Dict[str, Any]]:
     """Stage 1: Collect initial responses from all councilors with strict control."""
     semaphore = asyncio.Semaphore(DEFAULT_CONCURRENCY_STAGE1)
@@ -460,7 +469,7 @@ async def stage1_collect_responses(
     # Note: Using a mapping to track who is who is safer if order matters, 
     # but `gather` preserves order of input tasks.
     tasks = [
-        asyncio.create_task(_request_stage1_bounded(semaphore, c, user_query, on_thinking))
+        asyncio.create_task(_request_stage1_bounded(semaphore, c, user_query, on_thinking, enable_thinking))
         for c in councilors
     ]
     
@@ -735,7 +744,8 @@ async def _collect_single_ranking_bounded(
     judge_cards: List[Dict[str, Any]],
     expected_anon_ids: List[str],
     timeout: float,
-    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None
+    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None,
+    enable_thinking: bool = True
 ) -> Dict[str, Any]:
     """Collect ranking with fallback routing."""
     
@@ -747,6 +757,12 @@ async def _collect_single_ranking_bounded(
     # Limits
     stage_limits = councilor_obj.get("stage_limits", {}).get("stage2", {})
     max_tokens = stage_limits.get("max_output_tokens", 360)
+
+    if enable_thinking:
+        rubric_text += (
+            "\n\nIMPORTANT: You MUST call the `emit_thinking` tool MULTIPLE times "
+            "before outputting your JSON to explain your ranking logic."
+        )
 
     messages = _build_ranking_messages(user_query, judge_cards, persona_text, rubric_text)
     
@@ -874,7 +890,8 @@ async def stage2_collect_rankings(
     stage1_results: List[Dict[str, Any]], 
     councilors: List[Dict[str, Any]],
     on_result: Optional[Callable[[Dict[str, Any]], Any]] = None,
-    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None
+    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None,
+    enable_thinking: bool = True
 ) -> Dict[str, Any]:
     """
     Stage 2: Each model ranks the anonymized responses.
@@ -931,7 +948,8 @@ async def stage2_collect_rankings(
                 judge_cards, 
                 anon_ids, 
                 timeout,
-                on_thinking
+                on_thinking,
+                enable_thinking
             )
         )
         tasks.append((councilor, t))
@@ -1037,7 +1055,8 @@ async def stage3_synthesize_final(
     stage1_results: List[Dict[str, Any]],
     stage2_result: Dict[str, Any], # Changed to Dict
     chairman: Dict[str, Any],
-    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None
+    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None,
+    enable_thinking: bool = True
 ) -> Dict[str, Any]:
     persona = fetch_persona(PERSONA_CACHE, chairman.get("persona_path", ""))
     stage_limits = chairman.get("stage_limits", {}).get("stage3", {})
@@ -1091,6 +1110,12 @@ async def stage3_synthesize_final(
         "保持简洁、公允，无需自我介绍或复述问题。"
     )
 
+    if enable_thinking:
+        system_prompt += (
+            "\n\nIMPORTANT: You MUST call the `emit_thinking` tool MULTIPLE times (3-5 times) "
+            "before your final synthesis to explain how you are weighing the different opinions."
+        )
+
     chairman_prompt = f"""
 用户问题：{user_query}
 
@@ -1141,9 +1166,9 @@ async def stage3_synthesize_final(
                     can_think = caps.get("thinking", False)
                     
                     if can_think and on_thinking:
-                        def _think_cb(title: str):
+                        async def _think_cb(title: str):
                             if on_thinking:
-                                on_thinking(chairman["id"], "stage3", title, selected_model)
+                                await on_thinking(chairman["id"], "stage3", title, selected_model)
 
                         response = await stream_model(
                             selected_model, 
@@ -1266,17 +1291,20 @@ async def run_full_council(
     user_query: str, 
     councilors: List[Dict[str, Any]], 
     chairman: Dict[str, Any],
-    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None
+    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None,
+    enable_thinking: bool = True
 ) -> Tuple[List, Dict, Dict, Dict]:
     # Stage 1
-    stage1_results = await stage1_collect_responses(user_query, councilors, on_thinking=on_thinking)
+    stage1_results = await stage1_collect_responses(
+        user_query, councilors, on_thinking=on_thinking, enable_thinking=enable_thinking
+    )
 
     # Use active models for ranking (using councilors models)
     # Note: stage2_collect_rankings now expects full councilor objects to read timeouts
     
     # Stage 2 (Unified Dict)
     stage2_result = await stage2_collect_rankings(
-        user_query, stage1_results, councilors, on_thinking=on_thinking
+        user_query, stage1_results, councilors, on_thinking=on_thinking, enable_thinking=enable_thinking
     )
 
     # Aggregate Rankings (if not skipped)
@@ -1288,7 +1316,7 @@ async def run_full_council(
 
     # Stage 3
     stage3_result = await stage3_synthesize_final(
-        user_query, stage1_results, stage2_result, chairman, on_thinking=on_thinking
+        user_query, stage1_results, stage2_result, chairman, on_thinking=on_thinking, enable_thinking=enable_thinking
     )
 
     metadata = {

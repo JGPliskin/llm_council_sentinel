@@ -264,12 +264,12 @@ export const ModelAvatar = ({
           </div>
         )}
 
-        {/* Thinking Bubble */}
-        {thinkingTitle && (
+        {/* Thinking Bubble - REMOVED per UI simplification request (redundant with Console) */}
+        {/* {thinkingTitle && (
           <div className="thinking-bubble">
             {thinkingTitle}
           </div>
-        )}
+        )} */}
 
       </div>
       <div className="model-info">

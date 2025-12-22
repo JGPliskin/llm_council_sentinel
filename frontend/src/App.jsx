@@ -16,6 +16,7 @@ function AppContent() {
   const [conversations, setConversations] = useState([]);
   const [currentConversation, setCurrentConversation] = useState(null);
   const [activeThinking, setActiveThinking] = useState({}); // { [cid]: { title, history } }
+  const [enableThinking, setEnableThinking] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
@@ -323,7 +324,8 @@ function AppContent() {
               console.log("Unknown event type:", eventType);
           }
         },
-        councilorIds
+        councilorIds,
+        enableThinking
       );
     } catch (error) {
       console.error("Failed to send message:", error);
@@ -479,6 +481,8 @@ function AppContent() {
           onNewConversation={handleNewConversation}
           conversationId={conversationId}
           activeThinking={activeThinking}
+          enableThinking={enableThinking}
+          setEnableThinking={setEnableThinking}
         />
       </div>
 

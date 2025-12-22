@@ -1,154 +1,299 @@
-# AGENTS.md - Technical Architecture & workflows
+﻿# AGENTS.md - 技术架构与工作流（最新版）
 
-This document provides a comprehensive technical reference for the LLM Council system, detailing the architecture, logic flows, state management, and operational rules.
-
-## 1. System Overview
-
-LLM Council is an asynchronous, multi-stage deliberation engine where a "Council" of diverse LLM personas debates a user query, peer-reviews each other's answers anonymously, and synthesizes a final consensus via a Chairman model.
-
-### 1.1 Core Philosophy
-- **Diversity**: Different models/personas avoid "echo chambers".
-- **Anonymity**: Stage 2 reviews are blind to prevent model bias (e.g., favoring their own provider).
-- **Safety**: Unhealthy models are strictly filtered out to prevent execution failures.
-- **Transparency**: Every step (Raw answers, Peer reviews, Synthesis) is visible to the user.
+本文件是 LLM Council Sentinel 的权威技术说明文档，覆盖架构、关键流程、数据结构、边界条件与运行规则。
+文档内容基于当前代码实现（以 `backend/` 与 `frontend/src/` 为准），用于“给任何人看，都没有歧义”的级别说明。
 
 ---
 
-## 2. Architecture & Components
+## 1. 系统概览
 
-### 2.1 Backend (`backend/`)
+LLM Council 是一个三阶段异步协作系统：
+- **Stage1**：多名 Councilor 并行产出观点与 judge_card
+- **Stage2**：匿名互评与排序
+- **Stage3**：Chairman 综合输出最终结论
 
-| Component | Functionality | Key Logic |
-| :--- | :--- | :--- |
-| **`main.py`** | FastAPI Entrypoint | - **Startup**: Preloads personas, validates initial health.<br>- **API**: `/api/councilors` (Health status), `/message` (Streaming).<br>- **Management**: DELETE endpoints (single/bulk) protected by `X-Admin-Token`.<br>- **Safety**: `resolve_target_councilors` enforces `healthy=True`. |
-| **`council.py`** | Orchestration Engine | - Manages the 3-stage pipeline.<br>- implements `_bounded_query` with semaphores and retry logic.<br>- Handles anonymization maps. |
-| **`validation.py`** | Health System | - **HealthManager**: Centralized state with TTL (`1h`) and Circuit Breaker.<br>- **Probes**: Sends "Hello" to models.<br>- **Backoff**: Exponential retry (120s, 300s...) on failures.<br>- **Annotation**: Adds `healthy`, `health_error`, `stale` to model objects. |
-| **`config.py`** | Configuration | - Defines `COUNCILORS` list (ID, Name, Model, Persona Path).<br>- Defines `CHAIRMAN` definition.<br>- Sets timeouts and concurrency limits.<br>- **Auth**: `ADMIN_TOKEN` for management ops. |
-| **`openrouter.py`** | LLM Client | - Async HTTP client for OpenRouter AI.<br>- Handles 429/500 retries.<br>- Normalizes responses. |
-| **`storage.py`** | Persistence | - JSON-based flat file storage.<br>- Saves full conversation history.<br>- **Management**: `delete_conversation` (idempotent), `bulk_delete_conversations`.<br>- **Migration**: Handles schema updates (v1->v2 IDs). |
-
-### 2.2 Frontend (`frontend/src/`)
-
-| Component | Functionality | Key Logic |
-| :--- | :--- | :--- |
-| **`ChatInterface.jsx`** | Main UI | - Manages conversation stream.<br>- **State**: `selectedCouncilorIds` determines active participants.<br>- **Default**: Selects `active && healthy`. |
-| **`CouncilAvatars.jsx`** | Member Display | - **Split Logic**: `available` vs `unavailable` (based on health).<br>- **Toggle**: "Show unavailable" allows inspecting dead models.<br>- **Visuals**: Checkmarks for selection, Grayscale for disabled. |
-| **`Stage1.jsx`** | Proposal View | - Renders initial markdown answers side-by-side. |
-| **`Stage2.jsx`** | Peer Review | - **Tabbed Interface**: Shows raw reviews.<br>- **Ranking**: Visualizes "Ranked 1st", "Ranked 2nd" etc.<br>- **Disclosure**: Shows real names but notes they were anonymous during review. |
-
-### 2.3 Active Councilors (Configuration)
-
-The specific personas loaded in the current system (defined in `backend/config.py`):
-
-| ID | Name | Role | Model | Persona / Style |
-| :--- | :--- | :--- | :--- | :--- |
-| **`immanuel_kant`** | 康德 | Councilor | `openai/gpt-oss-20b:free` | **Moral Philosopher**: Prioritizes universal ethics, categorial imperatives, and logical consistency. Judge style: Analytical, focus on long-term robustness. |
-| **`donald_trump`** | 特朗普 | Councilor | `openai/gpt-oss-20b:free` | **Pragmatist/Populist**: Focuses on "America First" style realism, direct benefits, strength, and deal-making. Judge style: Executive execution, risk isolation. |
-| **`hideo_kojima`** | 小岛秀夫 | Councilor | `openai/gpt-oss-20b:free` | **Auteur/Visionary**: Emphasizes narrative, connectivity, complex systems, and artistic integrity. Judge style: Academic rigor, source verification. |
-| **`chairman`** | 共识主席 | **Chairman** | `amazon/nova-2-lite-v1:free` | **Synthesizer**: Neutral moderator. Detects consensus, highlights unresolvable conflicts, and provides the final actionable verdict. |
+系统具备：
+- 模型健康管理（健康/冷却/不可用）
+- 对话持久化（JSON 文件）
+- 流式 SSE 输出（前端实时渲染）
+- 可选 Thinking 工具调用（前端显示 Console 与头像历史）
 
 ---
 
-## 3. Detailed Logic & Workflows
+## 2. 架构与模块
 
-### 3.1 Health Check & Safety Workflow
-The system ensures reliability by filtering out dead models *before* they cause errors.
+### 2.1 后端模块（`backend/`）
 
-1.  **Trigger Points (Refresh Logic)**:
-    *   **Startup**: Checks `HEALTH_STARTUP_CHECK`. If enabled, backend probes all models on boot.
-    *   **Frontend - Home Page (New Conversation)**: The UI explicitly requests `GET /api/councilors?refresh=true`. This ensures the user sees the latest status before starting a new chat.
-    *   **Frontend - Existing Conversation**: The UI requests `GET /api/councilors` (cached) to avoid unnecessary delays.
-    *   **Manual**: User can trigger a refresh via UI controls if implemented.
-    *   **Note**: Creating a conversation (POST) or Deleting conversations does *not* trigger a backend refresh.
+| 模块 | 作用 | 关键职责 |
+|---|---|---|
+| `main.py` | FastAPI 入口 | API 路由、流式 SSE、对话存储、rate limit、输入校验、健康刷新调度 |
+| `council.py` | 三阶段编排 | Stage1/2/3 执行、并发控制、重试策略、匿名映射、thinking 注入 |
+| `openrouter.py` | LLM 客户端 | 请求 OpenRouter API、解析流式 tool_calls、回调 thinking |
+| `storage.py` | 存储层 | JSON 持久化、对话列表、单/批量删除、schema 迁移 |
+| `validation.py` / `health.py` | 健康系统 | 健康探测、状态缓存、冷却与失败阈值 |
+| `persona_loader.py` | Persona 载入 | 启动预加载 persona，避免每次 I/O |
+| `config.py` | 全局配置 | 模型/超时/并发/健康参数/路径配置 |
 
-2.  **Runtime Health State**:
-    *   **Passive Read**: API returns cached status (TTL ~1 hour).
-    *   **Execution Updates**: Every message generation attempt updates the specific model's health record (Success -> Healthy, Failure -> Error/Count).
-    *   **Circuit Breaker**:
-        *   **Transient**: 2 consecutive failures -> Cooldown (Backoff: 120s, 300s...).
-        *   **Hard**: 401/403/404 -> Immediately Unhealthy.
-    *   **Result**: Returns full list annotated with `healthy`, `health_error`, `cooldown_until`.
+### 2.2 前端模块（`frontend/src/`）
 
-3.  **Execution Guard** (`resolve_target_councilors`):
-    *   When a user sends a message, they send `councilor_ids`.
-    *   **Strict Check**: The backend verifies `is_healthy(id)`.
-    *   **Default Safety**: If an ID is unknown or map lookup fails, it defaults to **`False` (Unhealthy)**.
-    *   **Filtering**: Only healthy IDs are passed to the Stage 1 engine. Unhealthy ones are returned in `ignored_ids`.
-
-### 3.2 The 3-Stage Deliberation Pipeline
-
-#### Stage 1: Proposal Generation
-*   **Goal**: Gather diverse perspectives.
-*   **Concurrency**: Max 6 parallel requests.
-*   **Retry Logic**: 2 Attempts per model.
-    *   **Network Failure**: Backoff and retry.
-    *   **JSON Failure**: Updates prompt with "Your previous reply was invalid..." and retries.
-*   **Output Contract** (strict JSON, no fences): `councilor_id` (forced by backend), `answer_markdown`, `answer_summary` (auto-truncated to 500 chars if missing/long), and `judge_card` with `stance/core_reasons/assumptions/risks/actionables`. Lists are capped at 50 chars per item and the whole `judge_card` is compressed to ≤600 chars. Network/logic successes update `health_manager` as healthy; transport errors mark the model unhealthy.
-
-#### Stage 2: Anonymized Peer Review
-*   **Anonymization**:
-    *   Inputs: Valid results from Stage 1.
-    *   Process: Assigns `anon_1`, `anon_2` etc. randomly (or structurally).
-    *   Map: Stores `anon_id -> real_councilor_id` for later de-anonymization.
-*   **Review Process**:
-    *   Each Councilor (Judge) executes a "Ranking Task" using persona-specific judge prompts.
-    *   **Prompt**: "You are a judge. Strict JSON. Rank these anonymous responses...".
-    *   **Constraint**: Must include ALL `anon_ids` exactly once; allowed keys only `ranking/scores/rationale`, scores must be 1-10 ints, rationale trimmed to 600 chars. Payload uses only `answer_summary` + `judge_card` to preserve anonymity.
-*   **Fallback**:
-    *   If fewer than 2 valid Stage 1 candidates exist, Stage 2 is **Skipped** (`insufficient_candidates`).
-    *   If all judges fail, Stage 2 is marked skipped (`all_judges_failed`).
-
-#### Stage 3: Chairman Synthesis
-*   **Input**: User Query + Stage 1 Answers + Stage 2 Reviews (if successful) + Aggregate Rankings.
-*   **Role**: The Chairman (usually a high-reasoning model) acts as a neutral synthesizer.
-*   **Prompt**: "Review the debate. Note the consensus. Acknowledge the winner (if any). Provide a final, actionable answer."
-*   **Output**: A comprehensive markdown response.
-
-### 3.3 State Management (Frontend)
-
-*   **Selection Persistence**:
-    *   `ChatInterface` maintains `selectedCouncilorIds`.
-    *   On "New Conversation", this resets to the default (All Active & Healthy).
-    *   During a conversation, the participants are *locked* to the message history to ensure continuity.
-*   **Visual States**:
-    *   **Available**: `healthy === true`. Shown normally.
-    *   **Unavailable**: `healthy !== true`. Hidden by default.
-    *   **Selected**: Green badge overlay.
-    *   **Disabled**: Opacity 0.4, Grayscale, blocked interaction.
-
-### 3.4 API & Streaming Surface
-- **Rate Limits**: `5/min` for `/api/conversations/{id}/message` and `/.../message/stream` via SlowAPI, keyed by real IP (`X-Forwarded-For` aware).
-- **Input Guardrails**: `content` must be non-empty and ≤1000 chars; violations return structured JSON errors (`CONTENT_TOO_LONG`, `VALIDATION_ERROR`).
-- **Admin Auth**: `DELETE` and bulk-delete endpoints expect `X-Admin-Token`, but `verify_admin` currently short-circuits to a debug token (no real protection).
-- **Endpoints**:
-  - `GET /api/councilors` (`/api/models` alias) with optional `refresh` to force health probes; returns `meta` and annotated chairman.
-  - Conversations: list/create/get; delete single or bulk (≤50 IDs) with ID validation. Creation uses cached active councilors; no auto health refresh.
-- **SSE Stream** (`/message/stream`): emits `meta` (resolved/ignored IDs, chairman, spec `stage2_v1.2`), `stage1_start/item/complete`, `stage2_start` (with anon map or skip reason) + incremental `stage2_item`, `stage2_complete` (includes anon map + aggregate rankings), `stage3_start/complete`, `title_complete`, and final `complete`. Metadata is persisted alongside the assistant message.
-- **Schema Migration**: `resolve_target_councilors` filters unhealthy IDs; legacy `active_models` are migrated to `active_councilor_ids` (v2) with a `.bak` copy before overwrite. Ignored IDs are returned in SSE meta.
-- **Title Generation**: First user message triggers async title creation via `kwaipilot/kat-coder-pro:free`, truncated to 50 chars; falls back to "New Conversation" on failure.
-
-## 4. Configuration Rules
-
-### 4.1 Port & Network
-*   **Backend Port**: **8010** (Development/Local).
-*   **Frontend Port**: **5173** (Vite).
-*   **Docker**: Backend maps internal 8008 -> Host 80 via Nginx.
-
-### 4.2 Model Constraints
-*   **JSON Enforcement**: System prompts aggressively demand JSON.
-*   **Context Windows**: Models must support at least 4k context for Stage 2 (reading multiple inputs).
-*   **Free Tier Models**: Timeouts are explicitly tuned (25s Stage 1, 75s Stage 2) to tolerate slower APIs.
-
-## 5. Troubleshooting Logic
-
-*   **"Unavailable" Status**:
-    *   Cause: `check_model_health` failed (timeout or error).
-    *   Action: Click "Show unavailable" -> Hover tooltip to see error.
-    *   Fix: Check OpenRouter key or try `/api/councilors?refresh=1`.
-*   **"Ghost" Models**:
-    *   If a model appears in `config.py` but not in the UI, check if it was filtered by the `startup_event` logic or if the backend process is stale (check Port 8010).
-*   **Missing Stage 2**:
-    *   If only 1 model succeeds in Stage 1, Stage 2 is skipped by design to save tokens.
+| 模块 | 作用 | 关键职责 |
+|---|---|---|
+| `App.jsx` | 应用入口 | 会话加载、流式消息渲染、全局 thinking 状态管理 |
+| `ChatInterface.jsx` | 核心 UI | 输入区、Stage1/2/3 渲染、SSE 事件分发、空白态 |
+| `CouncilAvatars.jsx` | 成员展示 | 头像状态、不可用列表、thinking 历史展开 |
+| `ThinkingConsole.jsx` | 全局 Console | 实时显示思考标题流 |
+| `api.js` | API 客户端 | 所有 REST/SSE 请求封装 |
 
 ---
-*Created by [Your Name/Agent] - Last Updated: 2025-12-13*
+
+## 3. 技术架构图
+
+```mermaid
+flowchart TB
+    User[User Browser] -->|REST/SSE| FE[Frontend Vite App]
+    FE -->|HTTP| BE[FastAPI Backend]
+    BE -->|SSE| FE
+    BE -->|OpenRouter API| OR[OpenRouter]
+    BE -->|JSON Files| FS[Local Storage: data/conversations]
+
+    subgraph Backend
+      BE --> C[council.py]
+      BE --> S[storage.py]
+      BE --> V[validation.py/health.py]
+      C --> OR
+      C --> PR[persona_loader.py]
+    end
+```
+
+---
+
+## 4. 数据与协议（无歧义定义）
+
+### 4.1 Conversation JSON Schema（文件存储）
+**文件路径**：`data/conversations/{conversation_id}.json`
+
+```json
+{
+  "id": "<uuid>",
+  "created_at": "<iso8601>",
+  "title": "<string>",
+  "messages": [
+    { "role": "user", "content": "<string>" },
+    {
+      "role": "assistant",
+      "stage1": [ { ...stage1_item } ],
+      "stage2": { ...stage2_result },
+      "stage3": { ...stage3_result },
+      "metadata": {
+        "anon_to_councilor": { "anon_1": "councilor_id" },
+        "aggregate_rankings": [ { "councilor_id": "...", "average_rank": 1.5, "rankings_count": 3 } ],
+        "spec_version": "stage2_v1.2"
+      }
+    }
+  ],
+  "active_models": null,
+  "active_councilor_ids": ["id1", "id2"],
+  "active_chairman": "chairman_id",
+  "schema_version": 2
+}
+```
+
+**说明**：
+- 流式与非流式均会保存完整 `assistant` 消息。
+- `metadata` 不包含 thinking title（按当前需求）。
+
+### 4.2 Stage1 Result 结构
+```json
+{
+  "councilor_id": "...",
+  "councilor_name": "...",
+  "model": "...",
+  "status": "ok|failed",
+  "answer_markdown": "...",
+  "answer_summary": "...",
+  "judge_card": {
+    "stance": "...",
+    "core_reasons": ["..."],
+    "assumptions": ["..."],
+    "risks": ["..."],
+    "actionables": ["..."]
+  },
+  "attempted_models": ["..."],
+  "fallback_used": true
+}
+```
+
+### 4.3 Stage2 Result 结构
+```json
+{
+  "skipped": false,
+  "skipped_reason": null,
+  "reviews": [
+    {
+      "judge_councilor_id": "...",
+      "judge_councilor_name": "...",
+      "model": "...",
+      "ranking": ["anon_1", "anon_2"],
+      "scores": {"anon_1": 8, "anon_2": 6},
+      "rationale": "..."
+    }
+  ],
+  "anon_map": {"anon_1": "c1", "anon_2": "c2"},
+  "judge_failures": []
+}
+```
+
+### 4.4 Stage3 Result 结构
+```json
+{
+  "status": "ok|failed",
+  "model": "...",
+  "response": "<markdown>",
+  "attempted_models": ["..."],
+  "fallback_used": false
+}
+```
+
+---
+
+## 5. API 与 SSE 事件协议
+
+### 5.1 REST API
+- `GET /api/councilors?refresh=<bool>`
+- `POST /api/conversations`
+- `GET /api/conversations`
+- `GET /api/conversations/{id}`
+- `POST /api/conversations/{id}/message`
+- `POST /api/conversations/{id}/message/stream`
+- `DELETE /api/conversations/{id}`
+- `POST /api/conversations/bulk-delete`
+
+### 5.2 SSE 事件流（`/message/stream`）
+**事件序列**：
+1. `meta` (包含 `resolved_councilors` 与 `chairman` 信息)
+2. `stage1_start` → `stage1_item`* → `stage1_complete`
+3. `stage2_start` → `stage2_item`* → `stage2_complete`
+4. `stage3_start` → `stage3_complete`
+5. `title_complete`（仅首条消息）
+6. `complete`
+
+**thinking 事件**：
+```json
+{
+  "type": "thinking",
+  "stage": "stage1|stage2|stage3",
+  "councilor_id": "...",
+  "model": "...",
+  "delta": "<title>",
+  "is_title": true,
+  "t": 1.23
+}
+```
+
+**注意**：thinking 事件仅用于 UI 实时展示，不持久化。
+
+---
+
+## 6. 三阶段执行流程（技术方案）
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant FE as Frontend
+    participant BE as Backend
+    participant C as Council Engine
+    participant OR as OpenRouter
+
+    U->>FE: 输入问题
+    FE->>BE: POST /message/stream (enable_thinking)
+    BE->>C: Stage1 并发请求
+    C->>OR: 多模型请求
+    OR-->>C: 结果/工具调用
+    C-->>BE: stage1_item / thinking
+    BE-->>FE: SSE stage1_item / thinking
+
+    C->>OR: Stage2 评审
+    OR-->>C: reviews
+    C-->>BE: stage2_item / stage2_complete
+    BE-->>FE: SSE stage2_item / stage2_complete
+
+    C->>OR: Stage3 综合
+    OR-->>C: final response
+    C-->>BE: stage3_complete
+    BE-->>FE: SSE stage3_complete
+
+    BE->>BE: storage.add_assistant_message
+    BE-->>FE: complete
+```
+
+**设计要点**：
+- Stage1/2 均可触发 thinking 工具调用（enable_thinking 控制）。
+- Stage2 跳过条件：Stage1 有效候选 < 2。
+- Stage3 始终执行（除非 Stage1 全失败）。
+
+---
+
+## 7. Health 与路由规则
+
+### 7.1 模型健康状态
+- `healthy == True` 才可执行
+- 失败次数达阈值后进入冷却
+- 401/403/404 等硬错误立即标记不可用
+
+### 7.2 路由优先级
+1. request payload `councilor_ids`
+2. conversation 记录的 `active_councilor_ids`
+3. 当前健康的默认 councilors
+
+**严格过滤**：任何不健康 ID 都会被忽略并列入 `ignored_ids`。
+
+### 7.3 模型选择与回退 (Resilience)
+Councilor 定义中包含 `model` (首选) 和 `model_candidates` (备选列表)。
+
+**选择逻辑**：
+1. 检查 `model` 是否健康 (`healthy=True`)。
+2. 若健康，直接使用。
+3. 若不健康，按序遍历 `model_candidates`。
+4. 选中第一个健康的 candidate 作为本次请求的执行模型。
+5. 若所有 candidate 均不可用，该 councilor 标记为不可用 (Ignored)。
+
+此机制确保单个模型 API 故障不会瘫痪整个系统。
+
+---
+
+## 8. 前端状态与 UI 策略
+
+### 8.1 关键状态
+- `activeThinking`: { [id]: { title, history[] } }
+- `enableThinking`: boolean（默认 true）
+- `currentConversation`: 当前对话对象
+
+### 8.2 已知行为差异（现状）
+- empty state 输入区 **没有** thinking toggle。
+- thinking 历史显示依赖 `CouncilAvatars` 中的 `ThinkingHistory` 弹层。
+
+---
+
+## 9. 运行与运维要点
+
+- **流式消息必存储**：`send_message_stream` 已写入 `storage.add_assistant_message`。
+- **thinking title 不持久化**：仅用于实时 UI。
+- **删除保护**：`verify_admin` 当前默认放行（debug）。生产必须启用真实 token 校验。
+
+---
+
+## 10. 常见问题排查
+
+1) 刷新后无消息
+- 检查是否使用 streaming 且后端保存成功。
+
+2) Console 无标题
+- 确认 enable_thinking 为 true
+- 确认模型具备 thinking capability
+
+3) Stage2 被跳过
+- Stage1 有效结果 < 2
+
+---
+
+*Last updated: 2025-02-XX*
