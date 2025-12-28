@@ -1,0 +1,53 @@
+
+[1m[46m RUN [49m[22m [36mv4.0.16 [39m[90mF:/OneDrive/PY/ZYZ/project/llm_council_sentinel/frontend[39m
+
+ [31m鉂?[39m src/hooks/__tests__/useParliamentEngine.test.js [2m([22m[2m5 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 50[2mms[22m[39m
+     [32m鉁?[39m initializes with idle stage[32m 22[2mms[22m[39m
+     [32m鉁?[39m starts session correctly[32m 8[2mms[22m[39m
+[31m     [31m脳[31m handles META event to set resolved councilors[39m[32m 13[2mms[22m[39m
+     [32m鉁?[39m accumulates thinking steps[32m 3[2mms[22m[39m
+     [32m鉁?[39m transitions to Stage 2[32m 2[2mms[22m[39m
+
+鈳幆鈳幆鈳幆 Failed Suites 1 鈳幆鈳幆鈳幆鈳?[39m
+
+ FAIL  src/__tests__/AppIntegration.test.jsx [ src/__tests__/AppIntegration.test.jsx ]
+Error: Failed to resolve import "date-fns" from "src/components/Sidebar.jsx". Does the file exist?
+  Plugin: vite:import-analysis
+  File: F:/OneDrive/PY/ZYZ/project/llm_council_sentinel/frontend/src/components/Sidebar.jsx:4:23
+  3  |  import { LayoutGrid, Plus, Fingerprint, Trash2, CheckSquare, MessageSquare } from "lucide-react";
+  4  |  import { useTranslation } from "react-i18next";
+  5  |  import { format } from "date-fns";
+     |                          ^
+  6  |  function Sidebar({
+  7  |    conversations = [],
+ 鉂?[22m TransformPluginContext._formatLog node_modules/vite/dist/node/chunks/config.js:29647:43
+ 鉂?[22m TransformPluginContext.error node_modules/vite/dist/node/chunks/config.js:29644:14
+ 鉂?[22m normalizeUrl node_modules/vite/dist/node/chunks/config.js:27767:18
+ 鉂?[22m node_modules/vite/dist/node/chunks/config.js:27825:32
+ 鉂?[22m TransformPluginContext.transform node_modules/vite/dist/node/chunks/config.js:27793:4
+ 鉂?[22m EnvironmentPluginContainer.transform node_modules/vite/dist/node/chunks/config.js:29445:14
+ 鉂?[22m loadAndTransform node_modules/vite/dist/node/chunks/config.js:23316:26
+
+鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆[1/2]鈳?[22m
+
+
+鈳幆鈳幆鈳幆鈳?[39m Failed Tests 1 鈳幆鈳幆鈳幆鈳?[39m
+
+ FAIL  src/hooks/__tests__/useParliamentEngine.test.js > useParliamentEngine > handles META event to set resolved councilors
+AssertionError: Target cannot be null or undefined.
+ 鉂?[22m src/hooks/__tests__/useParliamentEngine.test.js:67:52
+     65|         });
+     66| 
+     67|         expect(result.current.resolved_councilors).toHaveLength(1);
+       |                                                    ^
+     68|         expect(result.current.resolved_councilors[0].id).toBe('c1');
+     69|     });
+
+鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆[2/2]鈳?[22m
+
+
+[2m Test Files [22m [1m[31m2 failed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m4 passed[39m[22m[90m (5)[39m
+[2m   Start at [22m 00:23:17
+[2m   Duration [22m 4.42s[2m (transform 330ms, setup 618ms, import 486ms, tests 50ms, environment 5.65s)[22m
+

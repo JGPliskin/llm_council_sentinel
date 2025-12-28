@@ -1,0 +1,96 @@
+/* HUD Container */
+.tactical-hud {
+    @apply relative w-full border-t-2 border-zinc-800 bg-zinc-950/90 backdrop-blur-md transition-colors duration-500 font-sans;
+    height: 120px;
+    /* Desktop default */
+}
+
+/* Stage Indicator */
+.stage-indicator {
+    @apply absolute top-0 left-0 px-4 py-1 text-[10px] font-mono tracking-widest text-zinc-500 bg-zinc-900 border-b border-r border-zinc-800 rounded-br-lg z-10;
+}
+
+/* Agent Slots Container */
+.agent-slots {
+    @apply flex items-center justify-center gap-4 h-full w-full px-4 overflow-x-auto;
+}
+
+/* Agent Slice Card */
+.agent-slice {
+    @apply relative flex flex-col items-center justify-center w-32 h-20 bg-zinc-900/50 border border-zinc-800 rounded transition-all duration-300;
+    clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+}
+
+.agent-slice:hover {
+    @apply bg-zinc-900/80 transform -translate-y-1;
+}
+
+/* Avatar */
+.agent-avatar {
+    @apply text-2xl mb-1 select-none;
+}
+
+/* Name */
+.agent-name {
+    @apply text-xs font-bold text-zinc-300 tracking-wider;
+}
+
+/* Progress Bar */
+.progress-bar {
+    @apply w-20 h-1 bg-zinc-800 rounded-full mt-2 overflow-hidden;
+}
+
+.progress-fill {
+    @apply h-full bg-zinc-500 transition-all duration-300;
+}
+
+/* Score / Rank */
+.score {
+    @apply mt-1 text-sm font-mono font-bold text-zinc-100;
+}
+
+.rank-badge {
+    @apply absolute -top-2 -right-2 text-lg drop-shadow-md z-20;
+}
+
+/* Stage Overrides */
+.tactical-hud--stage1 {
+    border-top-color: theme('colors.orange.600');
+}
+
+.tactical-hud--stage2 {
+    border-top-color: theme('colors.blue.600');
+}
+
+.tactical-hud--stage3 {
+    border-top-color: theme('colors.purple.600');
+}
+
+/* Consensus Overlay */
+.consensus-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(4px);
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.overlay-content {
+    @apply flex flex-col items-center gap-2 text-purple-400 animate-pulse font-mono tracking-widest;
+}
+
+.overlay-content .icon {
+    @apply w-8 h-8;
+}
+
+.overlay-content span {
+    @apply text-lg font-bold;
+}
+
+.overlay-content .hint {
+    @apply text-xs text-purple-600/80;
+}

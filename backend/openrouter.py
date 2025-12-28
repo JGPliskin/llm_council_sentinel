@@ -3,7 +3,7 @@
 import httpx
 import json
 from typing import List, Dict, Any, Optional, Callable
-from backend.config import OPENROUTER_API_KEY, OPENROUTER_API_URL
+from config import OPENROUTER_API_KEY, OPENROUTER_API_URL
 
 async def stream_model(
     model: str,

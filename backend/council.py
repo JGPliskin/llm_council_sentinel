@@ -637,10 +637,11 @@ def _build_ranking_messages(
         "HARD CONSTRAINTS (MUST FOLLOW):\n"
         "1) Output EXACTLY ONE JSON object and nothing else.\n"
         "2) NO markdown fences, NO commentary.\n"
-        "3) Allowed top-level fields ONLY: ranking, scores, rationale.\n"
+        "3) Allowed top-level fields ONLY: ranking, scores, rationale, per_candidate_comments.\n"
         "4) 'ranking' field is REQUIRED. It must include ALL anon_ids exactly once.\n"
         "5) 'scores' (optional) must be 1-10 integers keyed by anon_id only.\n"
         "6) 'rationale' (optional) must be a string.\n"
+        "7) 'per_candidate_comments' (REQUIRED) must be a dictionary mapped by anon_id, with string values (max 200 chars each).\n"
         "ANY extra keys at top level = INVALID."
     )
     
@@ -713,16 +714,24 @@ def _parse_ranking_response(
 
     rationale = data.get("rationale")
 
+    per_candidate_comments = data.get("per_candidate_comments", {})
+    filtered_comments = {}
+    if isinstance(per_candidate_comments, dict):
+        for anon_id, comment in per_candidate_comments.items():
+            if anon_id in expected_set and isinstance(comment, str):
+                filtered_comments[anon_id] = comment[:200] # Truncate
+
     parsed = {
         "ranking": ranking_strs,
         "scores": filtered_scores,
         "rationale": rationale,
+        "per_candidate_comments": filtered_comments
     }
     
     # Strict Key Validation: Subset check
     # Top keys must be subset of allowed
     current_keys = set(data.keys())
-    allowed_keys = {"ranking", "scores", "rationale"}
+    allowed_keys = {"ranking", "scores", "rationale", "per_candidate_comments"}
     if not current_keys.issubset(allowed_keys):
         extra = current_keys - allowed_keys
         return None, f"Invalid extra keys found: {extra}"
