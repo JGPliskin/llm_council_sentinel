@@ -1,48 +1,72 @@
 # 🏛️ LLM Parliament (The Committee)
 
-> **Core Concept**: Why ask one LLM when you can consult a committee?
+> **Core Concept**: "Why ask one LLM when you can consult a Council of Philosophers?"
 
-**LLM Parliament** is a local web application that simulates a "Committee of AI Agents." Instead of a single chatbot response, it orchestrates a debate among distinct personas (e.g., Kant, Kojima, Nietzsche, Confucius), followed by a peer review process, and finally synthesizes a consensus answer via a Chairperson.
-
-## 🌟 Key Features
-
-### The 3-Stage Workflow
-1.  **Stage 1: Initial Opinions** 🧠
-    *   The user's prompt is sent to 4 distinct AI personas simultaneously.
-    *   **Parallel Processing**: Watch individual agents "think" and generate output in real-time.
-    *   **UI**: "Thinking Panel" logs the generation process.
-
-2.  **Stage 2: Peer Review** ⚔️
-    *   Agents read each other's answers anonymously.
-    *   **Connection Beams**: The HUD visualizes who is critiquing whom via dynamic SVG data beams.
-    *   They critique accuracy, insight, and alignment.
-
-3.  **Stage 3: Final Consensus** 🏆
-    *   A "Chairperson" LLM synthesizes a final report.
-    *   **Smart Beacon**: A holographic alert notifies the user when the consensus is ready, automatically silencing itself after the first view to reduce visual noise.
-
-### UX Highlights (Tactical v2.1)
-*   **Squad Assembly (Staging Area)**: Selecting agents in the Welcome Screen immediately "slots" them into the bottom HUD in a `STANDBY` state, giving the user a satisfying "Lock & Load" feeling before the simulation starts.
-*   **Tactical HUD**: A persistent dashboard tracking `STAGE [0X / 03]`. It uses chamfered cards (`AgentSlice`) to display real-time status (Generating, Reviewing, Complete).
-*   **Responsive Layout**: 
-    *   **Desktop**: "Squeezing Sidebar" for logs.
-    *   **Mobile**: Bottom Drawer + Floating Action Buttons.
-
-## 🛠️ Tech Stack
-
-*   **Framework**: React 18 (Modular Architecture)
-*   **State**: Custom TypeScript Hooks
-*   **Styling**: Tailwind CSS + Custom Keyframe Animations
-*   **Icons**: Lucide React
-*   **Build**: ES Modules (No-build implementation via `importmap`)
-
-## 🚀 Getting Started
-
-Since this is a client-side simulation demo:
-
-1.  Open `index.html` in a modern browser (via a local server like Live Server).
-2.  **Assemble your Council**: Click agent avatars to toggle them. Watch them appear in the HUD Staging Area.
-3.  Type a prompt or select a **Protocol Preset** to begin.
+**LLM Parliament** is a client-side React application that simulates a **Multi-Agent Consensus System**. It visualizes the process of "Ensemble Intelligence" where distinct AI personas (e.g., Kant, Kojima) debate a user's prompt, peer-review each other, and synthesize a final trusted answer.
 
 ---
-*Generated for the LLM Parliament Project.*
+
+## 🌟 Key Features (Current Implementation)
+
+### 1. The 3-Stage Tactical Workflow
+The application orchestrates a unidirectional pipeline, visualized through a responsive dashboard:
+
+*   **Stage 0: Squad Assembly (Welcome Screen)** 🛡️
+    *   **Compact Dashboard**: A "Pilot Cockpit" interface. Select agents and input directives in a single view.
+    *   **Visual Feedback**: Selecting an agent immediately "locks" them into the bottom HUD (`STANDBY` status).
+
+*   **Stage 1: Parallel Generation** 🧠
+    *   **Behavior**: Selected agents generate responses simultaneously.
+    *   **UI**: 
+        *   **Main Area**: Tabs allow switching between agent drafts.
+        *   **Right Panel (Thinking)**: A dedicated sidebar shows real-time "Thinking Logs" (e.g., "Analyzing ethical framework...").
+        *   **HUD**: Agent cards pulse Orange (`GENERATING`) with progress bars.
+
+*   **Stage 2: Peer Review** ⚔️
+    *   **Behavior**: Agents cross-examine each other's outputs.
+    *   **UI**:
+        *   **Right Panel (Evaluation)**: Automatically switches to show a feed of peer critiques (Criticism/Suggestion).
+        *   **HUD**: Renders dynamic SVG "Connection Beams" connecting the *Reviewer* (Blue) to the *Target* (Red).
+
+*   **Stage 3: Consensus Synthesis** 🏆
+    *   **Behavior**: A "Chairperson" agent weighs reviews and synthesizes a final report.
+    *   **UI**:
+        *   **Consensus Tab**: Unlocks only after synthesis is complete.
+        *   **Right Panel (Synthesis)**: Shows the Chairperson's logic (e.g., "Weighing Kant vs Nietzsche").
+        *   **Smart Beacon**: A holographic "Consensus Ready" FAB (Floating Action Button) appears to guide the user.
+
+### 2. Tactical HUD (Heads-Up Display)
+A persistent, cinematic status bar fixed to the bottom of the screen.
+*   **Stage Tracker**: Explicitly displays `STAGE [0X / 03]` with color coding.
+*   **Agent Slices**: Cards that morph states (`Standby` -> `Generating` -> `Reviewing` -> `Complete`).
+*   **Final Ranking**: Upon completion, displays the final score (e.g., 9.2) and rank (🥇) in the HUD.
+
+### 3. Responsive Layout System
+*   **Desktop**: 3-Column Layout (Sidebar Navigation | Main Content | Detail Panel). The Detail Panel "squeezes" the main content but can be toggled.
+*   **Mobile**: The Right Panel transforms into a **Bottom Drawer** overlay to save screen space.
+
+---
+
+## 🛠️ Technical Stack
+
+*   **Core**: React 18 (Functional Components + Hooks)
+*   **State Management**: `useParliamentEngine` (Custom Finite State Machine).
+*   **Styling**: Tailwind CSS + Custom Keyframe Animations (`animate-in`, `scanline`).
+*   **Icons**: Lucide React.
+*   **Runtime**: Zero-build ES Modules via `<script type="importmap">`.
+
+---
+
+## 🚀 Usage Guide
+
+1.  **Start**: Open `index.html` in a local server (VS Code Live Server recommended).
+2.  **Assemble**: Toggle Agent Avatars in the Welcome Screen.
+3.  **Init**: Type a prompt or select a Protocol Preset.
+4.  **Observe**: 
+    *   Watch the **HUD** for global progress.
+    *   Check the **Right Panel** for detailed logs.
+    *   Switch **Tabs** to read individual drafts.
+5.  **Finish**: When the "Consensus Ready" beacon appears, click it to read the final report.
+
+---
+*Current Version: v1.2.0*

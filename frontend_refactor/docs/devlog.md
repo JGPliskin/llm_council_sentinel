@@ -1,40 +1,41 @@
 # 📜 Development Log
 
-## v1.1.0 - The Tactical UX Upgrade
+## v1.2.0 - The "Dashboard" Layout Update
 **Date**: Current
 **Status**: Stable
 
-Major improvements to the user experience and visual feedback loop, focusing on the "Staging" phase and "Consensus" notifications.
+Addressed UX friction regarding the Welcome Screen layout and visual feedback.
 
-### 🎨 UX Enhancements
-*   **Squad Assembly (Staging Area)**: Fixed the "Black Void" issue in the HUD during the Welcome Screen. Now, when a user selects an agent, a corresponding `STANDBY` card immediately slides into the HUD slots. This creates a cohesive "team building" feel.
-*   **Smart Beacon Logic**: 
-    *   The "Consensus Ready" pulsing button and HUD overlay now track `hasViewedConsensus`.
-    *   Once the user clicks to view Stage 3, the aggressive animations (Ping) and overlays are permanently dismissed for that session, preventing visual clutter.
-*   **Stage Indicators**: Added a dedicated `STAGE [0X / 03]` section to the HUD status bar with stage-specific color coding (Orange/Blue/Purple) for better orientation.
+### 🎨 Changes
+1.  **Compact Welcome Screen**:
+    *   Moved the **Input Field** *above* the Protocol Presets.
+    *   Changed Protocol Presets from large cards to a compact **Quick Launch Bar**.
+    *   Optimized spacing so the entire setup flow fits on a standard laptop screen without scrolling.
+2.  **HUD Staging Logic**:
+    *   The HUD now stays visible during the Welcome Screen.
+    *   Selecting an agent adds a `STANDBY` card to the HUD immediately, providing instant visual confirmation of the squad composition.
+
+---
+
+## v1.1.0 - The Tactical HUD & Notifications
+**Date**: Previous Release
+
+Major improvements to the status visualization and notification system.
+
+### 🎨 Changes
+1.  **Smart Beacon**:
+    *   Implemented `hasViewedConsensus` state.
+    *   The large "Consensus Ready" overlay now permanently disappears after the user clicks it once, preventing it from blocking the view during subsequent analysis.
+2.  **Stage Indicators**:
+    *   Added explicit `STAGE [0X / 03]` text to the HUD status bar.
+    *   Added stage-specific color coding (Orange -> Blue -> Purple).
 
 ---
 
 ## v1.0.0 - Modular Refactor
-**Date**: Previous Release
+**Date**: Initial Architecture Shift
 
 Transitioned from a monolithic prototype to a scalable component architecture.
-
-### 🛠️ Architecture
-*   **Split Codebase**: Extracted `TacticalHUD`, `StageContentArea`, and `WelcomeScreen` into dedicated files.
-*   **Custom Hook**: Created `useParliamentEngine` to isolate the simulation state machine from the UI logic.
-*   **Type Safety**: Enforced strict TypeScript interfaces for `AgentProfile`, `PeerReview`, and `SimulationStage`.
-
----
-
-## v0.1.0 - The "Parliament" MVP Release
-**Date**: October 26, 2023
-**Status**: Legacy Demo
-
-The first major milestone of the **LLM Parliament** is complete. We have successfully simulated the full "Committee" workflow in a client-side environment.
-
-### 🚀 Features Shipped
-*   **The 3-Stage Engine**: Transitions from *Generation* to *Peer Review* to *Consensus*.
-*   **Responsive Split-View**: Squeezing Sidebar (Desktop) and Bottom Drawer (Mobile).
-*   **Heads-Up Display (HUD)**: Persistent bottom bar with simulated data visualization.
-*   **Visual Polish**: Integrated `Lucide React` and custom CSS keyframes for a Sci-Fi terminal aesthetic.
+*   Extracted `TacticalHUD`, `StageContentArea`, and `WelcomeScreen`.
+*   Created `useParliamentEngine` hook.
+*   Established strict TypeScript definitions.
