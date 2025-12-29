@@ -61,15 +61,6 @@ function StageContentArea({
     // Refactor used explicit 'purple' / 'orange'.
     // I will use explicit styles based on color or standard mapped classes.
 
-    // Fallback if no data
-    if (!contentData) {
-        return (
-            <div className="flex-1 flex flex-col h-full bg-zinc-950 p-10 items-center justify-center text-zinc-600 font-mono animate-pulse">
-                {isFinal ? 'Awaiting Consensus...' : 'Waiting for data stream...'}
-            </div>
-        );
-    }
-
     // Render
     return (
         <div className="flex-1 flex flex-col h-full bg-zinc-950 overflow-hidden relative">
@@ -158,7 +149,11 @@ function StageContentArea({
                         <div className="absolute bottom-0 left-0 w-4 h-4 border-b-2 border-l-2 border-zinc-600"></div>
                         <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-zinc-600"></div>
 
-                        {contentData.status === 'thinking' ? (
+                        {!contentData ? (
+                            <div className="flex items-center justify-center h-40 text-zinc-500 font-mono animate-pulse">
+                                {isFinal ? 'Awaiting Consensus...' : 'Waiting for data stream...'}
+                            </div>
+                        ) : contentData.status === 'thinking' ? (
                             <div className="flex items-center justify-center h-40 text-zinc-500 font-mono animate-pulse">
                                 Processing...
                             </div>
@@ -175,7 +170,7 @@ function StageContentArea({
                             </div>
                         )}
 
-                        {isFinal && (
+                        {isFinal && contentData && (
                             <div className="mt-16 bg-purple-900/10 border border-purple-500/30 p-8 text-center relative overflow-hidden">
                                 <div className="absolute inset-0 bg-grid-pattern opacity-10"></div>
                                 <div className="relative z-10 flex flex-col items-center gap-4">
@@ -187,7 +182,7 @@ function StageContentArea({
                             </div>
                         )}
 
-                        {!isFinal && contentData.status !== 'thinking' && (
+                        {!isFinal && contentData && contentData.status !== 'thinking' && (
                             <div className="mt-12 flex items-center gap-4 p-4 bg-zinc-950 border border-zinc-800 text-zinc-500 font-mono text-xs">
                                 <Cpu className="w-4 h-4" />
                                 <span>Signature Verified // Latency: 42ms // Trust Score: 98.4%</span>

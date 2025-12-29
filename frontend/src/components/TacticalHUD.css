@@ -17,27 +17,60 @@
 
 /* Agent Slice Card */
 .agent-slice {
-    @apply relative flex flex-col items-center justify-center w-32 h-20 bg-zinc-900/50 border border-zinc-800 rounded transition-all duration-300;
+    @apply relative flex flex-col items-center justify-center flex-1 min-w-[120px] h-20 bg-zinc-900/50 border border-zinc-800 rounded transition-all duration-300;
     clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+    overflow: hidden;
 }
 
 .agent-slice:hover {
     @apply bg-zinc-900/80 transform -translate-y-1;
 }
 
+/* Background Patterns */
+.bg-dot-pattern {
+    background-image: radial-gradient(rgba(255, 255, 255, 0.1) 1px, transparent 1px);
+    background-size: 4px 4px;
+}
+
+.bg-stripe-pattern {
+    background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.05) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.05) 50%, rgba(255, 255, 255, 0.05) 75%, transparent 75%, transparent);
+    background-size: 20px 20px;
+}
+
+/* Animations */
+@keyframes scanline {
+    0% {
+        background-position: 0 0;
+    }
+
+    100% {
+        background-position: 0 100%;
+    }
+}
+
+@keyframes slideInRight {
+    0% {
+        transform: translateX(-100%);
+    }
+
+    100% {
+        transform: translateX(100%);
+    }
+}
+
 /* Avatar */
 .agent-avatar {
-    @apply text-2xl mb-1 select-none;
+    @apply text-2xl mb-1 select-none relative z-10;
 }
 
 /* Name */
 .agent-name {
-    @apply text-xs font-bold text-zinc-300 tracking-wider;
+    @apply text-xs font-bold text-zinc-300 tracking-wider relative z-10;
 }
 
 /* Progress Bar */
 .progress-bar {
-    @apply w-20 h-1 bg-zinc-800 rounded-full mt-2 overflow-hidden;
+    @apply w-20 h-1 bg-zinc-800 rounded-full mt-2 overflow-hidden relative z-10;
 }
 
 .progress-fill {
@@ -46,7 +79,7 @@
 
 /* Score / Rank */
 .score {
-    @apply mt-1 text-sm font-mono font-bold text-zinc-100;
+    @apply mt-1 text-sm font-mono font-bold text-zinc-100 relative z-10;
 }
 
 .rank-badge {

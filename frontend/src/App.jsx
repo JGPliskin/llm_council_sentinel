@@ -22,7 +22,7 @@ function AppContent() {
   const [conversations, setConversations] = useState([]);
   const [allCouncilors, setAllCouncilors] = useState([]);
   const [selectedAgentIds, setSelectedAgentIds] = useState(['immanuel_kant', 'donald_trump', 'hideo_kojima']);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 768);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
 
   // === Engine Hook ===
@@ -36,6 +36,10 @@ function AppContent() {
 
   useEffect(() => {
     if (conversationId) {
+      // Prevent redundant reload if we just created this session locally
+      if (engine.conversation?.id === conversationId && engine.stage !== 'idle') {
+        return;
+      }
       loadConversationAndStates(conversationId);
     } else {
       engine.reset();
@@ -136,6 +140,14 @@ function AppContent() {
     <div className="flex flex-col h-screen w-full bg-zinc-950 overflow-hidden font-sans text-zinc-100">
       <div className="flex-1 flex overflow-hidden relative">
 
+        {/* Mobile Overlay */}
+        {isSidebarOpen && (
+          <div
+            className="absolute inset-0 bg-black/50 z-30 md:hidden backdrop-blur-sm transition-opacity"
+            onClick={() => setIsSidebarOpen(false)}
+          />
+        )}
+
         {/* Sidebar */}
         <Sidebar
           conversations={conversations}
@@ -171,24 +183,52 @@ function AppContent() {
             />
           )}
 
-          {/* Desktop Toggle Buttons */}
-          <div className="absolute bottom-6 left-6 z-20 flex gap-2 pointer-events-auto">
+          {/* Desktop Toggle Buttons (Tactical Style) */}
+          <div className="absolute bottom-6 left-6 z-20 flex gap-1 pointer-events-auto">
+            {/* Sidebar Toggle */}
             <button
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-              className="hidden md:flex items-center justify-center w-10 h-10 bg-zinc-900 border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-all shadow-lg backdrop-blur-sm"
+              className={`
+                 relative group flex items-center justify-center w-12 h-10 border-t border-b border-l transform skew-x-[-15deg] transition-all duration-300
+                 ${isSidebarOpen ? 'bg-zinc-900 border-zinc-700 text-zinc-400' : 'bg-zinc-950/80 border-zinc-600 text-zinc-500 hover:text-white hover:border-orange-500/50'}
+              `}
               title="Toggle Sidebar"
             >
-              {isSidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+              <div className="transform skew-x-[15deg] flex items-center justify-center">
+                {isSidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+              </div>
+              {/* Active Indicator */}
+              {isSidebarOpen && <div className="absolute bottom-0 left-0 w-full h-0.5 bg-orange-500/50"></div>}
             </button>
-            {!isPanelOpen && engine.stage !== 'idle' && (
+
+            {/* Detail Panel Toggle */}
+            {engine.stage !== 'idle' && (
               <button
-                onClick={() => setIsPanelOpen(true)}
-                className="hidden md:flex items-center justify-center w-10 h-10 bg-zinc-900 border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-all shadow-lg backdrop-blur-sm"
-                title="Open Detail Panel"
+                onClick={() => setIsPanelOpen(!isPanelOpen)}
+                className={`
+                   relative group flex items-center justify-center w-12 h-10 border transform skew-x-[-15deg] hover:z-10 transition-all duration-300
+                   ${isPanelOpen ? 'bg-zinc-900 border-zinc-700 text-zinc-400' : 'bg-zinc-950/80 border-zinc-600 text-zinc-500 hover:text-white hover:border-orange-500/50'}
+                `}
+                title="Toggle Detail Panel"
               >
-                <PanelRightOpen size={18} />
+                <div className="transform skew-x-[15deg] flex items-center justify-center">
+                  {isPanelOpen ? <PanelRightOpen size={16} className="rotate-180" /> : <PanelRightOpen size={16} />}
+                </div>
+                {/* Active Indicator */}
+                {isPanelOpen && <div className="absolute bottom-0 right-0 w-full h-0.5 bg-orange-500/50"></div>}
               </button>
             )}
+
+            {/* Reload/Reset (Optional, for style matching) */}
+            <button
+              onClick={() => { if (confirm('Reset Session?')) engine.reset(); }}
+              className="relative group flex items-center justify-center w-12 h-10 border-t border-b border-r bg-zinc-950/80 border-zinc-600 text-zinc-500 hover:text-white hover:border-orange-500/50 transform skew-x-[-15deg] transition-all duration-300"
+              title="Reset Session"
+            >
+              <div className="transform skew-x-[15deg]">
+                <RotateCcw size={14} />
+              </div>
+            </button>
           </div>
         </div>
 
@@ -232,7 +272,8 @@ function App() {
     <>
       <Toaster position="top-center" richColors theme="dark" closeButton />
       <Routes>
-        <Route path="/*" element={<AppContent />} />
+        <Route path="/" element={<AppContent />} />
+        <Route path="/c/:conversationId" element={<AppContent />} />
       </Routes>
     </>
   );

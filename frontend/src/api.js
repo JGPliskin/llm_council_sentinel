@@ -7,7 +7,9 @@ import i18n from "./i18n";
 
 // In production (Docker), use relative path to go through Nginx proxy
 // In development, use direct backend URL
-const API_BASE = import.meta.env.PROD ? "" : "http://localhost:8010";
+// In production (Docker), use relative path to go through Nginx proxy
+// In development, use direct backend URL
+const API_BASE = "http://localhost:8010";
 
 // Constants
 export const MAX_MESSAGE_LENGTH = 1000;
@@ -110,9 +112,9 @@ export const api = {
    * Get a specific conversation.
    */
   async getConversation(conversationId) {
-    const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}`,
-    );
+    const url = `${API_BASE}/api/conversations/${conversationId}`;
+    console.log('[API] getConversation fetching:', url);
+    const response = await fetch(url);
     if (!response.ok) {
       throw new Error("Failed to get conversation");
     }

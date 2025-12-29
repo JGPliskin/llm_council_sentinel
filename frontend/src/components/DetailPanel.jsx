@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
+import { X } from 'lucide-react';
 import { getCouncilorUIConfig } from '@/config/councilors';
 
 /**
@@ -48,8 +49,14 @@ export function DetailPanel({ stage, activeTab, thinkingSteps, evaluationComment
                 <h2 className="text-sm font-bold tracking-widest uppercase text-zinc-400">
                     {title || "SYSTEM LOG"}
                 </h2>
-                {/* Close button for mobile or just in general? (Spec says can be collapsed) */}
-                {/* <button onClick={onClose} className="text-zinc-500 hover:text-white">✕</button> */}
+                {/* Close Button */}
+                <button
+                    onClick={onClose}
+                    className="p-1.5 text-zinc-500 hover:text-white hover:bg-zinc-800 border border-transparent hover:border-zinc-700 transition-all group"
+                    title="Close Panel"
+                >
+                    <X className="w-4 h-4 group-hover:rotate-90 transition-transform duration-300" />
+                </button>
             </div>
 
             {/* Content */}

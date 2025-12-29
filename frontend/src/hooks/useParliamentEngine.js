@@ -76,7 +76,12 @@ export function useParliamentEngine() {
      * 恢复会话 (History View)
      */
     const loadSession = useCallback((conv) => {
-        if (!conv) return;
+        if (!conv) {
+            console.warn("[loadSession] No conversation provided");
+            return;
+        }
+
+        console.log("[loadSession] Loading:", conv.id, conv);
 
         // Hard reset internal states first, but keep conversation
         // setStage('idle'); // Don't reset to idle immediately, set to correct stage below
@@ -97,12 +102,27 @@ export function useParliamentEngine() {
 
         // Determine Stage
         const lastMsg = conv.messages?.[conv.messages.length - 1];
+        console.log("[loadSession] Last msg:", lastMsg);
 
         // If no assistant message, it's just a new conversation or user only?
         if (!lastMsg || lastMsg.role !== 'assistant') {
+            console.warn("[loadSession] No assistant message found, defaulting to IDLE");
             setStage('idle');
             return;
         }
+
+        // Restore Resolved Councilors (Robust Fallback)
+        let resolved = conv.metadata?.resolved_councilors || [];
+        if (resolved.length === 0 && lastMsg.stage1 && lastMsg.stage1.length > 0) {
+            console.log("[loadSession] Metadata missing resolved_councilors, extracting from stage1...");
+            resolved = lastMsg.stage1.map(item => ({
+                id: item.councilor_id,
+                name: item.councilor_name || item.councilor_id,
+                avatar: '?', // Best effort
+                model: item.model
+            }));
+        }
+        setResolvedCouncilors(resolved);
 
         // Restore Stage 1
         if (lastMsg.stage1 && lastMsg.stage1.length > 0) {
@@ -111,14 +131,39 @@ export function useParliamentEngine() {
         }
 
         // Restore Stage 2
-        if (lastMsg.stage2 && lastMsg.stage2.length > 0) {
-            setStage2Results(lastMsg.stage2);
-            setStage('stage2');
+        // Backend v2 returns { reviews: [], anon_map: {} }, Legacy returned [].
+        // We need to handle both.
+        let stage2Data = lastMsg.stage2;
+        let reviews = [];
+        let anonMap = lastMsg.metadata?.anon_to_councilor;
 
-            const anonMap = lastMsg.metadata?.anon_to_councilor;
+        if (stage2Data) {
+            if (Array.isArray(stage2Data)) {
+                // Legacy Array format
+                reviews = stage2Data;
+                if (!anonMap && stage2Data.length > 0) {
+                    // Try to infer or check if anon_map is embedded (unlikely in legacy, usually inside metadata)
+                }
+            } else if (typeof stage2Data === 'object' && stage2Data.reviews) {
+                // v2 Object format
+                reviews = stage2Data.reviews;
+                if (stage2Data.anon_map) {
+                    anonMap = stage2Data.anon_map;
+                }
+            }
+        }
+
+        if (reviews && reviews.length > 0) {
+            setStage2Results(reviews);
+            // If we are fully done, show stage2 or stage3. If stage3 exists, we overwrite stage anyway.
+            // If only stage2 is done, set stage2.
+            if (!lastMsg.stage3) {
+                setStage('stage2');
+            }
+
             if (anonMap) {
                 const newComments = {};
-                lastMsg.stage2.forEach(review => {
+                reviews.forEach(review => {
                     const comments = review.per_candidate_comments || {};
                     Object.entries(comments).forEach(([anonId, comment]) => {
                         const targetId = anonMap[anonId];
@@ -126,6 +171,7 @@ export function useParliamentEngine() {
                             if (!newComments[targetId]) newComments[targetId] = [];
                             newComments[targetId].push({
                                 fromId: review.judge_councilor_id,
+                                fromName: review.judge_councilor_name, // If available
                                 comment,
                                 score: review.scores?.[anonId]
                             });
@@ -135,7 +181,7 @@ export function useParliamentEngine() {
                 setEvaluationComments(newComments);
 
                 // Restore Rankings
-                const rankings = calculateAggregateRankings(lastMsg.stage2, anonMap);
+                const rankings = calculateAggregateRankings(reviews, anonMap);
                 setAggregateRankings(rankings);
             }
         }
@@ -152,9 +198,11 @@ export function useParliamentEngine() {
             setHasViewedConsensus(false);
         }
 
-        // Set default tab
-        if (conv.metadata?.resolved_councilors?.length > 0) {
-            setActiveTab(conv.metadata.resolved_councilors[0].id);
+        // Set default tab (Use the resolved local variable)
+        if (resolved.length > 0) {
+            setActiveTab(resolved[0].id);
+        } else {
+            console.warn("[loadSession] No councilors resolved, activeTab not set");
         }
 
         setIsLoading(false);
