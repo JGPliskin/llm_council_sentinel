@@ -16,11 +16,11 @@ async def mock_stream_model(*args, **kwargs):
     on_thinking = kwargs.get('on_thinking')
     if on_thinking:
         # Simulate thinking output
-        await on_thinking("Thinking process started...")
-        await on_thinking("Analyzing request...")
+        await on_thinking({"title": "Thinking process started...", "bullet_id": "b1", "op": "append"})
+        await on_thinking({"title": "Analyzing request...", "bullet_id": "b2", "op": "append"})
     
     return {
-        "content": '{"councilor_id": "test", "status": "ok", "answer_markdown": "Test Answer"}', 
+        "content": "Test Answer", 
         "model": "test-model"
     }
 

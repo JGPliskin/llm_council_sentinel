@@ -79,10 +79,10 @@ def test_stream_model_parsing_sync():
         mock_client.__aenter__ = MagicMock(side_effect=lambda: async_return(mock_client))
         mock_client.__aexit__ = MagicMock(side_effect=lambda *a, **k: async_return(None))
 
-        thinking_titles = []
+        thinking_payloads = []
         # Test both sync and async callbacks (backend supports both now)
-        async def on_thinking(title):
-            thinking_titles.append(title)
+        async def on_thinking(payload):
+            thinking_payloads.append(payload)
 
         with patch('backend.openrouter.httpx.AsyncClient', return_value=mock_client), \
              patch('backend.openrouter.OPENROUTER_API_KEY', "test-key"):
@@ -94,7 +94,7 @@ def test_stream_model_parsing_sync():
             )
 
         # Verify thinking callback was triggered
-        assert "Analyzing Request" in thinking_titles
+        assert thinking_payloads[0]["title"] == "Analyzing Request"
         assert result["content"] == "Here is the answer."
 
     asyncio.run(run_test())

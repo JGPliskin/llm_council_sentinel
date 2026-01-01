@@ -658,34 +658,80 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
         # Persistence Accumulator
         thinking_log = {"stage1": {}, "stage2": {}, "stage3": {}}
         thinking_count = 0
+        thinking_seq = {}
+
+        def _next_bullet_id(stage: str, cid: str) -> str:
+            key = f"{stage}:{cid}"
+            thinking_seq[key] = thinking_seq.get(key, 0) + 1
+            return f"{cid}-{stage}-{thinking_seq[key]}"
+
+        def _normalize_thinking_payload(payload: Any, stage: str, cid: str) -> Dict[str, Any]:
+            data = payload if isinstance(payload, dict) else {"title": str(payload)}
+            bullet_id = data.get("bullet_id") or _next_bullet_id(stage, cid)
+            op = data.get("op") or "append"
+            return {
+                "bullet_id": str(bullet_id),
+                "title": str(data.get("title") or "").strip(),
+                "detail": str(data.get("detail") or "").strip() or None,
+                "op": op
+            }
         
-        async def on_thinking(cid, stage, title, model=None):
+        async def on_thinking(cid, stage, payload, model=None):
             if not body.enable_thinking:
                 return
 
             nonlocal thinking_count
             t_val = round(time.time() - start_time, 2)
+            normalized = _normalize_thinking_payload(payload, stage, cid)
             
             # Emit Event
             event = {
                 "type": "thinking",
                 "stage": stage,
                 "councilor_id": cid,
-                "model": model, 
-                "delta": title,
-                "is_title": True,
+                "model": model,
+                "bullet_id": normalized["bullet_id"],
+                "title": normalized["title"],
+                "detail": normalized["detail"],
+                "op": normalized["op"],
                 "t": t_val
             }
-            await event_queue.put(f"data: {json.dumps(event)}\n\n")
+            await event_queue.put(f"data: {json.dumps(event, ensure_ascii=False)}\n\n")
             
             # Persistence Log (Limit: 50 per model/stage, 200 total)
             if thinking_count < 200 and stage in thinking_log:
-                if cid not in thinking_log[stage]:
-                     thinking_log[stage][cid] = []
-                
-                if len(thinking_log[stage][cid]) < 50:
-                     thinking_log[stage][cid].append({"t": t_val, "title": title})
-                     thinking_count += 1
+                entry = thinking_log[stage].setdefault(cid, {"model": model, "status": "thinking", "steps": []})
+                entry["model"] = model or entry.get("model")
+                entry["status"] = "thinking"
+
+                steps = entry["steps"]
+                if normalized["op"] == "update":
+                    for step in steps:
+                        if step.get("bullet_id") == normalized["bullet_id"]:
+                            if normalized["title"]:
+                                step["title"] = normalized["title"]
+                            if normalized["detail"] is not None:
+                                step["detail"] = normalized["detail"]
+                            step["t"] = t_val
+                            break
+                    else:
+                        if len(steps) < 50:
+                            steps.append({
+                                "bullet_id": normalized["bullet_id"],
+                                "title": normalized["title"],
+                                "detail": normalized["detail"],
+                                "t": t_val
+                            })
+                            thinking_count += 1
+                else:
+                    if len(steps) < 50:
+                        steps.append({
+                            "bullet_id": normalized["bullet_id"],
+                            "title": normalized["title"],
+                            "detail": normalized["detail"],
+                            "t": t_val
+                        })
+                        thinking_count += 1
 
         try:
             # Add user message
@@ -729,6 +775,15 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
             # Callback that puts items into the queue (NOT a generator)
             async def on_stage1_item(item):
                 await event_queue.put(f"data: {json.dumps({'type': 'stage1_item', 'data': item})}\n\n")
+            
+            async def on_stage1_answer_delta(cid, delta):
+                event = {"type": "stage1_answer_delta", "councilor_id": cid, "delta": delta}
+                await event_queue.put(f"data: {json.dumps(event, ensure_ascii=False)}\n\n")
+
+            async def on_stage1_answer_done(cid):
+                if cid in thinking_log.get("stage1", {}):
+                    thinking_log["stage1"][cid]["status"] = "done"
+                await event_queue.put(f"data: {json.dumps({'type': 'stage1_answer_done', 'councilor_id': cid})}\n\n")
 
             # Start stage1 task
             stage1_task = asyncio.create_task(
@@ -737,6 +792,8 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                     active_councilors, 
                     on_result=on_stage1_item,
                     on_thinking=on_thinking,
+                    on_answer_delta=on_stage1_answer_delta,
+                    on_answer_done=on_stage1_answer_done,
                     enable_thinking=body.enable_thinking
                 )
             )
@@ -816,6 +873,14 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
 
             # --- Stage 3: Synthesize final answer ---
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
+
+            async def on_stage3_answer_delta(delta):
+                event = {
+                    "type": "stage3_answer_delta",
+                    "councilor_id": active_chairman.get("id") if active_chairman else None,
+                    "delta": delta
+                }
+                await event_queue.put(f"data: {json.dumps(event, ensure_ascii=False)}\n\n")
             
             stage3_task = asyncio.create_task(
                 stage3_synthesize_final(
@@ -824,6 +889,7 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                     stage2_result, 
                     active_chairman,
                     on_thinking=on_thinking,
+                    on_answer_delta=on_stage3_answer_delta,
                     enable_thinking=body.enable_thinking
                 )
             )
@@ -850,6 +916,7 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                 "anon_to_councilor": stage2_result.get("anon_map", {}),
                 "aggregate_rankings": aggregate_rankings,
                 "spec_version": "stage2_v1.2",
+                "thinking": thinking_log,
             }
             storage.add_assistant_message(
                 conversation_id, stage1_results, stage2_result, stage3_result, metadata

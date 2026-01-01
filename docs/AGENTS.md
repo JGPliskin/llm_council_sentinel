@@ -1,7 +1,13 @@
 ﻿# AGENTS.md - 技术架构与工作流（最新版）
 
 本文件是 LLM Council Sentinel 的权威技术说明文档，覆盖架构、关键流程、数据结构、边界条件与运行规则。
-文档内容基于当前代码实现（以 `backend/` 与 `frontend/src/` 为准），用于“给任何人看，都没有歧义”的级别说明。
+文档内容基于当前代码实现（以 `backend/` 与 `frontend/src/` 为准），用于"给任何人看，都没有歧义"的级别说明。
+
+> **相关文档**
+> - [Architecture.md](./Architecture.md) - 系统架构总览
+> - [API_REFERENCE.md](./API_REFERENCE.md) - API 接口参考
+> - [DATA_SCHEMA.md](./DATA_SCHEMA.md) - 数据模型定义
+> - [配置说明.md](./配置说明.md) - 环境配置指南
 
 ---
 
@@ -42,11 +48,116 @@ LLM Council 是一个三阶段异步协作系统：
 | `ChatInterface.jsx` | 核心 UI | 输入区、Stage1/2/3 渲染、SSE 事件分发、空白态 |
 | `CouncilAvatars.jsx` | 成员展示 | 头像状态、不可用列表、thinking 历史展开 |
 | `ThinkingConsole.jsx` | 全局 Console | 实时显示思考标题流 |
+| `TacticalHUD.jsx` | 战术 HUD | 底部状态栏、Councilor 卡片、共识信号 |
 | `api.js` | API 客户端 | 所有 REST/SSE 请求封装 |
 
 ---
 
-## 3. 技术架构图
+## 3. Councilor 与模型配置
+
+系统采用 **两级模型配置**：全局模型池 (`GLOBAL_MODEL_POOL`) + Councilor/Chairman 角色定义。
+
+**当前角色**:
+- **Councilors**: 康德 (🧠)、特朗普 (🧱)、小岛秀夫 (🎮)
+- **Chairman**: 共识主席 (🪶)
+
+**配置结构概览**:
+- `model_candidates`: 候选模型列表（按优先级排序，自动回退）
+- `persona_path`: Stage1 人设文件路径
+- `judge_persona_path`: Stage2 评审人设路径
+- `stage_limits`: 阶段级超时与 Token 限制
+
+> **完整配置详情请参见 [配置说明.md](./配置说明.md)**，包含：
+> - 模型池字段结构与示例
+> - Councilor/Chairman 完整定义
+> - 并发与超时参数
+> - 健康检查与重试机制
+
+---
+
+## 4. Thinking 工具定义
+
+### 4.1 工具 Schema
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "emit_thinking",
+    "description": "Emit a thinking step payload for UI display.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Short title of the thinking step"
+        },
+        "detail": {
+          "type": "string",
+          "description": "Optional detailed explanation"
+        },
+        "bullet_id": {
+          "type": "string",
+          "description": "Unique ID for this thinking bullet (auto-generated if not provided)"
+        },
+        "op": {
+          "type": "string",
+          "enum": ["append", "update"],
+          "description": "Operation type: append new or update existing"
+        }
+      },
+      "required": ["title"]
+    }
+  }
+}
+```
+
+### 4.2 工具调用示例
+
+```json
+{
+  "name": "emit_thinking",
+  "arguments": {
+    "title": "分析问题背景",
+    "detail": "首先需要理解用户提问的具体语境和期望...",
+    "bullet_id": "step-1",
+    "op": "append"
+  }
+}
+```
+
+### 4.3 前端接收格式
+
+```json
+{
+  "type": "thinking",
+  "stage": "stage1",
+  "councilor_id": "immanuel_kant",
+  "model": "xiaomi/mimo-v2-flash:free",
+  "bullet_id": "immanuel_kant-stage1-1",
+  "title": "分析问题背景",
+  "detail": "首先需要理解用户提问的具体语境...",
+  "op": "append",
+  "t": 1.23
+}
+```
+
+| 字段 | 类型 | 描述 |
+|---|---|---|
+| `stage` | string | 当前阶段 (`stage1`/`stage2`/`stage3`) |
+| `councilor_id` | string | 发出 Thinking 的 Councilor ID |
+| `model` | string | 使用的模型 ID |
+| `bullet_id` | string | Thinking 条目唯一 ID |
+| `title` | string | Thinking 标题 |
+| `detail` | string | Thinking 详情 (可选) |
+| `op` | string | 操作类型 (`append`/`update`) |
+| `t` | number | 相对时间戳 (秒，从请求开始计) |
+
+**注意**：Thinking 事件现已持久化到 `metadata.thinking` 中，但有数量限制（每 Councilor/阶段 50 条，总计 200 条）。
+
+---
+
+## 5. 技术架构图
 
 ```mermaid
 flowchart TB
@@ -67,9 +178,9 @@ flowchart TB
 
 ---
 
-## 4. 数据与协议（无歧义定义）
+## 6. 数据与协议（无歧义定义）
 
-### 4.1 Conversation JSON Schema（文件存储）
+### 6.1 Conversation JSON Schema（文件存储）
 **文件路径**：`data/conversations/{conversation_id}.json`
 
 ```json
@@ -87,7 +198,8 @@ flowchart TB
       "metadata": {
         "anon_to_councilor": { "anon_1": "councilor_id" },
         "aggregate_rankings": [ { "councilor_id": "...", "average_rank": 1.5, "rankings_count": 3 } ],
-        "spec_version": "stage2_v1.2"
+        "spec_version": "stage2_v1.2",
+        "thinking": { "stage1": {...}, "stage2": {...}, "stage3": {...} }
       }
     }
   ],
@@ -100,9 +212,11 @@ flowchart TB
 
 **说明**：
 - 流式与非流式均会保存完整 `assistant` 消息。
-- `metadata` 不包含 thinking title（按当前需求）。
+- `metadata.thinking` 现已包含 Thinking 步骤日志（有数量限制）。
 
-### 4.2 Stage1 Result 结构
+> 详细字段说明参见 [DATA_SCHEMA.md](./DATA_SCHEMA.md)
+
+### 6.2 Stage1 Result 结构
 ```json
 {
   "councilor_id": "...",
@@ -123,7 +237,7 @@ flowchart TB
 }
 ```
 
-### 4.3 Stage2 Result 结构
+### 6.3 Stage2 Result 结构
 ```json
 {
   "skipped": false,
@@ -143,7 +257,7 @@ flowchart TB
 }
 ```
 
-### 4.4 Stage3 Result 结构
+### 6.4 Stage3 Result 结构
 ```json
 {
   "status": "ok|failed",
@@ -156,45 +270,56 @@ flowchart TB
 
 ---
 
-## 5. API 与 SSE 事件协议
+## 7. API 与 SSE 事件协议
 
-### 5.1 REST API
-- `GET /api/councilors?refresh=<bool>`
-- `POST /api/conversations`
-- `GET /api/conversations`
-- `GET /api/conversations/{id}`
-- `POST /api/conversations/{id}/message`
-- `POST /api/conversations/{id}/message/stream`
-- `DELETE /api/conversations/{id}`
-- `POST /api/conversations/bulk-delete`
+### 7.1 REST API
 
-### 5.2 SSE 事件流（`/message/stream`）
+| 方法 | 路径 | 描述 | 认证 | Rate Limit |
+|---|---|---|---|---|
+| `GET` | `/api/councilors?refresh=<bool>` | 获取 Councilor 列表 | 否 | — |
+| `POST` | `/api/conversations` | 创建新对话 | 否 | — |
+| `GET` | `/api/conversations` | 获取对话列表 | 否 | — |
+| `GET` | `/api/conversations/{id}` | 获取单个对话 | 否 | — |
+| `POST` | `/api/conversations/{id}/message` | 发送消息 (同步) | 否 | 5/min |
+| `POST` | `/api/conversations/{id}/message/stream` | 发送消息 (流式) | 否 | 5/min |
+| `DELETE` | `/api/conversations/{id}` | 删除对话 | **X-Admin-Token** | — |
+| `POST` | `/api/conversations/bulk-delete` | 批量删除 | **X-Admin-Token** | — |
+
+> 完整 API 文档参见 [API_REFERENCE.md](./API_REFERENCE.md)
+
+### 7.2 SSE 事件流（`/message/stream`）
+
 **事件序列**：
-1. `meta` (包含 `resolved_councilors` 与 `chairman` 信息)
-2. `stage1_start` → `stage1_item`* → `stage1_complete`
-3. `stage2_start` → `stage2_item`* → `stage2_complete`
-4. `stage3_start` → `stage3_complete`
-5. `title_complete`（仅首条消息）
-6. `complete`
 
-**thinking 事件**：
+```
+meta → stage1_start → [thinking]* → [stage1_item]* → stage1_complete
+     → stage2_start → [thinking]* → [stage2_item]* → stage2_complete
+     → stage3_start → [thinking]* → stage3_complete
+     → [title_complete] → complete
+```
+
+**Thinking 事件**（最新格式）：
 ```json
 {
   "type": "thinking",
   "stage": "stage1|stage2|stage3",
-  "councilor_id": "...",
-  "model": "...",
-  "delta": "<title>",
-  "is_title": true,
+  "councilor_id": "immanuel_kant",
+  "model": "xiaomi/mimo-v2-flash:free",
+  "bullet_id": "immanuel_kant-stage1-1",
+  "title": "分析问题",
+  "detail": "...",
+  "op": "append|update",
   "t": 1.23
 }
 ```
 
-**注意**：thinking 事件仅用于 UI 实时展示，不持久化。
+**其他增量事件**：
+- `stage1_answer_delta` / `stage3_answer_delta`：回答文本增量
+- `stage1_answer_done`：某 Councilor 回答完成
 
 ---
 
-## 6. 三阶段执行流程（技术方案）
+## 8. 三阶段执行流程（技术方案）
 
 ```mermaid
 sequenceDiagram
@@ -227,27 +352,80 @@ sequenceDiagram
 ```
 
 **设计要点**：
-- Stage1/2 均可触发 thinking 工具调用（enable_thinking 控制）。
+- Stage1/2/3 均可触发 thinking 工具调用（`enable_thinking` 控制）。
 - Stage2 跳过条件：Stage1 有效候选 < 2。
 - Stage3 始终执行（除非 Stage1 全失败）。
 
 ---
 
-## 7. Health 与路由规则
+## 9. 并发与超时配置
 
-### 7.1 模型健康状态
-- `healthy == True` 才可执行
-- 失败次数达阈值后进入冷却
-- 401/403/404 等硬错误立即标记不可用
+### 9.1 并发控制参数
 
-### 7.2 路由优先级
-1. request payload `councilor_ids`
-2. conversation 记录的 `active_councilor_ids`
-3. 当前健康的默认 councilors
+| 参数 | 值 | 描述 |
+|---|---|---|
+| `DEFAULT_CONCURRENCY_STAGE1` | 6 | Stage1 全局并发限制 |
+| `DEFAULT_CONCURRENCY_STAGE2` | 4 | Stage2 全局并发限制 |
+| 模型级 `concurrency_limit` | 3-5 | 每个模型的最大并发请求数 |
+
+### 9.2 超时配置
+
+| 参数 | 值 | 描述 |
+|---|---|---|
+| `DEFAULT_STAGE1_TIMEOUT` | 120.0s | Stage1 单次请求超时 |
+| `DEFAULT_STAGE2_TIMEOUT` | 180.0s | Stage2 单次请求超时 |
+| Stage3 Timeout | 90.0s | Chairman 综合请求超时 |
+| `STAGE1_DEADLINE` | None | Stage1 整体截止时间（禁用） |
+| `STAGE2_DEADLINE` | None | Stage2 整体截止时间（禁用） |
+
+---
+
+## 10. Health 与路由规则
+
+### 10.1 健康管理参数
+
+| 参数 | 值 | 描述 |
+|---|---|---|
+| `HEALTH_TTL_SECONDS` | 3600 | 健康状态缓存有效期 (1 小时) |
+| `REFRESH_COOLDOWN_SECONDS` | 60 | 刷新冷却期 (避免频繁探测) |
+| `FAILURE_THRESHOLD` | 2 | 连续失败次数阈值 (触发冷却) |
+| `BACKOFF_SECONDS` | [120, 300, 900, 3600] | 冷却时间梯度 (秒) |
+| `PROBE_TIMEOUT_SECONDS` | 25.0 | 健康探测超时 |
+| `HEALTH_PROBE_CONCURRENCY` | 4 | 健康探测并发数 |
+| `HEALTH_STARTUP_CHECK` | False | 启动时是否执行健康检查 |
+
+### 10.2 硬错误定义
+
+立即标记模型为不可用的错误码和模式：
+
+**错误码**: `401`, `403`, `404`
+
+**错误模式**:
+- `"does not exist"`
+- `"not found"`
+- `"permission denied"`
+- `"unauthorized"`
+- `"disabled"`
+
+### 10.3 模型健康状态
+
+| 状态 | 描述 | `healthy` 值 |
+|---|---|---|
+| `unknown` | 未探测 | `False` |
+| `healthy` | 健康可用 | `True` |
+| `unhealthy` | 探测失败 | `False` |
+| `cooldown` | 冷却中 | `False` |
+
+### 10.4 路由优先级
+
+1. request payload `councilor_ids` (临时覆盖)
+2. conversation 记录的 `active_councilor_ids` (会话级)
+3. 当前健康的默认 councilors (全局)
 
 **严格过滤**：任何不健康 ID 都会被忽略并列入 `ignored_ids`。
 
-### 7.3 模型选择与回退 (Resilience)
+### 10.5 模型选择与回退 (Resilience)
+
 Councilor 定义中包含 `model` (首选) 和 `model_candidates` (备选列表)。
 
 **选择逻辑**：
@@ -261,39 +439,92 @@ Councilor 定义中包含 `model` (首选) 和 `model_candidates` (备选列表)
 
 ---
 
-## 8. 前端状态与 UI 策略
+## 11. 前端状态与 UI 策略
 
-### 8.1 关键状态
-- `activeThinking`: { [id]: { title, history[] } }
-- `enableThinking`: boolean（默认 true）
-- `currentConversation`: 当前对话对象
+### 11.1 关键状态
 
-### 8.2 已知行为差异（现状）
+| 状态 | 类型 | 描述 |
+|---|---|---|
+| `activeThinking` | `{ [id]: { title, history[] } }` | 当前活跃的 Thinking 状态 |
+| `enableThinking` | `boolean` | 是否启用 Thinking (默认 true) |
+| `currentConversation` | `Conversation` | 当前对话对象 |
+| `councilors` | `Councilor[]` | 已加载的 Councilor 列表 |
+| `chairman` | `Councilor` | Chairman 信息 |
+
+### 11.2 核心组件职责
+
+| 组件 | 职责 |
+|---|---|
+| `ChatInterface.jsx` | SSE 事件分发、Stage 渲染协调、消息发送 |
+| `Stage1.jsx` | 渲染 Councilor 观点卡片 |
+| `Stage2.jsx` | 渲染匿名互评与排名结果 |
+| `Stage3.jsx` | 渲染 Chairman 最终综合 |
+| `TacticalHUD.jsx` | 底部状态栏、Councilor 状态卡片 |
+| `ThinkingConsole.jsx` | 实时显示 Thinking 标题流 |
+| `CouncilAvatars.jsx` | 头像展示、`ThinkingHistory` 弹层 |
+
+### 11.3 已知行为差异（现状）
+
 - empty state 输入区 **没有** thinking toggle。
 - thinking 历史显示依赖 `CouncilAvatars` 中的 `ThinkingHistory` 弹层。
 
 ---
 
-## 9. 运行与运维要点
+## 12. 运行与运维要点
 
 - **流式消息必存储**：`send_message_stream` 已写入 `storage.add_assistant_message`。
-- **thinking title 不持久化**：仅用于实时 UI。
-- **删除保护**：`verify_admin` 当前默认放行（debug）。生产必须启用真实 token 校验。
+- **thinking 已持久化**：`metadata.thinking` 包含 Thinking 步骤（有数量限制）。
+- **删除保护**：`verify_admin` 当前默认放行（debug）。**生产必须启用真实 token 校验**。
+- **定时健康刷新**：后台任务每 `HEALTH_TTL_SECONDS` (3600s) 执行一次全局健康刷新。
 
 ---
 
-## 10. 常见问题排查
+## 13. 常见问题排查
 
-1) 刷新后无消息
-- 检查是否使用 streaming 且后端保存成功。
-
-2) Console 无标题
-- 确认 enable_thinking 为 true
-- 确认模型具备 thinking capability
-
-3) Stage2 被跳过
-- Stage1 有效结果 < 2
+| 问题 | 排查步骤 |
+|---|---|
+| **刷新后无消息** | 检查是否使用 streaming 且后端保存成功 |
+| **Console 无标题** | 确认 `enable_thinking=true`；确认模型支持 thinking |
+| **Stage2 被跳过** | 检查 Stage1 有效结果是否 < 2 |
+| **所有 Councilor 不可用** | 检查健康状态；手动刷新 (`?refresh=true`) |
+| **模型返回错误** | 检查 OpenRouter API Key；查看后端日志 |
+| **Rate Limit 触发** | 等待 60 秒后重试 |
 
 ---
 
-*Last updated: 2025-02-XX*
+## 14. 附录：快速参考
+
+### 14.1 环境变量
+
+| 变量 | 必填 | 描述 |
+|---|---|---|
+| `OPENROUTER_API_KEY` | 是 | OpenRouter API 密钥 |
+| `ADMIN_TOKEN` | 否 | 管理员令牌 (默认 `secret-token`) |
+
+### 14.2 启动命令
+
+```bash
+# 后端
+cd backend && uvicorn main:app --host 0.0.0.0 --port 8000
+
+# 前端
+cd frontend && npm run dev
+
+# Docker
+docker-compose up -d
+```
+
+### 14.3 文档索引
+
+| 文档 | 路径 | 描述 |
+|---|---|---|
+| 系统架构 | `docs/Architecture.md` | 架构图、技术栈、部署 |
+| API 参考 | `docs/API_REFERENCE.md` | REST 接口、SSE 事件 |
+| 数据模型 | `docs/DATA_SCHEMA.md` | 数据结构、字段说明 |
+| 配置说明 | `docs/配置说明.md` | 环境变量、配置文件 |
+| UI 样式指南 | `docs/UI_STYLE_GUIDE.md` | 前端样式规范 |
+
+---
+
+*Last updated: 2026-01-01*
+

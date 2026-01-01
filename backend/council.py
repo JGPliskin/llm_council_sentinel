@@ -6,8 +6,6 @@ import asyncio
 import re
 import sys
 import os
-import random
-import httpx
 
 # Ensure backend directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -33,13 +31,26 @@ THINKING_TOOL_DEF = [
         "type": "function",
         "function": {
             "name": "emit_thinking",
-            "description": "Emit a thinking step title. Use this to outline your thinking process before providing the final answer.",
+            "description": "Emit a thinking step payload for UI display.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "bullet_id": {
+                        "type": "string",
+                        "description": "Unique identifier of the thinking step."
+                    },
                     "title": {
                         "type": "string",
-                        "description": "The concise title of the thinking step (6-18 characters, verb + object)."
+                        "description": "Concise title of the thinking step (6-18 chars)."
+                    },
+                    "detail": {
+                        "type": "string",
+                        "description": "1-3 lines of public-facing detail."
+                    },
+                    "op": {
+                        "type": "string",
+                        "enum": ["append", "update"],
+                        "description": "append to add, update to modify a prior step."
                     }
                 },
                 "required": ["title"]
@@ -66,79 +77,85 @@ def strip_json_fences(text: str) -> str:
     return cleaned
 
 
-def truncate_item(text: str, limit: int = 50) -> str:
-    if text is None:
-        return ""
-    text = str(text).strip()
-    return text[:limit]
+def extract_thinking_from_content(content: str) -> Tuple[List[Dict[str, Any]], str]:
+    """
+    从 content 中提取 emit_thinking JSON，返回 (thinking_list, cleaned_answer)。
+    
+    某些模型不正确使用 tool calls，而是直接把 thinking JSON 输出到 content 中，例如：
+    { "name": "emit_thinking", "arguments": {"bullet_id": "1", ...} } { ... } 回答内容
+    
+    这个函数会：
+    1. 找到所有 JSON 对象
+    2. 过滤出 emit_thinking 相关的
+    3. 提取 thinking 信息
+    4. 从 content 中移除这些 JSON，返回干净的回答
+    """
+    thinking_list = []
+    json_spans = []  # [(start, end), ...]
+    
+    # 逐字符扫描，找到所有顶层 {} 对象
+    i = 0
+    while i < len(content):
+        if content[i] == '{':
+            # 找到开始，计算匹配的结束位置
+            depth = 1
+            start = i
+            i += 1
+            in_string = False
+            escape_next = False
+            
+            while i < len(content) and depth > 0:
+                char = content[i]
+                if escape_next:
+                    escape_next = False
+                elif char == '\\':
+                    escape_next = True
+                elif char == '"':
+                    in_string = not in_string
+                elif not in_string:
+                    if char == '{':
+                        depth += 1
+                    elif char == '}':
+                        depth -= 1
+                i += 1
+            
+            if depth == 0:
+                json_str = content[start:i]
+                try:
+                    obj = json.loads(json_str)
+                    # 检查是否是 emit_thinking
+                    if isinstance(obj, dict) and obj.get("name") == "emit_thinking":
+                        args = obj.get("arguments", {})
+                        if isinstance(args, dict) and args.get("title"):
+                            thinking_list.append({
+                                "bullet_id": args.get("bullet_id", f"extracted_{len(thinking_list)}"),
+                                "title": args.get("title", ""),
+                                "detail": args.get("detail", ""),
+                                "op": args.get("op", "append")
+                            })
+                            json_spans.append((start, i))
+                except json.JSONDecodeError:
+                    pass
+        else:
+            i += 1
+    
+    # 从后往前移除所有匹配的 JSON（避免索引偏移问题）
+    cleaned_content = content
+    for start, end in reversed(json_spans):
+        cleaned_content = cleaned_content[:start] + cleaned_content[end:]
+    
+    # 清理多余的空白和换行
+    cleaned_content = re.sub(r'\n{3,}', '\n\n', cleaned_content)
+    cleaned_content = re.sub(r'[ \t]+', ' ', cleaned_content)
+    cleaned_content = cleaned_content.strip()
+    
+    # 如果回答以 "回答" 开头，移除这个标记
+    cleaned_content = re.sub(r'^回答[:：]?\s*', '', cleaned_content)
+    
+    return thinking_list, cleaned_content
 
 
-def enforce_judge_card_constraints(judge_card: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = {
-        "stance": str(judge_card.get("stance", "")).strip(),
-        "core_reasons": judge_card.get("core_reasons") or [],
-        "assumptions": judge_card.get("assumptions") or [],
-        "risks": judge_card.get("risks") or [],
-        "actionables": judge_card.get("actionables") or [],
-    }
 
-    # Enforce per-item length and minimum core reasons
-    normalized["core_reasons"] = [truncate_item(item) for item in normalized["core_reasons"] if str(item).strip()]
-    if len(normalized["core_reasons"]) < 2:
-        filler = "补充要点：概括主要论据"
-        normalized["core_reasons"].append(filler)
-        if len(normalized["core_reasons"]) < 2:
-            normalized["core_reasons"].append("补充要点：再凝练一条")
-
-    for key in ["assumptions", "risks", "actionables"]:
-        items = [truncate_item(item) for item in normalized[key] if str(item).strip()]
-        normalized[key] = items
-
-    # Compress to meet 600 char limit if necessary
-    serialized = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
-    if len(serialized) <= 600:
-        return normalized
-
-    def compress_list(values: List[str]) -> List[str]:
-        if len(values) <= 1:
-            return values
-        merged: List[str] = []
-        buffer = ""
-        for value in values:
-            candidate = (buffer + "；" if buffer else "") + value
-            if len(candidate) <= 45:
-                buffer = candidate
-            else:
-                if buffer:
-                    merged.append(buffer)
-                buffer = value[:45]
-        if buffer:
-            merged.append(buffer)
-        return merged
-
-    compressed = normalized.copy()
-    for key in ["core_reasons", "assumptions", "risks", "actionables"]:
-        compressed[key] = compress_list(compressed[key])
-
-    serialized = json.dumps(compressed, ensure_ascii=False, separators=(",", ":"))
-    if len(serialized) > 600:
-        list_order = ["actionables", "risks", "assumptions", "core_reasons"]
-        while len(serialized) > 600:
-            trimmed = False
-            for key in list_order:
-                if compressed.get(key):
-                    compressed[key].pop()
-                    trimmed = True
-                    break
-            if not trimmed:
-                break
-            serialized = json.dumps(compressed, ensure_ascii=False, separators=(",", ":"))
-    return compressed
-
-
-def parse_stage1_json(text: str) -> Dict[str, Any]:
-    cleaned = strip_json_fences(text)
-    return json.loads(cleaned)
 
 
 def is_retryable_error(response_dict: Optional[Dict[str, Any]]) -> bool:
@@ -250,7 +267,8 @@ async def _request_stage1_bounded(
     semaphore: asyncio.Semaphore,
     councilor: Dict[str, Any],
     user_query: str,
-    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None,
+    on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
+    on_answer_delta: Optional[Callable[[str, str], Any]] = None,
     enable_thinking: bool = True
 ) -> Dict[str, Any]:
     
@@ -259,41 +277,44 @@ async def _request_stage1_bounded(
     timeout = stage_limits.get("timeout", DEFAULT_STAGE1_TIMEOUT)
     max_tokens = stage_limits.get("max_output_tokens", 800)
 
-    system_prompt = (
-        f"{persona}\n\n"
+    # 基础 persona 提示
+    base_instructions = (
         "严格遵守：\n"
         "- 回答语言需与用户问题保持一致。\n"
         "- 不自我介绍，不复述问题，不写模板化客套。\n"
-        "- 用紧凑 Markdown 表达答案，避免空洞铺陈。\n"
-        "- 仅返回 JSON，对象格式如下（不要附带说明或代码块）：\n"
-        "  {\n"
-        "    \"councilor_id\": <string>,\n"
-        "    \"answer_markdown\": <string>,\n"
-        "    \"answer_summary\": <string, 纯文本摘要, 500字以内>,\n"
-        "    \"judge_card\": {\n"
-        "      \"stance\": <string>,\n"
-        "      \"core_reasons\": <list, 至少2条>,\n"
-        "      \"assumptions\": <list>,\n"
-        "      \"risks\": <list>,\n"
-        "      \"actionables\": <list>\n"
-        "    }\n"
-        "  }\n"
-        "- 列表每项不超过50个中文字符。\n"
-        "- judge_card 整体序列化长度需<=600字符，若超出请合并/抽象信息后再压缩，不要生硬截断。\n"
-        "- answer_summary 必须是对回答的客观陈述，不包含立场评判，严格控制在500字以内。"
+        "- 直接输出 Markdown 格式答案（不要 JSON）。\n"
+        "- 内容尽量自然、像人类表达，但不要空洞铺陈。\n"
     )
 
     if enable_thinking:
-        system_prompt += (
-            "\n\nIMPORTANT: You MUST call the `emit_thinking` tool MULTIPLE times (at least 3-5 times) "
-            "before and during your generation to explain your reasoning process. "
-            "Report your step-by-step thoughts via this tool."
-        )
+        # 参照测试代码的写法，更明确地强调使用 tool calls
+        thinking_instructions = """
+## 思考规则
+1. 在回答问题前，你必须先调用 `emit_thinking` 工具来展示你的思考过程
+2. 每个思考步骤都要调用一次 `emit_thinking`，至少调用 2-3 次
+3. `title` 必须是 6-12 个词的简短摘要（像 bullet point）
+4. `detail` 必须是 1-3 行的解释说明
+
+## 回答规则
+1. 思考完成后，直接在 content 中输出最终答案（Markdown 格式）
+2. 绝对不要在最终答案中包含任何 thinking 文本或 JSON
+3. 思考只能通过 `emit_thinking` 工具发送，不要把 JSON 输出到回答中
+
+## 示例思考流程
+- emit_thinking(title="分析问题的核心要素")
+- emit_thinking(title="考虑可能的解决方案")  
+- emit_thinking(title="评估最佳答案")
+- 输出最终答案（纯 Markdown，无 JSON）
+"""
+        system_prompt = f"{persona}\n\n{base_instructions}\n{thinking_instructions}"
+    else:
+        system_prompt = f"{persona}\n\n{base_instructions}"
 
     user_message = (
         f"用户问题：{user_query}\n"
-        "请依据 persona 直接作答，并填充 judge_card。"
+        "请依据 persona 直接作答。"
     )
+
 
     candidates = get_candidates(councilor)
     excluded_models = set()
@@ -315,124 +336,100 @@ async def _request_stage1_bounded(
             
         model_sem = await model_concurrency_manager.get_semaphore(selected_model)
         
-        # Inner Loop: Logic Retry (JSON Repair) on SPECIFIC model
-        # We allow 2 logic attempts per model.
-        # If network fails, we break inner immediately to switch candidate.
-        
         model_messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ]
-        
-        model_success = False
-        parsed_result = None
-        
-        for logic_attempt in range(2):
-            response = None
-            try:
-                # Double Locking
-                async with semaphore: # Stage Limit
-                    async with model_sem: # Model Limit
-                        # Check Capabilities
-                        model_cfg = GLOBAL_MODEL_MAP.get(selected_model, {})
-                        caps = model_cfg.get("capabilities", {})
-                        
-                        can_think = caps.get("thinking", False)
-                        
-                        if can_think and on_thinking:
-                            # Wrap callback to inject councilor context
-                            async def _think_cb(title: str):
-                                if on_thinking:
-                                    # on_thinking from main.py is async, so we await it
-                                    await on_thinking(councilor["id"], "stage1", title, selected_model)
+        response = None
+        answer_chunks: List[str] = []
+        try:
+            # Double Locking
+            async with semaphore: # Stage Limit
+                async with model_sem: # Model Limit
+                    # Check Capabilities
+                    model_cfg = GLOBAL_MODEL_MAP.get(selected_model, {})
+                    caps = model_cfg.get("capabilities", {})
 
-                            response = await stream_model(
-                                selected_model, 
-                                model_messages, 
-                                on_thinking=_think_cb,
-                                timeout=timeout, 
-                                max_output_tokens=max_tokens,
-                                tools=THINKING_TOOL_DEF
-                            )
+                    can_think = caps.get("thinking", False)
+                    use_tools = enable_thinking and can_think and on_thinking
+
+                    async def _think_cb(payload: Any):
+                        if not on_thinking:
+                            return
+                        if isinstance(payload, dict):
+                            thinking_payload = payload
                         else:
-                            response = await query_model(
-                                selected_model, model_messages, timeout=timeout, max_output_tokens=max_tokens
-                            )
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                # Fallback for unexpected exceptions
-                 response = {"error": True, "content": str(e)}
+                            thinking_payload = {"title": str(payload)}
+                        await on_thinking(councilor["id"], "stage1", thinking_payload, selected_model)
 
-            if selected_model not in attempted_models:
-                attempted_models.append(selected_model)
-            
-            # Validation
-            success = False
-            should_retry_json = False
-            
-            if response and not response.get("error"):
-                # Network Success
-                health_manager.update_status(selected_model, True, source="runtime")
-                
-                # Logic Validation
-                raw_text = response.get("content", "")
-                try:
-                    parsed = parse_stage1_json(raw_text)
-                    judge_card = enforce_judge_card_constraints(parsed.get("judge_card", {}))
-                    parsed["judge_card"] = judge_card
-                    parsed["councilor_id"] = councilor["id"]
-                    parsed["answer_markdown"] = parsed.get("answer_markdown", "").strip()
-                    
-                    # Summary Logic
-                    am = parsed.get("answer_markdown", "")
-                    summary = parsed.get("answer_summary", "")
-                    if not summary and am: summary = am[:500]
-                    if summary: summary = str(summary)[:500]
-                    parsed["answer_summary"] = summary
+                    async def _content_cb(delta: str):
+                        answer_chunks.append(delta)
+                        if on_answer_delta:
+                            if asyncio.iscoroutinefunction(on_answer_delta):
+                                await on_answer_delta(councilor["id"], delta)
+                            else:
+                                on_answer_delta(councilor["id"], delta)
 
-                    parsed["model"] = response.get("model", selected_model) # Actual used model
-                    parsed["councilor_name"] = councilor.get("name")
-                    parsed["status"] = "ok"
-                    
-                    # Metadata
-                    parsed["attempted_models"] = attempted_models
-                    parsed["fallback_used"] = (selected_model != candidates[0])
-                    
-                    parsed_result = parsed
-                    success = True
-                    model_success = True
-                    
-                except Exception as e:
-                    last_error = f"JSON Parse Error ({selected_model}): {str(e)}"
-                    should_retry_json = True
-                    # Logic error doesn't mark model unhealthy
-            else:
-                # Network Failure
-                err_msg = response.get('content') if response else 'No response'
-                last_error = f"Network Error ({selected_model}): {err_msg}"
-                status_code = response.get('status_code') if response else None
-                
-                health_manager.update_status(selected_model, False, err_msg, status_code, source="runtime")
-                excluded_models.add(selected_model) # In-Flight Exclusion
-                break # Break inner loop, try next candidate
-                
-            if success:
-                return parsed_result
-            
-            if should_retry_json:
-                if logic_attempt == 0:
-                    # Repair
-                    repair_prompt = (
-                        "上一轮输出未提供可解析的 JSON，请直接输出符合约束的 JSON 对象，"
-                        "不要添加多余文字或代码块。确保 core_reasons 至少两条、列表项<=50字、judge_card 长度<=600。"
+                    response = await stream_model(
+                        selected_model,
+                        model_messages,
+                        on_thinking=_think_cb if use_tools else None,
+                        on_content=_content_cb,
+                        timeout=timeout,
+                        max_output_tokens=max_tokens,
+                        tools=THINKING_TOOL_DEF if use_tools else None
                     )
-                    model_messages.append({"role": "user", "content": repair_prompt})
-                    # Loop continues to logic_attempt 1
-                else:
-                    # 2nd failure
-                    excluded_models.add(selected_model)
-                    break
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            # Fallback for unexpected exceptions
+            response = {"error": True, "content": str(e)}
+
+        if selected_model not in attempted_models:
+            attempted_models.append(selected_model)
+
+        if response and not response.get("error"):
+            # Network Success
+            health_manager.update_status(selected_model, True, source="runtime")
+
+            answer = response.get("content", "")
+            if not answer and answer_chunks:
+                answer = "".join(answer_chunks)
+
+            # 后处理：从 content 中提取被错误输出的 thinking JSON
+            extracted_thinking, cleaned_answer = extract_thinking_from_content(answer or "")
+            
+            # 如果提取到了 thinking，触发回调
+            if extracted_thinking and on_thinking:
+                for thinking_item in extracted_thinking:
+                    try:
+                        if asyncio.iscoroutinefunction(on_thinking):
+                            await on_thinking(councilor["id"], "stage1", thinking_item, selected_model)
+                        else:
+                            on_thinking(councilor["id"], "stage1", thinking_item, selected_model)
+                    except Exception:
+                        pass
+
+            return {
+                "councilor_id": councilor["id"],
+                "councilor_name": councilor.get("name"),
+                "model": response.get("model", selected_model),
+                "status": "ok",
+                "answer_markdown": cleaned_answer,
+                "attempted_models": attempted_models,
+                "fallback_used": (selected_model != candidates[0]),
+                "extracted_thinking_count": len(extracted_thinking)
+            }
+
+
+        # Network Failure
+        err_msg = response.get('content') if response else 'No response'
+        last_error = f"Network Error ({selected_model}): {err_msg}"
+        status_code = response.get('status_code') if response else None
+
+        health_manager.update_status(selected_model, False, err_msg, status_code, source="runtime")
+        excluded_models.add(selected_model) # In-Flight Exclusion
+        continue
         
         # End of Inner Loop
         # If we are here, we either succeeded (returned already) or failed (break)
@@ -458,7 +455,9 @@ async def stage1_collect_responses(
     user_query: str, 
     councilors: List[Dict[str, Any]],
     on_result: Optional[Callable[[Dict[str, Any]], Any]] = None,
-    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None,
+    on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
+    on_answer_delta: Optional[Callable[[str, str], Any]] = None,
+    on_answer_done: Optional[Callable[[str], Any]] = None,
     enable_thinking: bool = True
 ) -> List[Dict[str, Any]]:
     """Stage 1: Collect initial responses from all councilors with strict control."""
@@ -469,7 +468,16 @@ async def stage1_collect_responses(
     # Note: Using a mapping to track who is who is safer if order matters, 
     # but `gather` preserves order of input tasks.
     tasks = [
-        asyncio.create_task(_request_stage1_bounded(semaphore, c, user_query, on_thinking, enable_thinking))
+        asyncio.create_task(
+            _request_stage1_bounded(
+                semaphore,
+                c,
+                user_query,
+                on_thinking,
+                on_answer_delta,
+                enable_thinking
+            )
+        )
         for c in councilors
     ]
     
@@ -501,6 +509,11 @@ async def stage1_collect_responses(
                             await on_result(res)
                         else:
                             on_result(res)
+                    if on_answer_done and res.get("councilor_id"):
+                        if asyncio.iscoroutinefunction(on_answer_done):
+                            await on_answer_done(res["councilor_id"])
+                        else:
+                            on_answer_done(res["councilor_id"])
                 except Exception as e:
                     # Should verify if this happens; _request_stage1_bounded handles most.
                     err_res = {
@@ -514,6 +527,11 @@ async def stage1_collect_responses(
                              await on_result(err_res)
                         else:
                              on_result(err_res)
+                    if on_answer_done and err_res.get("councilor_id"):
+                        if asyncio.iscoroutinefunction(on_answer_done):
+                            await on_answer_done(err_res["councilor_id"])
+                        else:
+                            on_answer_done(err_res["councilor_id"])
             else:
                 # Task was pending and cancelled
                 results.append({
@@ -527,6 +545,12 @@ async def stage1_collect_responses(
                     },
                      "answer_markdown": "",
                 })
+                if on_answer_done:
+                    cid = councilors[i]["id"]
+                    if asyncio.iscoroutinefunction(on_answer_done):
+                        await on_answer_done(cid)
+                    else:
+                        on_answer_done(cid)
         return results
         
     else:
@@ -553,6 +577,11 @@ async def stage1_collect_responses(
                          await on_result(res)
                      else:
                          on_result(res)
+                     if on_answer_done and res.get("councilor_id"):
+                         if asyncio.iscoroutinefunction(on_answer_done):
+                             await on_answer_done(res["councilor_id"])
+                         else:
+                             on_answer_done(res["councilor_id"])
                  except Exception as e:
                      # This exception comes from the task itself
                      # But _request_stage1_bounded handles exceptions internally and returns dict.
@@ -567,24 +596,30 @@ async def stage1_collect_responses(
         results = await asyncio.gather(*tasks, return_exceptions=True)
         final_results = []
         for i, res in enumerate(results):
-             if isinstance(res, Exception):
-                 err_res = {
+            if isinstance(res, Exception):
+                err_res = {
                     "councilor_id": councilors[i]["id"],
                     "status": "failed",
                     "error": {"code": "UNHANDLED_EXCEPTION", "message": str(res)}
-                 }
-                 final_results.append(err_res)
-                 # Note: if on_result was used, this exception might have been swallowed or raised during as_completed loop?
-                 # If as_completed raised, we might have missed calling on_result for this one.
-                 # Let's ensure strictness: _request_stage1_bounded should NOT raise.
-             else:
-                 final_results.append(res)
+                }
+                final_results.append(err_res)
+                if on_answer_done:
+                    cid = councilors[i]["id"]
+                    if asyncio.iscoroutinefunction(on_answer_done):
+                        await on_answer_done(cid)
+                    else:
+                        on_answer_done(cid)
+                # Note: if on_result was used, this exception might have been swallowed or raised during as_completed loop?
+                # If as_completed raised, we might have missed calling on_result for this one.
+                # Let's ensure strictness: _request_stage1_bounded should NOT raise.
+            else:
+                final_results.append(res)
         return final_results
 
 
-def _build_judge_cards(stage1_results: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
-    """Create anonymized judge cards for ranking. Only distinct valid results should be passed here."""
-    judge_cards = []
+def _build_stage2_candidates(stage1_results: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """Create anonymized candidate payloads for ranking."""
+    candidates = []
     anon_to_councilor_id = {}
     
     # We iterate and assign anon_ids. 
@@ -603,25 +638,23 @@ def _build_judge_cards(stage1_results: List[Dict[str, Any]]) -> Tuple[List[Dict[
         
         anon_to_councilor_id[anon_id] = councilor_id
 
-        # New Payload Structure: Summary + Card
         payload = {
-            "answer_summary": result.get("answer_summary", ""),
-            "judge_card": result.get("judge_card", {})
+            "answer_markdown": result.get("answer_markdown", "")
         }
 
-        judge_cards.append(
+        candidates.append(
             {
                 "anon_id": anon_id,
                 "payload": payload
             }
         )
 
-    return judge_cards, anon_to_councilor_id
+    return candidates, anon_to_councilor_id
 
 
 def _build_ranking_messages(
     user_query: str, 
-    judge_cards: List[Dict[str, Any]],
+    candidates: List[Dict[str, Any]],
     persona_text: str,
     rubric_text: str
 ) -> List[Dict[str, str]]:
@@ -656,7 +689,7 @@ def _build_ranking_messages(
     ranking_instructions = {
         "task": "rank_responses",
         "question": user_query,
-        "candidates": judge_cards, # Changed key to generic 'candidates' or keep judge_cards? logic used judge_cards.
+        "candidates": candidates,
     }
 
     messages = [
@@ -750,10 +783,10 @@ async def _collect_single_ranking_bounded(
     councilor_obj: Dict[str, Any],
     default_model: str, # Renamed for clarity
     user_query: str,
-    judge_cards: List[Dict[str, Any]],
+    candidates: List[Dict[str, Any]],
     expected_anon_ids: List[str],
     timeout: float,
-    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None,
+    on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
     enable_thinking: bool = True
 ) -> Dict[str, Any]:
     """Collect ranking with fallback routing."""
@@ -762,6 +795,7 @@ async def _collect_single_ranking_bounded(
     persona_path = councilor_obj.get("judge_persona_path") or councilor_obj.get("persona_path")
     persona_text = fetch_persona(PERSONA_CACHE, persona_path)
     rubric_text = councilor_obj.get("judge_system_prompt", "")
+    rubric_text += "\n\n评审要求：忽略文风，仅评可行性与有效性。"
     
     # Limits
     stage_limits = councilor_obj.get("stage_limits", {}).get("stage2", {})
@@ -773,7 +807,7 @@ async def _collect_single_ranking_bounded(
             "before outputting your JSON to explain your ranking logic."
         )
 
-    messages = _build_ranking_messages(user_query, judge_cards, persona_text, rubric_text)
+    messages = _build_ranking_messages(user_query, candidates, persona_text, rubric_text)
     
     candidates = get_candidates(councilor_obj)
     excluded_models = set()
@@ -802,9 +836,13 @@ async def _collect_single_ranking_bounded(
                         can_think = caps.get("thinking", False)
                         
                         if can_think and on_thinking:
-                            async def _think_cb(title: str):
+                            async def _think_cb(payload: Any):
                                 if on_thinking:
-                                    await on_thinking(councilor_id, "stage2", title, selected_model)
+                                    if isinstance(payload, dict):
+                                        thinking_payload = payload
+                                    else:
+                                        thinking_payload = {"title": str(payload)}
+                                    await on_thinking(councilor_id, "stage2", thinking_payload, selected_model)
                                     
                             response = await stream_model(
                                 selected_model, 
@@ -899,7 +937,7 @@ async def stage2_collect_rankings(
     stage1_results: List[Dict[str, Any]], 
     councilors: List[Dict[str, Any]],
     on_result: Optional[Callable[[Dict[str, Any]], Any]] = None,
-    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None,
+    on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
     enable_thinking: bool = True
 ) -> Dict[str, Any]:
     """
@@ -924,17 +962,16 @@ async def stage2_collect_rankings(
         return base_response
 
     # Phase 2: Execution
-    # Note: _build_judge_cards now returns anon_id -> councilor_id
-    judge_cards, anon_map_ids = _build_judge_cards(valid_candidates)
+    candidates, anon_map_ids = _build_stage2_candidates(valid_candidates)
     base_response["anon_map"] = anon_map_ids
     
     # Should not happen given check above, but consistency
-    if len(judge_cards) < 2:
+    if len(candidates) < 2:
          base_response["skipped"] = True
          base_response["skipped_reason"] = "insufficient_candidates"
          return base_response
          
-    anon_ids = [card["anon_id"] for card in judge_cards]
+    anon_ids = [card["anon_id"] for card in candidates]
     
     semaphore = asyncio.Semaphore(DEFAULT_CONCURRENCY_STAGE2)
     tasks = []
@@ -954,7 +991,7 @@ async def stage2_collect_rankings(
                 councilor, # Pass full councilor object to access persona/rubric
                 model, 
                 user_query, 
-                judge_cards, 
+                candidates, 
                 anon_ids, 
                 timeout,
                 on_thinking,
@@ -1064,7 +1101,8 @@ async def stage3_synthesize_final(
     stage1_results: List[Dict[str, Any]],
     stage2_result: Dict[str, Any], # Changed to Dict
     chairman: Dict[str, Any],
-    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None,
+    on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
+    on_answer_delta: Optional[Callable[[str], Any]] = None,
     enable_thinking: bool = True
 ) -> Dict[str, Any]:
     persona = fetch_persona(PERSONA_CACHE, chairman.get("persona_path", ""))
@@ -1085,7 +1123,7 @@ async def stage3_synthesize_final(
 
     stage1_text = "\n\n".join(
         [
-            f"{result.get('councilor_name')} ({result.get('model')}):\n{result.get('answer_markdown')}\n评审卡: {json.dumps(result.get('judge_card', {}), ensure_ascii=False)}"
+            f"{result.get('councilor_name')} ({result.get('model')}):\n{result.get('answer_markdown')}"
             for result in valid_stage1
         ]
     )
@@ -1173,19 +1211,36 @@ async def stage3_synthesize_final(
                     model_cfg = GLOBAL_MODEL_MAP.get(selected_model, {})
                     caps = model_cfg.get("capabilities", {})
                     can_think = caps.get("thinking", False)
-                    
-                    if can_think and on_thinking:
-                        async def _think_cb(title: str):
-                            if on_thinking:
-                                await on_thinking(chairman["id"], "stage3", title, selected_model)
+
+                    use_tools = enable_thinking and can_think and on_thinking
+                    use_stream = use_tools or on_answer_delta
+
+                    async def _content_cb(delta: str):
+                        if not on_answer_delta:
+                            return
+                        if asyncio.iscoroutinefunction(on_answer_delta):
+                            await on_answer_delta(delta)
+                        else:
+                            on_answer_delta(delta)
+
+                    if use_stream:
+                        async def _think_cb(payload: Any):
+                            if not use_tools or not on_thinking:
+                                return
+                            if isinstance(payload, dict):
+                                thinking_payload = payload
+                            else:
+                                thinking_payload = {"title": str(payload)}
+                            await on_thinking(chairman["id"], "stage3", thinking_payload, selected_model)
 
                         response = await stream_model(
-                            selected_model, 
-                            messages, 
-                            on_thinking=_think_cb,
-                            timeout=timeout, 
+                            selected_model,
+                            messages,
+                            on_thinking=_think_cb if use_tools else None,
+                            on_content=_content_cb if on_answer_delta else None,
+                            timeout=timeout,
                             max_output_tokens=max_tokens,
-                            tools=THINKING_TOOL_DEF
+                            tools=THINKING_TOOL_DEF if use_tools else None
                         )
                     else:
                         response = await query_model(
@@ -1300,7 +1355,7 @@ async def run_full_council(
     user_query: str, 
     councilors: List[Dict[str, Any]], 
     chairman: Dict[str, Any],
-    on_thinking: Optional[Callable[[str, str, str, str], Any]] = None,
+    on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
     enable_thinking: bool = True
 ) -> Tuple[List, Dict, Dict, Dict]:
     # Stage 1

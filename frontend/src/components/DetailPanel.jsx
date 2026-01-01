@@ -6,23 +6,13 @@ import { getCouncilorUIConfig } from '@/config/councilors';
 /**
  * 获取当前应展示的详情内容
  */
-function getDetailContent(stage, activeTab, thinkingSteps, evaluationComments, synthesisSteps) {
+function getDetailContent(stage, activeTab, evaluationComments, synthesisSteps) {
     // Consensus Tab → 显示主席思考过程
     if (activeTab === 'final') {
         return {
             type: 'thinking',
             title: 'Chairman Synthesis',
             data: synthesisSteps,
-        };
-    }
-
-    // Stage 1 → 显示当前议员的思考过程
-    if (stage === 'stage1') {
-        const agentSteps = thinkingSteps.filter(s => s.agentId === activeTab);
-        return {
-            type: 'thinking',
-            title: 'Thinking Process',
-            data: agentSteps,
         };
     }
 
@@ -39,8 +29,8 @@ function getDetailContent(stage, activeTab, thinkingSteps, evaluationComments, s
     return { type: 'empty', title: '', data: [] };
 }
 
-export function DetailPanel({ stage, activeTab, thinkingSteps, evaluationComments, synthesisSteps, onClose }) {
-    const { type, title, data } = getDetailContent(stage, activeTab, thinkingSteps, evaluationComments, synthesisSteps);
+export function DetailPanel({ stage, activeTab, evaluationComments, synthesisSteps, onClose }) {
+    const { type, title, data } = getDetailContent(stage, activeTab, evaluationComments, synthesisSteps);
 
     return (
         <div className="h-full flex flex-col bg-zinc-900/90 border-l border-zinc-800 backdrop-blur-md">

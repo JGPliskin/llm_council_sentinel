@@ -21,8 +21,11 @@ export function useParliamentEngine() {
     const [agentProgress, setAgentProgress] = useState({}); // { [councilor_id]: 0~100 }
     const [stageProgress, setStageProgress] = useState(0);  // 0~100
 
-    // === Thinking 日志 ===
-    const [thinkingSteps, setThinkingSteps] = useState([]);  // Stage 1 日志
+    // === Thinking 状态 ===
+    const [thinkingByCouncilor, setThinkingByCouncilor] = useState({}); // { [id]: { status, steps[] } }
+    const [thinkingExpanded, setThinkingExpanded] = useState({}); // { [id]: boolean }
+    const [stage1AnswerStream, setStage1AnswerStream] = useState({}); // { [id]: text }
+    const [stage3AnswerStream, setStage3AnswerStream] = useState('');
     const [evaluationComments, setEvaluationComments] = useState({}); // Stage 2 评价映射 { [target_id]: comments[] }
     const [synthesisSteps, setSynthesisSteps] = useState([]); // Stage 3 日志
 
@@ -34,6 +37,7 @@ export function useParliamentEngine() {
 
     // === 定时器引用 (用于进度平滑) ===
     const progressTimers = useRef({});
+    const stage2AnonMapRef = useRef(null);
 
     /**
       * 计算汇总排名
@@ -72,6 +76,80 @@ export function useParliamentEngine() {
         }));
     };
 
+    const buildEvaluationComments = useCallback((reviews, anonMap) => {
+        if (!reviews || !anonMap) return {};
+
+        const newComments = {};
+
+        reviews.forEach(review => {
+            const comments = review.per_candidate_comments || {};
+            const fromId = review.judge_councilor_id || review.model;
+            const fromName = review.judge_councilor_name;
+
+            Object.entries(comments).forEach(([anonId, comment]) => {
+                const targetId = anonMap[anonId];
+                if (!targetId) return;
+                if (!newComments[targetId]) newComments[targetId] = [];
+                newComments[targetId].push({
+                    fromId,
+                    fromName,
+                    comment,
+                    score: review.scores?.[anonId]
+                });
+            });
+        });
+
+        return newComments;
+    }, []);
+
+    const applyStage2ReviewComments = useCallback((review, anonMap) => {
+        if (!review || !anonMap) return;
+        const comments = review.per_candidate_comments;
+        if (!comments || typeof comments !== 'object') return;
+
+        const fromId = review.judge_councilor_id || review.model;
+        const fromName = review.judge_councilor_name;
+
+        setEvaluationComments(prev => {
+            const next = { ...prev };
+            Object.entries(comments).forEach(([anonId, comment]) => {
+                const targetId = anonMap[anonId];
+                if (!targetId) return;
+                const existing = Array.isArray(next[targetId])
+                    ? next[targetId].filter(entry => entry.fromId !== fromId)
+                    : [];
+                existing.push({
+                    fromId,
+                    fromName,
+                    comment,
+                    score: review.scores?.[anonId]
+                });
+                next[targetId] = existing;
+            });
+            return next;
+        });
+    }, []);
+
+    const restoreThinking = useCallback((thinkingMeta) => {
+        if (!thinkingMeta || !thinkingMeta.stage1) return {};
+        const restored = {};
+        Object.entries(thinkingMeta.stage1).forEach(([cid, entry]) => {
+            const steps = Array.isArray(entry?.steps) ? entry.steps.map(step => ({
+                bullet_id: step.bullet_id || step.id || step.title,
+                title: step.title || "",
+                detail: step.detail || null,
+                t: step.t
+            })) : [];
+            if (steps.length > 0) {
+                restored[cid] = {
+                    status: entry.status || "done",
+                    steps
+                };
+            }
+        });
+        return restored;
+    }, []);
+
     /**
      * 恢复会话 (History View)
      */
@@ -92,7 +170,18 @@ export function useParliamentEngine() {
         setConversation(conv);
         setResolvedCouncilors(conv.metadata?.resolved_councilors || []);
         setAgentProgress({}); // No progress for history
-        setThinkingSteps([]); // History doesn't show thinking
+        const lastMsg = conv.messages?.[conv.messages.length - 1];
+        const restoredThinking = restoreThinking(lastMsg?.metadata?.thinking || conv.metadata?.thinking);
+        setThinkingByCouncilor(restoredThinking);
+        setThinkingExpanded(() => {
+            const expanded = {};
+            Object.keys(restoredThinking).forEach(cid => {
+                expanded[cid] = true;
+            });
+            return expanded;
+        });
+        setStage1AnswerStream({});
+        setStage3AnswerStream('');
         setEvaluationComments({});
         setSynthesisSteps([]);
         setStage1Results([]);
@@ -101,7 +190,6 @@ export function useParliamentEngine() {
         setAggregateRankings([]);
 
         // Determine Stage
-        const lastMsg = conv.messages?.[conv.messages.length - 1];
         console.log("[loadSession] Last msg:", lastMsg);
 
         // If no assistant message, it's just a new conversation or user only?
@@ -162,6 +250,7 @@ export function useParliamentEngine() {
             }
 
             if (anonMap) {
+                stage2AnonMapRef.current = anonMap || null;
                 const newComments = {};
                 reviews.forEach(review => {
                     const comments = review.per_candidate_comments || {};
@@ -224,7 +313,10 @@ export function useParliamentEngine() {
             setIsLoading(true);
             setConsensusUnlocked(false);
             setHasViewedConsensus(false);
-            setThinkingSteps([]);
+            setThinkingByCouncilor({});
+            setThinkingExpanded({});
+            setStage1AnswerStream({});
+            setStage3AnswerStream('');
             setEvaluationComments({});
             setSynthesisSteps([]);
             setAgentProgress({});
@@ -233,6 +325,7 @@ export function useParliamentEngine() {
             setStage2Results(null);
             setStage3Result(null);
             setAggregateRankings([]);
+            stage2AnonMapRef.current = null;
 
             // 3. 发送消息并订阅 SSE
             // Note: councilorIds here are passed to backend. The backend resolves them and sends back 'meta' event.
@@ -286,7 +379,7 @@ export function useParliamentEngine() {
     }, []);
 
     const handleStage1Start = useCallback(() => {
-        // Already handled implicitly
+        setStage1AnswerStream({});
     }, []);
 
     const handleStage1Item = useCallback((item) => {
@@ -308,18 +401,80 @@ export function useParliamentEngine() {
         });
     }, []);
 
-    const handleThinking = useCallback((event) => {
-        const step = {
-            id: Date.now() + Math.random(),
-            agentId: event.councilor_id,
-            text: event.delta,
-            time: `${event.t.toFixed(1)}s`,
-            status: 'complete'
-        };
+    const handleStage1AnswerDelta = useCallback((event) => {
+        const cid = event.councilor_id;
+        if (!cid) return;
+        setStage1AnswerStream(prev => ({
+            ...prev,
+            [cid]: (prev[cid] || "") + (event.delta || "")
+        }));
+    }, []);
 
+    const handleStage1AnswerDone = useCallback((event) => {
+        const cid = event.councilor_id;
+        if (!cid) return;
+        setThinkingByCouncilor(prev => {
+            if (!prev[cid]) return prev;
+            return {
+                ...prev,
+                [cid]: {
+                    ...prev[cid],
+                    status: 'done'
+                }
+            };
+        });
+    }, []);
+
+    const handleStage3AnswerDelta = useCallback((event) => {
+        setStage3AnswerStream(prev => prev + (event.delta || ""));
+    }, []);
+
+    const handleThinking = useCallback((event) => {
         if (event.stage === 'stage1') {
-            setThinkingSteps(prev => [...prev, step]);
+            const cid = event.councilor_id;
+            if (!cid) return;
+
+            const bulletId = event.bullet_id || `${cid}-${Date.now()}-${Math.random()}`;
+            const title = event.title || event.delta || '';
+            const detail = event.detail || null;
+            const op = event.op || 'append';
+            const t = typeof event.t === 'number' ? event.t : null;
+
+            setThinkingByCouncilor(prev => {
+                const existing = prev[cid] || { status: 'thinking', steps: [] };
+                const steps = [...existing.steps];
+                if (op === 'update') {
+                    const index = steps.findIndex(s => s.bullet_id === bulletId);
+                    if (index >= 0) {
+                        steps[index] = {
+                            ...steps[index],
+                            title: title || steps[index].title,
+                            detail: detail !== null ? detail : steps[index].detail,
+                            t: t ?? steps[index].t
+                        };
+                    } else {
+                        steps.push({ bullet_id: bulletId, title, detail, t });
+                    }
+                } else {
+                    steps.push({ bullet_id: bulletId, title, detail, t });
+                }
+                return {
+                    ...prev,
+                    [cid]: { status: 'thinking', steps }
+                };
+            });
+
+            setThinkingExpanded(prev => (
+                prev[cid] === undefined ? { ...prev, [cid]: true } : prev
+            ));
         } else if (event.stage === 'stage3') {
+            const step = {
+                id: Date.now() + Math.random(),
+                agentId: event.councilor_id,
+                text: event.title || event.delta || '',
+                time: `${event.t?.toFixed ? event.t.toFixed(1) : '0.0'}s`,
+                status: 'complete'
+            };
             setSynthesisSteps(prev => [...prev, step]);
         }
     }, []);
@@ -330,8 +485,10 @@ export function useParliamentEngine() {
 
     const handleStage2Start = useCallback((event) => {
         setStage('stage2');
-        // 清空 Stage 1 的 Thinking (被 Stage 2 覆盖)
-        setThinkingSteps([]);
+        setStage2Results([]);
+        setEvaluationComments({});
+        setAggregateRankings([]);
+        stage2AnonMapRef.current = event?.anon_map || null;
 
         if (event.skipped) {
             // Stage 2 被跳过
@@ -339,41 +496,46 @@ export function useParliamentEngine() {
     }, []);
 
     const handleStage2Item = useCallback((item) => {
-        setStage2Results(prev => prev ? [...prev, item] : [item]);
-    }, []);
+        setStage2Results(prev => {
+            if (!prev || prev.length === 0) return [item];
+            const key = item.judge_councilor_id || item.councilor_id || item.model;
+            const index = prev.findIndex(r =>
+                (r.judge_councilor_id || r.councilor_id || r.model) === key
+            );
+            if (index >= 0) {
+                const copy = [...prev];
+                copy[index] = { ...copy[index], ...item };
+                return copy;
+            }
+            return [...prev, item];
+        });
+
+        const anonMap = stage2AnonMapRef.current;
+        if (anonMap) {
+            applyStage2ReviewComments(item, anonMap);
+        }
+    }, [applyStage2ReviewComments]);
 
     const handleStage2Complete = useCallback((data) => {
         // data contains { reviews: [], anon_map: {} }
-
-        if (data.anon_map) {
-            // Re-process comments with definitive anon_map
-            const newComments = {};
-            (data.reviews || []).forEach(review => {
-                const comments = review.per_candidate_comments || {};
-                Object.entries(comments).forEach(([anonId, comment]) => {
-                    const targetId = data.anon_map[anonId];
-                    if (targetId) {
-                        if (!newComments[targetId]) newComments[targetId] = [];
-                        newComments[targetId].push({
-                            fromId: review.judge_councilor_id,
-                            comment,
-                            score: review.scores?.[anonId]
-                        });
-                    }
-                });
-            });
-            setEvaluationComments(newComments);
+        const anonMap = data.anon_map || stage2AnonMapRef.current;
+        if (anonMap) {
+            stage2AnonMapRef.current = anonMap;
         }
 
-        // 计算 Aggregate Rankings
-        if (data.reviews && data.reviews.length > 0) {
-            const rankings = calculateAggregateRankings(data.reviews, data.anon_map);
+        if (data.reviews) {
+            setStage2Results(data.reviews);
+            if (anonMap) {
+                setEvaluationComments(buildEvaluationComments(data.reviews, anonMap));
+            }
+            const rankings = calculateAggregateRankings(data.reviews, anonMap);
             setAggregateRankings(rankings);
         }
-    }, []);
+    }, [buildEvaluationComments, calculateAggregateRankings]);
 
     const handleStage3Start = useCallback(() => {
         setStage('stage3');
+        setStage3AnswerStream('');
     }, []);
 
     const handleStage3Complete = useCallback((data) => {
@@ -395,6 +557,15 @@ export function useParliamentEngine() {
                 break;
             case 'thinking':
                 handleThinking(event);
+                break;
+            case 'stage1_answer_delta':
+                handleStage1AnswerDelta(event);
+                break;
+            case 'stage1_answer_done':
+                handleStage1AnswerDone(event);
+                break;
+            case 'stage3_answer_delta':
+                handleStage3AnswerDelta(event);
                 break;
             case 'stage1_complete':
                 handleStage1Complete(event.data);
@@ -424,12 +595,34 @@ export function useParliamentEngine() {
             default:
                 break;
         }
-    }, [handleMeta, handleStage1Start, handleStage1Item, handleThinking, handleStage1Complete, handleStage2Start, handleStage2Item, handleStage2Complete, handleStage3Start, handleStage3Complete]);
+    }, [
+        handleMeta,
+        handleStage1Start,
+        handleStage1Item,
+        handleThinking,
+        handleStage1AnswerDelta,
+        handleStage1AnswerDone,
+        handleStage3AnswerDelta,
+        handleStage1Complete,
+        handleStage2Start,
+        handleStage2Item,
+        handleStage2Complete,
+        handleStage3Start,
+        handleStage3Complete
+    ]);
 
 
     const viewConsensus = useCallback(() => {
         setActiveTab('final');
         setHasViewedConsensus(true);
+    }, []);
+
+    const toggleThinkingExpanded = useCallback((cid) => {
+        if (!cid) return;
+        setThinkingExpanded(prev => ({
+            ...prev,
+            [cid]: !(prev[cid] ?? true)
+        }));
     }, []);
 
     const reset = useCallback(() => {
@@ -441,12 +634,16 @@ export function useParliamentEngine() {
         setStage3Result(null);
         setAgentProgress({});
         setStageProgress(0);
-        setThinkingSteps([]);
+        setThinkingByCouncilor({});
+        setThinkingExpanded({});
+        setStage1AnswerStream({});
+        setStage3AnswerStream('');
         setEvaluationComments({});
         setSynthesisSteps([]);
         setConsensusUnlocked(false);
         setHasViewedConsensus(false);
         setAggregateRankings([]);
+        stage2AnonMapRef.current = null;
         // 清理定时器
         Object.values(progressTimers.current).forEach(clearInterval);
         progressTimers.current = {};
@@ -470,7 +667,10 @@ export function useParliamentEngine() {
         stage3Result,
         agentProgress,
         stageProgress,
-        thinkingSteps,
+        thinkingByCouncilor,
+        thinkingExpanded,
+        stage1AnswerStream,
+        stage3AnswerStream,
         evaluationComments,
         synthesisSteps,
         activeTab,
@@ -483,6 +683,7 @@ export function useParliamentEngine() {
         startSession,
         loadSession,
         viewConsensus,
+        toggleThinkingExpanded,
         reset,
     };
 }

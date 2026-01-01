@@ -49,19 +49,28 @@ OPENROUTER_API_KEY=sk-or-v1-...
 编辑 `backend/config.py` 自定义委员会成员和主席模型：
 
 ```python
-# 委员会成员模型池 (按优先级排序)
-COUNCIL_MODEL_POOL = [
-    "meituan/longcat-flash-chat:free",
-    "nvidia/nemotron-nano-9b-v2:free",
-    "kwaipilot/kat-coder-pro:free",
-    # ...
+# Councilor 配置（示例）
+COUNCILORS = [
+    {
+        "id": "immanuel_kant",
+        "name": "康德",
+        "model": "xiaomi/mimo-v2-flash:free",  # 首选模型
+        "model_candidates": [                   # 回退候选列表
+            "xiaomi/mimo-v2-flash:free",
+            "nvidia/nemotron-nano-9b-v2:free",
+            # ...
+        ],
+        # ...
+    },
 ]
 
-# 主席模型池 (按优先级排序)
-CHAIRMAN_MODEL_POOL = [
-    "amazon/nova-2-lite-v1:free",
+# 主席配置
+CHAIRMAN = {
+    "id": "chairman",
+    "name": "共识主席",
+    "model": "xiaomi/mimo-v2-flash:free",
     # ...
-]
+}
 ```
 
 更多可用的模型 ID，请查看 [OpenRouter Models 页面](https://openrouter.ai/models)。

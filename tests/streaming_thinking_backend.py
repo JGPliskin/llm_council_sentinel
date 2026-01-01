@@ -43,7 +43,7 @@ app.add_middleware(
 # OpenRouter 配置
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "openai/gpt-oss-20b:free"  # 支持 thinking 的模型
+DEFAULT_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"  # 默认模型
 
 # 虚拟工具定义
 EMIT_THINKING_TOOL = {
@@ -335,7 +335,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print("流式思考测试服务")
     print("=" * 60)
-    print(f"前端页面: http://localhost:8020")
-    print(f"API 端点: http://localhost:8020/api/chat/stream")
+    print(f"前端页面: http://localhost:8022")
+    print(f"API 端点: http://localhost:8022/api/chat/stream")
     print("=" * 60)
-    uvicorn.run(app, host="0.0.0.0", port=8020)
+    uvicorn.run(app, host="0.0.0.0", port=8022)

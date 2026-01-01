@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Sparkles, Scale, Terminal, Cpu, Fingerprint } from 'lucide-react';
 import { getCouncilorUIConfig } from '@/config/councilors';
@@ -14,9 +14,17 @@ function StageContentArea({
     resolvedCouncilors = [],
     stage1Results = [],
     stage3Result = null,
+    stage3AnswerStream = '',
+    thinkingByCouncilor = {},
+    thinkingExpanded = {},
+    onToggleThinking,
+    stage1AnswerStream = {},
     // stage2Results not directly displayed in content area ? Refactor shows Stage 1/3 content. Stage 2 evaluates.
 }) {
     const isFinal = activeTab === 'final';
+    const scrollRef = useRef(null);
+    const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
+    const [showJump, setShowJump] = useState(false);
 
     // Find active agent info
     const activeAgent = useMemo(() => {
@@ -29,30 +37,38 @@ function StageContentArea({
             }; // Chairman info
         }
         const found = resolvedCouncilors.find(c => c.id === activeTab);
-        return found || { id: activeTab, name: activeTab, avatar: '?', role: 'UNKNOWN' };
+        const fallbackId = activeTab || 'unknown';
+        const fallbackName = activeTab || 'UNKNOWN';
+        return found || { id: fallbackId, name: fallbackName, avatar: '?', role: 'UNKNOWN' };
     }, [activeTab, isFinal, resolvedCouncilors]);
 
     // Find content
     const contentData = useMemo(() => {
         if (isFinal) {
-            if (!stage3Result) return null;
+            if (!stage3Result && !stage3AnswerStream) return null;
+            const finalText = stage3Result?.content
+                || stage3Result?.final_answer
+                || stage3Result?.response
+                || stage3AnswerStream
+                || '';
             return {
-                title: stage3Result.title || 'FINAL CONSENSUS',
-                content: stage3Result.content || stage3Result.final_answer || '', // Assuming structure
-                status: 'complete'
+                title: stage3Result?.title || 'FINAL CONSENSUS',
+                content: finalText, // Assuming structure
+                status: stage3Result ? 'complete' : 'streaming'
             };
         }
 
         // Stage 1 content
         const result = stage1Results.find(r => r.councilor_id === activeTab);
-        if (!result) return null;
+        const streamText = stage1AnswerStream?.[activeTab] || '';
+        if (!result && !streamText) return null;
 
         return {
             title: `PROPOSAL: ${activeAgent.name}`,
-            content: result.content || result.answer_markdown || '',
-            status: result.status || 'thinking'
+            content: (result?.content || result?.answer_markdown || '') || streamText,
+            status: result?.status || (streamText ? 'streaming' : 'thinking')
         };
-    }, [isFinal, stage3Result, stage1Results, activeTab, activeAgent]);
+    }, [isFinal, stage3Result, stage3AnswerStream, stage1Results, stage1AnswerStream, activeTab, activeAgent]);
 
     // UI Colors
     const uiConfig = getCouncilorUIConfig(activeAgent.id === 'chairman' ? 'chairman' : activeAgent.id);
@@ -60,6 +76,40 @@ function StageContentArea({
     // We rely on 'text-purple-400' classes etc. dynamic? No, stick to explicit sets or style.
     // Refactor used explicit 'purple' / 'orange'.
     // I will use explicit styles based on color or standard mapped classes.
+
+    const thinkingEntry = !isFinal ? thinkingByCouncilor?.[activeTab] : null;
+    const hasThinkingSteps = !!(thinkingEntry && thinkingEntry.steps && thinkingEntry.steps.length > 0);
+    const isThinkingExpanded = thinkingExpanded?.[activeTab] !== false;
+    const hasAnswerStarted = !isFinal && Boolean(stage1AnswerStream?.[activeTab]);
+
+    useEffect(() => {
+        const container = scrollRef.current;
+        if (!container) return;
+
+        const onScroll = () => {
+            const gap = container.scrollHeight - container.scrollTop - container.clientHeight;
+            if (gap > 100) {
+                setAutoScrollEnabled(false);
+                setShowJump(true);
+            } else {
+                setAutoScrollEnabled(true);
+                setShowJump(false);
+            }
+        };
+
+        container.addEventListener('scroll', onScroll, { passive: true });
+        return () => container.removeEventListener('scroll', onScroll);
+    }, []);
+
+    useEffect(() => {
+        const container = scrollRef.current;
+        if (!container || !autoScrollEnabled) return;
+        if (typeof container.scrollTo === 'function') {
+            container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+        } else {
+            container.scrollTop = container.scrollHeight;
+        }
+    }, [autoScrollEnabled, contentData?.content, hasThinkingSteps, isThinkingExpanded, hasAnswerStarted]);
 
     // Render
     return (
@@ -110,7 +160,7 @@ function StageContentArea({
             </div>
 
             {/* MAIN CONTENT */}
-            <div className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth relative z-10 custom-scrollbar">
+            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth relative z-10 custom-scrollbar">
                 <div className="max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
 
                     {/* Header Card */}
@@ -123,7 +173,7 @@ function StageContentArea({
                             <div className="absolute inset-0 opacity-20 blur-xl" style={{ backgroundColor: `var(--accent-${accentColor})` }}></div>
                             <div className="relative z-10">{activeAgent.avatar}</div>
                             <div className="absolute bottom-0 left-0 right-0 text-[10px] text-center font-mono text-zinc-600 bg-zinc-950/80 py-1 uppercase">
-                                ID: {activeAgent.id.substring(0, 8)}
+                                ID: {(activeAgent.id || 'unknown').substring(0, 8)}
                             </div>
                         </div>
 
@@ -149,11 +199,53 @@ function StageContentArea({
                         <div className="absolute bottom-0 left-0 w-4 h-4 border-b-2 border-l-2 border-zinc-600"></div>
                         <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-zinc-600"></div>
 
+                        {hasThinkingSteps && (
+                            <div className="mb-6 border border-zinc-800 bg-zinc-950/60">
+                                <button
+                                    type="button"
+                                    onClick={() => onToggleThinking && onToggleThinking(activeTab)}
+                                    className="w-full flex items-center justify-between px-4 py-3 text-xs font-mono uppercase tracking-widest text-zinc-400 hover:text-zinc-200"
+                                >
+                                    <span className="flex items-center gap-2">
+                                        {thinkingEntry?.status === 'done' ? (
+                                            <span className="text-green-500">✓</span>
+                                        ) : (
+                                            <span
+                                                className="inline-block w-3.5 h-3.5 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"
+                                            />
+                                        )}
+                                        <span>
+                                            Thinking Process {thinkingEntry?.status === 'done' ? '[DONE]' : '[LIVE]'}
+                                        </span>
+                                    </span>
+                                    <span>{isThinkingExpanded ? '[-]' : '[+]'}</span>
+                                </button>
+                                {isThinkingExpanded && (
+                                    <div className="px-4 pb-4 text-sm text-zinc-300 space-y-3">
+                                        {thinkingEntry.steps.map(step => (
+                                            <div key={step.bullet_id} className="border-b border-zinc-800/60 pb-3 last:border-0 last:pb-0">
+                                                <div className="font-semibold text-zinc-200">- {step.title}</div>
+                                                {step.detail && (
+                                                    <div className="text-zinc-500 leading-relaxed mt-1">{step.detail}</div>
+                                                )}
+                                            </div>
+                                        ))}
+                                        {hasAnswerStarted && (
+                                            <div className="text-xs text-zinc-500 font-mono uppercase tracking-widest">
+                                                Answer started, still expanded
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+
                         {!contentData ? (
                             <div className="flex items-center justify-center h-40 text-zinc-500 font-mono animate-pulse">
                                 {isFinal ? 'Awaiting Consensus...' : 'Waiting for data stream...'}
                             </div>
-                        ) : contentData.status === 'thinking' ? (
+                        ) : !contentData.content ? (
                             <div className="flex items-center justify-center h-40 text-zinc-500 font-mono animate-pulse">
                                 Processing...
                             </div>
@@ -182,7 +274,7 @@ function StageContentArea({
                             </div>
                         )}
 
-                        {!isFinal && contentData && contentData.status !== 'thinking' && (
+                        {!isFinal && contentData && contentData.content && (
                             <div className="mt-12 flex items-center gap-4 p-4 bg-zinc-950 border border-zinc-800 text-zinc-500 font-mono text-xs">
                                 <Cpu className="w-4 h-4" />
                                 <span>Signature Verified // Latency: 42ms // Trust Score: 98.4%</span>
@@ -191,6 +283,22 @@ function StageContentArea({
                     </div>
                     <div className="h-24" />
                 </div>
+                {showJump && (
+                    <button
+                        type="button"
+                        onClick={() => {
+                            const container = scrollRef.current;
+                            if (container) {
+                                container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+                            }
+                            setAutoScrollEnabled(true);
+                            setShowJump(false);
+                        }}
+                        className="fixed bottom-6 right-6 md:right-10 z-30 px-3 py-2 text-xs font-mono uppercase tracking-widest bg-zinc-900 border border-zinc-700 text-zinc-300 hover:text-white hover:border-zinc-500"
+                    >
+                        Jump to latest
+                    </button>
+                )}
             </div>
 
             {/* Beacon */}

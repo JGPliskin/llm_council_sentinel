@@ -180,6 +180,11 @@ function AppContent() {
               resolvedCouncilors={engine.resolvedCouncilors}
               stage1Results={engine.stage1Results}
               stage3Result={engine.stage3Result}
+              stage3AnswerStream={engine.stage3AnswerStream}
+              thinkingByCouncilor={engine.thinkingByCouncilor}
+              thinkingExpanded={engine.thinkingExpanded}
+              onToggleThinking={engine.toggleThinkingExpanded}
+              stage1AnswerStream={engine.stage1AnswerStream}
             />
           )}
 
@@ -241,7 +246,6 @@ function AppContent() {
             <DetailPanel
               stage={engine.stage}
               activeTab={engine.activeTab}
-              thinkingSteps={engine.thinkingSteps}
               evaluationComments={engine.evaluationComments}
               synthesisSteps={engine.synthesisSteps}
               onClose={() => setIsPanelOpen(false)}
