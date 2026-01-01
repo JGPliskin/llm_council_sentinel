@@ -10,12 +10,21 @@ from config import COUNCIL_SIZE, PROBE_TIMEOUT_SECONDS, GLOBAL_MODEL_POOL
 from health import health_manager
 
 
+import time
+
+
 async def check_model_health_probe(model_id: str) -> Tuple[bool, Optional[str], Optional[int]]:
     """
     Probe function to be passed to HealthManager.
     Returns: (success, error_message, status_code)
+    
+    Side effect: 如果探测成功，会自动更新 HealthRecord 中的 TTFT 统计数据。
     """
     messages = [{"role": "user", "content": "Reply OK"}]
+    
+    # 记录开始时间 (用于计算 TTFT)
+    t_start = time.time()
+    ttft_ms = None
     
     try:
         # We assume openrouter.query_model returns dict with 'error', 'status_code' etc.
@@ -27,11 +36,19 @@ async def check_model_health_probe(model_id: str) -> Tuple[bool, Optional[str], 
             max_output_tokens=5
         )
         
+        # 计算 TTFT (探测场景下，整个响应时间就是 TTFT)
+        ttft_ms = int((time.time() - t_start) * 1000)
+        
         if not response:
              return False, "No response", 500
              
         if response.get('error'):
              return False, response.get('content', 'Unknown error'), response.get('status_code')
+        
+        # 成功时更新 TTFT 统计
+        record = health_manager._records.get(model_id)
+        if record and ttft_ms is not None:
+            record.update_ttft(ttft_ms)
              
         return True, None, 200
         

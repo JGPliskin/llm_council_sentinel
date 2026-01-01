@@ -4,8 +4,7 @@ import json
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from datetime import datetime
-import pytz
+from datetime import datetime, timezone, timedelta
 
 # 日志目录
 LOG_DIR = Path(__file__).parent / "logs"
@@ -27,7 +26,7 @@ handler.setFormatter(logging.Formatter("%(message)s"))
 request_logger.addHandler(handler)
 
 # 东八区时区
-TZ_SHANGHAI = pytz.timezone("Asia/Shanghai")
+TZ_SHANGHAI = timezone(timedelta(hours=8))
 
 
 def log_request_timing(
@@ -37,7 +36,8 @@ def log_request_timing(
     model: str,
     timing: dict,
     status: str = "ok",
-    error: str = None
+    error: str = None,
+    routing: dict = None
 ):
     """
     输出 JSON 格式的请求计时日志
@@ -54,6 +54,11 @@ def log_request_timing(
             - generation_ms: 生成耗时
         status: 状态 (ok, failed)
         error: 错误信息 (可选)
+        routing: 选路决策信息 (可选)，包含：
+            - mode: 'auto_speed' | 'config_order'
+            - candidates_ttft: {model_id: ttft_ms | null}
+            - selected: 选中的模型
+            - reason: 选路原因
     """
     now = datetime.now(TZ_SHANGHAI)
     
@@ -69,5 +74,8 @@ def log_request_timing(
     
     if error:
         data["error"] = error
+    
+    if routing:
+        data["routing"] = routing
     
     request_logger.info(json.dumps(data, ensure_ascii=False))

@@ -24,6 +24,8 @@ from config import (
     STAGE2_DEADLINE,
     COUNCILOR_MAP,
     GLOBAL_MODEL_MAP,
+    SPEED_ROUTE_SWITCH_ABS_MS,
+    SPEED_ROUTE_SWITCH_REL_PCT,
 )
 from health import health_manager
 from logger import log_request_timing
@@ -237,24 +239,110 @@ class ModelConcurrencyManager:
 model_concurrency_manager = ModelConcurrencyManager()
 
 
-def select_best_model(candidates: List[str], excluded: set) -> Optional[str]:
+# 内存态：每个 councilor 的“当前首选模型”
+_current_model_by_councilor: Dict[str, str] = {}
+
+
+def select_best_model(
+    candidates: List[str], 
+    excluded: set,
+    councilor_id: str = None,
+    auto_route_by_speed: bool = True
+) -> Optional[str]:
     """
-    Select the first healthy model from candidates that is not excluded.
-    Strict On-Demand Routing.
+    服务于 Stage1 的模型选择函数。
+    
+    - auto_route_by_speed=True: 按 TTFT 速度排序选最快 (+ 双阈值防抖)
+    - auto_route_by_speed=False: 按 candidates 顺序选第一个健康
     """
+    # 1. 过滤出可用的候选模型 (healthy 或 unknown)
+    # unknown 状态表示尚未检查，允许参与选择以支持夜间等跳过健康检查的场景
+    healthy_candidates = []
     for mid in candidates:
         if mid in excluded:
             continue
         status = health_manager.get_status(mid)
-        if status.get("health_status") == "healthy":
-            return mid
+        health_status = status.get("health_status")
+        # 允许 healthy 和 unknown 状态
+        if health_status in ("healthy", "unknown"):
+            healthy_candidates.append(mid)
     
-    # If no healthy model found, should we return the first non-excluded one 
-    # (if it's unknown)? Or strictly fail?
-    # Spec says: "Unknown strict unavailable".
-    # But if ALL are unavailable?
-    # The caller will handle None as failure.
-    return None
+    if not healthy_candidates:
+        return None
+    
+    if len(healthy_candidates) == 1:
+        return healthy_candidates[0]
+    
+    # 2. 如果禁用自动选路，返回第一个健康模型 (按 candidates 原始顺序)
+    if not auto_route_by_speed:
+        return healthy_candidates[0]
+    
+    # 3. 自动速度排序模式
+    # 获取每个候选的 TTFT
+    ttft_map = {}
+    for mid in healthy_candidates:
+        record = health_manager._records.get(mid)
+        if record:
+            ttft = record.get_effective_ttft()
+            ttft_map[mid] = ttft  # 可能是 None
+        else:
+            ttft_map[mid] = None
+    
+    # 按 TTFT 排序 (None 排最后，同 TTFT 按 candidates 顺序保持稳定)
+    def sort_key(mid: str) -> Tuple[int, float, int]:
+        ttft = ttft_map.get(mid)
+        # (has_ttft, ttft_value, original_order)
+        # has_ttft: 0=有, 1=无 (无排最后)
+        # original_order: candidates 中的索引 (tie-breaker)
+        try:
+            orig_idx = candidates.index(mid)
+        except ValueError:
+            orig_idx = 9999
+        if ttft is not None:
+            return (0, ttft, orig_idx)
+        else:
+            return (1, 0, orig_idx)
+    
+    sorted_candidates = sorted(healthy_candidates, key=sort_key)
+    top = sorted_candidates[0]
+    top_ttft = ttft_map.get(top)
+    
+    # 4. 双阈值防抖切换
+    if councilor_id:
+        current = _current_model_by_councilor.get(councilor_id)
+        
+        # 如果 current 不存在/不健康/TTFT缺失，直接选 top
+        if current and current in healthy_candidates:
+            current_ttft = ttft_map.get(current)
+            
+            if current == top:
+                # 保持不变
+                return current
+            
+            if current_ttft is not None and top_ttft is not None:
+                # 计算差异
+                abs_diff = current_ttft - top_ttft
+                rel_diff = abs_diff / current_ttft if current_ttft > 0 else 0
+                
+                # 双阈值: 绝对差 >= 800ms AND 相对差 >= 30%
+                if abs_diff >= SPEED_ROUTE_SWITCH_ABS_MS and rel_diff >= SPEED_ROUTE_SWITCH_REL_PCT:
+                    # 满足切换条件，切换到 top
+                    _current_model_by_councilor[councilor_id] = top
+                    return top
+                else:
+                    # 不满足阈值，保持 current
+                    return current
+            else:
+                # TTFT 缺失，回退到 top
+                _current_model_by_councilor[councilor_id] = top
+                return top
+        else:
+            # current 不可用，选 top
+            _current_model_by_councilor[councilor_id] = top
+            return top
+    
+    # 无 councilor_id，直接返回最快
+    return top
 
 def get_candidates(obj: Dict[str, Any]) -> List[str]:
     """Helper to get candidates from councilor/chairman object."""
@@ -330,12 +418,22 @@ async def _request_stage1_bounded(
     
     # Outer Loop: Candidate Selection
     while True:
-        # A. Select Model
-        selected_model = select_best_model(candidates, excluded_models)
+        # A. Select Model (Stage1 使用速度选路)
+        auto_route = councilor.get("auto_route_by_speed", True)
         
-        # 记录模型选择耗时（仅第一次）
+        # 记录模型选择开始时间（仅第一次）
+        t_select_start = time.time() if t_model_select is None else None
+        
+        selected_model = select_best_model(
+            candidates, 
+            excluded_models, 
+            councilor_id=councilor["id"],
+            auto_route_by_speed=auto_route
+        )
+        
+        # 记录模型选择结束时间（仅第一次）
         if t_model_select is None:
-            t_model_select = time.time()
+            t_model_select = time.time() - t_select_start  # 直接存储耗时（秒）
         
         if not selected_model:
             # No healthy models available
@@ -423,10 +521,39 @@ async def _request_stage1_bounded(
             # 计算耗时并输出日志
             t_end = time.time()
             ttft_ms = response.get("ttft_ms")
-            model_select_ms = int((t_model_select - t_start) * 1000) if t_model_select else 0
+            model_select_ms = int(t_model_select * 1000) if t_model_select else 0  # t_model_select 已经是耗时（秒）
             total_ms = int((t_end - t_start) * 1000)
             generation_ms = total_ms - (ttft_ms or 0) - model_select_ms
             
+            # 需求3 4.4: 检查是否需要触发紧急探测
+            if ttft_ms is not None:
+                # 延迟导入以避免循环依赖
+                from validation import check_model_health_probe
+                from config import (
+                    EMERGENCY_PROBE_TTFT_THRESHOLD,
+                    EMERGENCY_PROBE_TTFT_MULTIPLIER,
+                    EMERGENCY_PROBE_COOLDOWN_MINUTES
+                )
+                
+                is_slow = health_manager.is_ttft_slow(
+                    selected_model, 
+                    ttft_ms, 
+                    threshold=EMERGENCY_PROBE_TTFT_THRESHOLD, 
+                    multiplier=EMERGENCY_PROBE_TTFT_MULTIPLIER
+                )
+                
+                if is_slow:
+                    # 触发紧急探测 (Fire-and-forget)
+                    # 范围：刷新当前 councilor 的所有候选模型
+                    # 注意：trigger_emergency_refresh 内部会检查每个 model 的 cooling down
+                    asyncio.create_task(
+                        health_manager.trigger_emergency_refresh(
+                            candidates, 
+                            check_model_health_probe, 
+                            cooldown_minutes=EMERGENCY_PROBE_COOLDOWN_MINUTES
+                        )
+                    )
+
             log_request_timing(
                 stage="stage1",
                 councilor_id=councilor["id"],
@@ -469,7 +596,7 @@ async def _request_stage1_bounded(
     # If we exited without returning
     # 记录失败日志
     t_end = time.time()
-    model_select_ms = int((t_model_select - t_start) * 1000) if t_model_select else 0
+    model_select_ms = int(t_model_select * 1000) if t_model_select else 0  # t_model_select 已经是耗时（秒）
     total_ms = int((t_end - t_start) * 1000)
     
     log_request_timing(

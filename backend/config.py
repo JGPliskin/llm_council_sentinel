@@ -101,6 +101,7 @@ COUNCILORS = [
             "stage1": {"max_output_tokens": 800, "timeout": DEFAULT_STAGE1_TIMEOUT},
             "stage2": {"max_output_tokens": 360, "timeout": 75.0},
         },
+        "auto_route_by_speed": True,  # 是否启用速度自动选路
     },
     {
         "id": "donald_trump",
@@ -124,6 +125,7 @@ COUNCILORS = [
             "stage1": {"max_output_tokens": 820, "timeout": DEFAULT_STAGE1_TIMEOUT},
             "stage2": {"max_output_tokens": 360, "timeout": 75.0},
         },
+        "auto_route_by_speed": True,
     },
     {
         "id": "hideo_kojima",
@@ -147,6 +149,7 @@ COUNCILORS = [
             "stage1": {"max_output_tokens": 820, "timeout": DEFAULT_STAGE1_TIMEOUT},
             "stage2": {"max_output_tokens": 360, "timeout": 75.0},
         },
+        "auto_route_by_speed": True,
     },
 ]
 
@@ -202,3 +205,12 @@ HEALTH_CHECK_START_HOUR = 10   # 早上 10 点开始
 HEALTH_CHECK_END_HOUR = 24     # 午夜 24 点结束 (即 0 点)
 HEALTH_CHECK_INTERVAL = 7200   # 每 2 小时 = 7200 秒
 HEALTH_CHECK_TIMEZONE = "Asia/Shanghai"
+
+# ----------------------------
+# 速度自动选路 (需求3)
+# ----------------------------
+SPEED_ROUTE_SWITCH_ABS_MS = 800      # 切换绝对阈值 (ms)
+SPEED_ROUTE_SWITCH_REL_PCT = 0.30    # 切换相对阈值 (30%)
+EMERGENCY_PROBE_TTFT_THRESHOLD = 5000  # 紧急探测触发阈值 (ms)
+EMERGENCY_PROBE_TTFT_MULTIPLIER = 3    # 紧急探测触发: TTFT >= EMA * 此值
+EMERGENCY_PROBE_COOLDOWN_MINUTES = 10  # 紧急探测冷却 (分钟，per-model)

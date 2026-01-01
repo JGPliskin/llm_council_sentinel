@@ -1,0 +1,302 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.11, pytest-8.4.2, pluggy-1.5.0 -- D:\ProgramData\Miniconda\python.exe
+cachedir: .pytest_cache
+rootdir: F:\OneDrive\PY\ZYZ\project\llm_council_sentinel
+configfile: pytest.ini
+plugins: anyio-4.12.0, asyncio-1.0.0
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 6 items
+
+backend/tests/test_fast_lane.py::test_is_ttft_slow PASSED                [ 16%]
+backend/tests/test_fast_lane.py::test_health_record_p50_logic PASSED     [ 33%]
+backend/tests/test_fast_lane.py::test_select_best_model_sorting PASSED   [ 50%]
+backend/tests/test_fast_lane.py::test_anti_shake_switch PASSED           [ 66%]
+backend/tests/test_fast_lane.py::test_emergency_probe_trigger_integration FAILED [ 83%]
+backend/tests/test_fast_lane.py::test_no_emergency_trigger_when_fast FAILED [100%]
+
+================================== FAILURES ===================================
+__________________ test_emergency_probe_trigger_integration ___________________
+
+    @pytest.mark.asyncio
+    async def test_emergency_probe_trigger_integration():
+        # Mock dependencies
+        councilor = {
+            "id": "c1",
+            "name": "C1",
+            "model": "m1",
+            "model_candidates": ["m1", "m2"],
+            "auto_route_by_speed": True
+        }
+    
+        # Patch all the heavy lifting
+        with patch("council.stream_model", new_callable=AsyncMock) as mock_stream:
+            with patch("council.health_manager") as mock_hm:
+                 with patch("council.model_concurrency_manager") as mock_mcm:
+                    # Fix: Mock Async Semaphore
+                    mock_sem = AsyncMock()
+                    mock_sem.__aenter__.return_value = None
+                    mock_sem.__aexit__.return_value = None
+                    mock_mcm.get_semaphore.return_value = mock_sem
+    
+                    # Setup mock response with SLOW TTFT
+                    mock_stream.return_value = {
+                        "model": "m1",
+                        "content": "ok",
+                        "ttft_ms": 6000 # > 5000 threshold
+                    }
+    
+                    # Mock health check returning True for slow check
+                    mock_hm.is_ttft_slow.return_value = True
+                    mock_hm.trigger_emergency_refresh = AsyncMock()
+                    # Also mock get_status for selection
+                    mock_hm.get_status.return_value = {"health_status": "healthy"}
+                    # Mock record existence for selection (so it picks m1)
+                    mock_hm._records = {}
+    
+                    # Run specific function
+                    semaphore = asyncio.Semaphore(1)
+    
+>                   await _request_stage1_bounded(
+                        semaphore=semaphore,
+                        councilor=councilor,
+                        user_query="hi",
+                        enable_thinking=False
+                    )
+
+backend\tests\test_fast_lane.py:176: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+semaphore = <asyncio.locks.Semaphore object at 0x00000260DA27DF10 [unlocked, value:1]>
+councilor = {'auto_route_by_speed': True, 'id': 'c1', 'model': 'm1', 'model_candidates': ['m1', 'm2'], ...}
+user_query = 'hi', on_thinking = None, on_answer_delta = None
+enable_thinking = False
+
+    async def _request_stage1_bounded(
+        semaphore: asyncio.Semaphore,
+        councilor: Dict[str, Any],
+        user_query: str,
+        on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
+        on_answer_delta: Optional[Callable[[str, str], Any]] = None,
+        enable_thinking: bool = True
+    ) -> Dict[str, Any]:
+    
+        # 计时开始
+        t_start = time.time()
+        t_model_select = None
+    
+        persona = fetch_persona(PERSONA_CACHE, councilor.get("persona_path", ""))
+        stage_limits = councilor.get("stage_limits", {}).get("stage1", {})
+        timeout = stage_limits.get("timeout", DEFAULT_STAGE1_TIMEOUT)
+        max_tokens = stage_limits.get("max_output_tokens", 800)
+    
+        # 基础 persona 提示
+        base_instructions = (
+            "严格遵守：\n"
+            "- 回答语言需与用户问题保持一致。\n"
+            "- 不自我介绍，不复述问题，不写模板化客套。\n"
+            "- 直接输出 Markdown 格式答案（不要 JSON）。\n"
+            "- 内容尽量自然、像人类表达，但不要空洞铺陈。\n"
+        )
+    
+        if enable_thinking:
+            # 参照测试代码的写法，更明确地强调使用 tool calls
+            thinking_instructions = """
+    ## 思考规则
+    1. 在回答问题前，你必须先调用 `emit_thinking` 工具来展示你的思考过程
+    2. 每个思考步骤都要调用一次 `emit_thinking`，至少调用 2-3 次
+    3. `title` 必须是 6-12 个词的简短摘要（像 bullet point）
+    4. `detail` 必须是 1-3 行的解释说明
+    
+    ## 回答规则
+    1. 思考完成后，直接在 content 中输出最终答案（Markdown 格式）
+    2. 绝对不要在最终答案中包含任何 thinking 文本或 JSON
+    3. 思考只能通过 `emit_thinking` 工具发送，不要把 JSON 输出到回答中
+    
+    ## 示例思考流程
+    - emit_thinking(title="分析问题的核心要素")
+    - emit_thinking(title="考虑可能的解决方案")
+    - emit_thinking(title="评估最佳答案")
+    - 输出最终答案（纯 Markdown，无 JSON）
+    """
+            system_prompt = f"{persona}\n\n{base_instructions}\n{thinking_instructions}"
+        else:
+            system_prompt = f"{persona}\n\n{base_instructions}"
+    
+        user_message = (
+            f"用户问题：{user_query}\n"
+            "请依据 persona 直接作答。"
+        )
+    
+    
+        candidates = get_candidates(councilor)
+        excluded_models = set()
+        attempted_models = [] # Track for metadata/history
+    
+        last_error = None
+    
+        # Outer Loop: Candidate Selection
+        while True:
+            # A. Select Model (Stage1 使用速度选路)
+            auto_route = councilor.get("auto_route_by_speed", True)
+            selected_model = select_best_model(
+                candidates,
+                excluded_models,
+                councilor_id=councilor["id"],
+                auto_route_by_speed=auto_route
+            )
+    
+            # 记录模型选择耗时（仅第一次）
+            if t_model_select is None:
+                t_model_select = time.time()
+    
+            if not selected_model:
+                # No healthy models available
+                # If we haven't tried anything yet, and maybe all are "unknown" but we are strict?
+                # Or if we exhausted all.
+                # We fail.
+                break
+    
+>           model_sem = await model_concurrency_manager.get_semaphore(selected_model)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: object AsyncMock can't be used in 'await' expression
+
+backend\council.py:438: TypeError
+_____________________ test_no_emergency_trigger_when_fast _____________________
+
+    @pytest.mark.asyncio
+    async def test_no_emergency_trigger_when_fast():
+         # Mock dependencies
+        councilor = {
+            "id": "c1",
+            "model": "m1",
+            "model_candidates": ["m1"]
+        }
+    
+        with patch("council.stream_model", new_callable=AsyncMock) as mock_stream:
+            with patch("council.health_manager") as mock_hm:
+                 with patch("council.model_concurrency_manager") as mock_mcm:
+                    # Fix: Mock Async Semaphore
+                    mock_sem = AsyncMock()
+                    mock_sem.__aenter__.return_value = None
+                    mock_sem.__aexit__.return_value = None
+                    mock_mcm.get_semaphore.return_value = mock_sem
+    
+                    mock_stream.return_value = {
+                        "model": "m1",
+                        "content": "ok",
+                        "ttft_ms": 200 # Fast
+                    }
+    
+                    mock_hm.is_ttft_slow.return_value = False
+                    mock_hm.trigger_emergency_refresh = AsyncMock()
+                    mock_hm.get_status.return_value = {"health_status": "healthy"}
+    
+                    semaphore = asyncio.Semaphore(1)
+>                   await _request_stage1_bounded(
+                        semaphore=semaphore,
+                        councilor=councilor,
+                        user_query="hi"
+                    )
+
+backend\tests\test_fast_lane.py:220: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+semaphore = <asyncio.locks.Semaphore object at 0x00000260D7841C10 [unlocked, value:1]>
+councilor = {'id': 'c1', 'model': 'm1', 'model_candidates': ['m1']}
+user_query = 'hi', on_thinking = None, on_answer_delta = None
+enable_thinking = True
+
+    async def _request_stage1_bounded(
+        semaphore: asyncio.Semaphore,
+        councilor: Dict[str, Any],
+        user_query: str,
+        on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
+        on_answer_delta: Optional[Callable[[str, str], Any]] = None,
+        enable_thinking: bool = True
+    ) -> Dict[str, Any]:
+    
+        # 计时开始
+        t_start = time.time()
+        t_model_select = None
+    
+        persona = fetch_persona(PERSONA_CACHE, councilor.get("persona_path", ""))
+        stage_limits = councilor.get("stage_limits", {}).get("stage1", {})
+        timeout = stage_limits.get("timeout", DEFAULT_STAGE1_TIMEOUT)
+        max_tokens = stage_limits.get("max_output_tokens", 800)
+    
+        # 基础 persona 提示
+        base_instructions = (
+            "严格遵守：\n"
+            "- 回答语言需与用户问题保持一致。\n"
+            "- 不自我介绍，不复述问题，不写模板化客套。\n"
+            "- 直接输出 Markdown 格式答案（不要 JSON）。\n"
+            "- 内容尽量自然、像人类表达，但不要空洞铺陈。\n"
+        )
+    
+        if enable_thinking:
+            # 参照测试代码的写法，更明确地强调使用 tool calls
+            thinking_instructions = """
+    ## 思考规则
+    1. 在回答问题前，你必须先调用 `emit_thinking` 工具来展示你的思考过程
+    2. 每个思考步骤都要调用一次 `emit_thinking`，至少调用 2-3 次
+    3. `title` 必须是 6-12 个词的简短摘要（像 bullet point）
+    4. `detail` 必须是 1-3 行的解释说明
+    
+    ## 回答规则
+    1. 思考完成后，直接在 content 中输出最终答案（Markdown 格式）
+    2. 绝对不要在最终答案中包含任何 thinking 文本或 JSON
+    3. 思考只能通过 `emit_thinking` 工具发送，不要把 JSON 输出到回答中
+    
+    ## 示例思考流程
+    - emit_thinking(title="分析问题的核心要素")
+    - emit_thinking(title="考虑可能的解决方案")
+    - emit_thinking(title="评估最佳答案")
+    - 输出最终答案（纯 Markdown，无 JSON）
+    """
+            system_prompt = f"{persona}\n\n{base_instructions}\n{thinking_instructions}"
+        else:
+            system_prompt = f"{persona}\n\n{base_instructions}"
+    
+        user_message = (
+            f"用户问题：{user_query}\n"
+            "请依据 persona 直接作答。"
+        )
+    
+    
+        candidates = get_candidates(councilor)
+        excluded_models = set()
+        attempted_models = [] # Track for metadata/history
+    
+        last_error = None
+    
+        # Outer Loop: Candidate Selection
+        while True:
+            # A. Select Model (Stage1 使用速度选路)
+            auto_route = councilor.get("auto_route_by_speed", True)
+            selected_model = select_best_model(
+                candidates,
+                excluded_models,
+                councilor_id=councilor["id"],
+                auto_route_by_speed=auto_route
+            )
+    
+            # 记录模型选择耗时（仅第一次）
+            if t_model_select is None:
+                t_model_select = time.time()
+    
+            if not selected_model:
+                # No healthy models available
+                # If we haven't tried anything yet, and maybe all are "unknown" but we are strict?
+                # Or if we exhausted all.
+                # We fail.
+                break
+    
+>           model_sem = await model_concurrency_manager.get_semaphore(selected_model)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: object AsyncMock can't be used in 'await' expression
+
+backend\council.py:438: TypeError
+=========================== short test summary info ===========================
+FAILED backend/tests/test_fast_lane.py::test_emergency_probe_trigger_integration
+FAILED backend/tests/test_fast_lane.py::test_no_emergency_trigger_when_fast
+========================= 2 failed, 4 passed in 0.67s =========================

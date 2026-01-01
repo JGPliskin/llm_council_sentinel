@@ -13,8 +13,14 @@ from typing import List, Dict, Any, Optional, Tuple
 import uuid
 import json
 import asyncio
-from datetime import datetime
-import pytz
+from datetime import datetime, timezone
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    # Fallback for systems without zoneinfo data properly configured (though 3.11 should have it)
+    # We'll use a simple fixed offset if needed, or rely on system.
+    # But standard lib has zoneinfo.
+    from zoneinfo import ZoneInfo
 
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -206,9 +212,9 @@ async def periodically_refresh_health():
     """Background task to refresh health periodically within allowed hours."""
     # 获取时区对象
     try:
-        tz = pytz.timezone(HEALTH_CHECK_TIMEZONE)
+        tz = ZoneInfo(HEALTH_CHECK_TIMEZONE)
     except Exception:
-        tz = pytz.UTC
+        tz = timezone.utc
         print(f"Warning: Could not load timezone {HEALTH_CHECK_TIMEZONE}, using UTC", flush=True)
 
     while True:
@@ -475,33 +481,16 @@ def resolve_target_councilors(
     current_council_status = validation.get_council_health_status(ACTIVE_COUNCIL) # Use ACTIVE_COUNCIL as pool def source
     
     health_map = {c["id"]: c.get("healthy", True) for c in current_council_status}
+    # 同时记录状态，用于判断 unknown
+    status_map = {c["id"]: c.get("health_status", "unknown") for c in current_council_status}
     
-    def is_healthy(cid):
-        # STRICT requirement: "healthy === True".
-        # If "unknown", healthy is False?
-        # In HealthManager: status="unknown" -> healthy=False.
-        # So unknown models are ignored. This matches "Startup default disabled".
-        # But wait, if startup check is False, everything is unknown.
-        # This means NO ONE can start a conversation until they visit home page (get_councilors) or manual refresh?
-        # If I POST to /api/conversations directly on fresh boot, it might fail to find healthy models?
-        # User spec: "Startup... unknown... stale=true"
-        # If unknown -> healthy=False, then `default_ids` will be empty.
-        # This might be too strict.
-        # Let's check HealthManager.get_status().
-        # "healthy": effective_status == "healthy"
-        # So yes, unknown is NOT healthy.
-        # If so, we need to ensure at least one check if we have 0 healthy?
-        # Or blindly trust config if unknown?
-        # User: "Passive... Runtime updates".
-        # If I send a message, and everyone is unknown, and I filter them out... I have 0 councilors.
-        # Then `run_full_council` fails or complains.
-        # We should probably allow "unknown" to be candidate if we have no choices?
-        # Or better: "unknown" status should be treated as "candidate for trial" (optimistic)?
-        # User defined: "healthy = (health_status=='healthy')".
-        # So strictly speaking, unknown is not healthy.
-        # But for 'resolve', maybe we accept unknown?
-        # Let's stick to strict for now, but if 'default_ids' ends up empty, we might have an issue.
-        return health_map.get(cid, False) is True
+    def is_available(cid):
+        # 允许 healthy 或 unknown 状态的模型参与选择
+        # unknown 表示尚未检查（如夜间跳过健康检查），应该允许尝试
+        status = status_map.get(cid, "unknown")
+        if status in ("healthy", "unknown"):
+            return True
+        return False
     
     # 1. Payload Overrides
     if payload_ids:
@@ -512,7 +501,7 @@ def resolve_target_councilors(
         valid_ids = []
         for cid in normalized_ids:
             if cid in COUNCILOR_MAP:
-                if is_healthy(cid):
+                if is_available(cid):
                     valid_ids.append(cid)
                 else:
                     ignored_ids.append(cid)
@@ -530,7 +519,7 @@ def resolve_target_councilors(
         valid_v2 = []
         for cid in v2_ids:
              if cid in COUNCILOR_MAP:
-                 if is_healthy(cid):
+                 if is_available(cid):
                      valid_v2.append(cid)
                  else:
                      ignored_ids.append(cid)
@@ -557,7 +546,7 @@ def resolve_target_councilors(
             # Filter healthy
             valid_migrated = []
             for cid in migrated_ids:
-                if is_healthy(cid):
+                if is_available(cid):
                     valid_migrated.append(cid)
                 else:
                     ignored_ids.append(cid)
@@ -566,17 +555,8 @@ def resolve_target_councilors(
                  return [COUNCILOR_MAP[cid] for cid in valid_migrated], needs_migration, ignored_ids
             
     # 3. Global Default (Fallback)
-    # Use all ACTIVE and HEALTHY councilors
-    # If strictly healthy is required, and on startup all are unknown...
-    # We should fallback to "all councilors" if valid_count == 0? 
-    # Or rely on client to refresh?
-    # Let's allow ACTIVE_COUNCIL (which is cached) to be the source.
-    # If strict is applied, and we have 0, we might return empty list.
-    default_ids = [c["id"] for c in current_council_status if c.get("healthy") is True]
-    
-    # Fallback: If 0 healthy (e.g. startup), but we have candidates in status 'unknown'?
-    # Logic: if len(default_ids) < 2 (insufficient), maybe include 'unknown'?
-    # Let's keep it strict for now. If user sees 0 active, they will refresh.
+    # 使用所有可用的 councilors (healthy 或 unknown)
+    default_ids = [c["id"] for c in current_council_status if is_available(c["id"])]
     
     return [COUNCILOR_MAP[cid] for cid in default_ids], True, ignored_ids # Mark as needing migration/save
 

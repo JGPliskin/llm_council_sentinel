@@ -31,6 +31,19 @@ class HealthRecord:
     cooldown_until: Optional[datetime.datetime] = None
     error: Optional[str] = None
     source: Optional[str] = None  # probe, runtime
+    
+    # TTFT 统计字段 (需求3)
+    last_ttft_ms: Optional[int] = None  # 最近一次探测 TTFT
+    ema_ttft_ms: Optional[float] = None  # 平滑 TTFT (EMA alpha=0.3)
+    p50_ttft_ms: Optional[float] = None  # 中位数 TTFT (样本数>=5时有效)
+    ttft_samples: List[int] = field(default_factory=list)  # 最近5次样本
+    ttft_updated_at: Optional[datetime.datetime] = None  # TTFT 更新时间
+    last_emergency_probe_at: Optional[datetime.datetime] = None  # 紧急探测时间 (per-model)
+
+    # TTFT 配置常量
+    TTFT_EMA_ALPHA: float = 0.3
+    TTFT_MAX_SAMPLES: int = 5
+    TTFT_EXPIRE_HOURS: int = 6
 
     def is_stale(self) -> bool:
         if not self.last_checked:
@@ -49,6 +62,72 @@ class HealthRecord:
                 # Let's return "unknown" so it can be picked up.
                 return "unknown" 
         return self.status
+
+    def update_ttft(self, ttft_ms: int) -> None:
+        """更新 TTFT 统计数据"""
+        now = datetime.datetime.now()
+        self.last_ttft_ms = ttft_ms
+        self.ttft_updated_at = now
+        
+        # 更新 EMA
+        if self.ema_ttft_ms is None:
+            self.ema_ttft_ms = float(ttft_ms)
+        else:
+            self.ema_ttft_ms = self.TTFT_EMA_ALPHA * ttft_ms + (1 - self.TTFT_EMA_ALPHA) * self.ema_ttft_ms
+        
+        # 更新样本列表 (最多保留5个)
+        self.ttft_samples.append(ttft_ms)
+        if len(self.ttft_samples) > self.TTFT_MAX_SAMPLES:
+            self.ttft_samples = self.ttft_samples[-self.TTFT_MAX_SAMPLES:]
+        
+        # 计算 p50 (仅当样本数>=5)
+        if len(self.ttft_samples) >= self.TTFT_MAX_SAMPLES:
+            sorted_samples = sorted(self.ttft_samples)
+            self.p50_ttft_ms = float(sorted_samples[len(sorted_samples) // 2])
+        else:
+            self.p50_ttft_ms = None
+
+    def get_effective_ttft(self) -> Optional[float]:
+        """获取用于排序的有效 TTFT (按优先级: p50 > ema > last)"""
+        # 检查是否过期
+        if self.ttft_updated_at:
+            elapsed_hours = (datetime.datetime.now() - self.ttft_updated_at).total_seconds() / 3600
+            if elapsed_hours > self.TTFT_EXPIRE_HOURS:
+                return None  # 过期，视为缺失
+        else:
+            return None  # 从未更新过
+        
+        # 按优先级返回
+        if self.p50_ttft_ms is not None and len(self.ttft_samples) >= self.TTFT_MAX_SAMPLES:
+            return self.p50_ttft_ms
+        if self.ema_ttft_ms is not None:
+            return self.ema_ttft_ms
+        if self.last_ttft_ms is not None:
+            return float(self.last_ttft_ms)
+        return None
+
+    def is_slow(self, current_ttft_ms: int, threshold_ms: int = 5000, multiplier: int = 3) -> bool:
+        """检查本次 TTFT 是否异常慢"""
+        # 1. 绝对阈值
+        if current_ttft_ms >= threshold_ms:
+            return True
+        
+        # 2. 相对阈值 (EMA * multiplier)
+        if self.ema_ttft_ms and current_ttft_ms >= self.ema_ttft_ms * multiplier:
+            return True
+            
+        return False
+
+    def can_emergency_probe(self, cooldown_minutes: int = 10) -> bool:
+        """检查是否可以进行紧急探测 (per-model 冷却)"""
+        if self.last_emergency_probe_at is None:
+            return True
+        elapsed = (datetime.datetime.now() - self.last_emergency_probe_at).total_seconds()
+        return elapsed >= cooldown_minutes * 60
+
+    def mark_emergency_probed(self) -> None:
+        """标记紧急探测时间"""
+        self.last_emergency_probe_at = datetime.datetime.now()
 
 class HealthManager:
     def __init__(self):
@@ -143,6 +222,38 @@ class HealthManager:
                         # User spec: "Stay unknown or healthy->unknown"
                         # We will use "unknown" to signal it's shaky but not dead
                         record.status = "unknown"
+
+    def is_ttft_slow(self, model: str, ttft_ms: int, threshold: int = 5000, multiplier: int = 3) -> bool:
+        """检查指定模型本次 TTFT 是否过慢 (需要触发紧急探测)"""
+        record = self._records.get(model)
+        if not record:
+            return False
+        return record.is_slow(ttft_ms, threshold, multiplier)
+
+    async def trigger_emergency_refresh(self, models: List[str], probe_func, cooldown_minutes: int = 10):
+        """
+        触发紧急探测 (针对候选集)
+        - 仅探测满足冷却条件的模型
+        - 不阻塞，Fire-and-forget 模式 (由调用方 create_task)
+        """
+        tasks = []
+        for mid in models:
+            record = self._records.get(mid)
+            if not record:
+                # Should we create it? Maybe not. Only existing records matter?
+                # But if it's in candidates, it should be probed.
+                record = HealthRecord()
+                self._records[mid] = record
+            
+            if record.can_emergency_probe(cooldown_minutes):
+                record.mark_emergency_probed()
+                # Use probe_model which handles concurrency limits
+                tasks.append(self.probe_model(mid, probe_func))
+        
+        if tasks:
+            logger.warning(f"Triggering emergency probe for {len(tasks)} models: {[m for m in models]}")
+            # Run concurrently
+            await asyncio.gather(*tasks)
 
     async def probe_model(self, model: str, probe_func):
         """Run a single probe if not already running."""
