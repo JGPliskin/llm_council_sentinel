@@ -13,6 +13,8 @@ from typing import List, Dict, Any, Optional, Tuple
 import uuid
 import json
 import asyncio
+from datetime import datetime
+import pytz
 
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -29,7 +31,12 @@ from council import (
     calculate_aggregate_rankings,
     set_persona_cache,
 )
-from config import COUNCILORS, CHAIRMAN, COUNCIL_SIZE, COUNCILOR_MAP, HEALTH_STARTUP_CHECK, HEALTH_TTL_SECONDS
+from config import (
+    COUNCILORS, CHAIRMAN, COUNCIL_SIZE, COUNCILOR_MAP, 
+    HEALTH_STARTUP_CHECK, HEALTH_TTL_SECONDS,
+    HEALTH_CHECK_START_HOUR, HEALTH_CHECK_END_HOUR,
+    HEALTH_CHECK_INTERVAL, HEALTH_CHECK_TIMEZONE
+)
 from validation import get_council_health_status, refresh_council_health, select_active_chairman
 from persona_loader import preload_personas
 # Constants
@@ -196,17 +203,32 @@ class Conversation(BaseModel):
 
 
 async def periodically_refresh_health():
-    """Background task to refresh health periodically."""
+    """Background task to refresh health periodically within allowed hours."""
+    # 获取时区对象
+    try:
+        tz = pytz.timezone(HEALTH_CHECK_TIMEZONE)
+    except Exception:
+        tz = pytz.UTC
+        print(f"Warning: Could not load timezone {HEALTH_CHECK_TIMEZONE}, using UTC", flush=True)
+
     while True:
         try:
-            print("Executing scheduled health refresh...", flush=True)
-            # Refresh global pool
-            await refresh_council_health()
+            now = datetime.now(tz)
+            current_hour = now.hour
+            
+            # 判断是否在允许时段内 (例如 10:00 - 24:00)
+            if HEALTH_CHECK_START_HOUR <= current_hour < HEALTH_CHECK_END_HOUR:
+                print(f"[{now.strftime('%H:%M:%S')}] Executing scheduled health refresh...", flush=True)
+                # Refresh global pool
+                await refresh_council_health()
+            else:
+                print(f"[{now.strftime('%H:%M:%S')}] Skipping health refresh (Outside allowed hours {HEALTH_CHECK_START_HOUR}-{HEALTH_CHECK_END_HOUR})", flush=True)
+                
         except Exception as e:
             print(f"Scheduled refresh failed: {e}", flush=True)
         
         # Wait for next cycle
-        await asyncio.sleep(HEALTH_TTL_SECONDS)
+        await asyncio.sleep(HEALTH_CHECK_INTERVAL)
 
 @app.on_event("startup")
 async def startup_event():

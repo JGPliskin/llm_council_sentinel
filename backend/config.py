@@ -196,3 +196,9 @@ HARD_FAILURE_PATTERNS = [
     "unauthorized",
     "disabled",
 ]
+
+# ----------------------------
+HEALTH_CHECK_START_HOUR = 10   # 早上 10 点开始
+HEALTH_CHECK_END_HOUR = 24     # 午夜 24 点结束 (即 0 点)
+HEALTH_CHECK_INTERVAL = 7200   # 每 2 小时 = 7200 秒
+HEALTH_CHECK_TIMEZONE = "Asia/Shanghai"

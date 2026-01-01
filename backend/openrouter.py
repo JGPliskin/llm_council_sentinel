@@ -3,6 +3,7 @@
 import httpx
 import json
 import inspect
+import time
 from typing import List, Dict, Any, Optional, Callable
 from config import OPENROUTER_API_KEY, OPENROUTER_API_URL
 
@@ -53,6 +54,11 @@ async def stream_model(
     # State tracking
     response_model = model
     max_rounds = 10  # 防止无限循环
+    
+    # TTFT (Time-to-First-Token) 记录
+    request_start_time = time.time()
+    ttft_recorded = False
+    ttft_ms = None
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -104,6 +110,11 @@ async def stream_model(
                         
                         # 1. Handle Content（流式输出最终答案）
                         if "content" in delta and delta["content"]:
+                            # 记录首 Token 延迟 (TTFT)
+                            if not ttft_recorded:
+                                ttft_ms = int((time.time() - request_start_time) * 1000)
+                                ttft_recorded = True
+                            
                             content_buffer.append(delta["content"])
                             full_content.append(delta["content"])
                             if on_content:
@@ -114,6 +125,11 @@ async def stream_model(
                             
                         # 2. Handle Tool Calls (Thinking)
                         if "tool_calls" in delta and delta["tool_calls"]:
+                            # 记录首 Token 延迟 (也可能是 tool_calls 先到)
+                            if not ttft_recorded:
+                                ttft_ms = int((time.time() - request_start_time) * 1000)
+                                ttft_recorded = True
+                            
                             for tc in delta["tool_calls"]:
                                 idx = tc.get("index", 0)
                                 
@@ -161,6 +177,7 @@ async def stream_model(
                         'content': "".join(full_content),
                         'reasoning_details': None, 
                         'model': response_model,
+                        'ttft_ms': ttft_ms,
                         'tool_calls': [
                             {**v, "arguments": v["arguments"]} for k,v in tool_call_buffer.items()
                         ]
@@ -216,6 +233,7 @@ async def stream_model(
                         'reasoning_details': None,
                         'model': response_model,
                         'finish_reason': finish_reason,
+                        'ttft_ms': ttft_ms,
                         'tool_calls': [
                             {**v, "arguments": v["arguments"]} for k,v in tool_call_buffer.items()
                         ]
@@ -227,6 +245,7 @@ async def stream_model(
                     'reasoning_details': None,
                     'model': response_model,
                     'finish_reason': finish_reason,
+                    'ttft_ms': ttft_ms,
                     'tool_calls': [
                         {**v, "arguments": v["arguments"]} for k,v in tool_call_buffer.items()
                     ]
@@ -239,7 +258,8 @@ async def stream_model(
                 'reasoning_details': None,
                 'model': response_model,
                 'error': True,
-                'error_message': 'Max rounds exceeded'
+                'error_message': 'Max rounds exceeded',
+                'ttft_ms': ttft_ms
             }
 
     except Exception as e:

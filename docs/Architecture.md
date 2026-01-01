@@ -130,6 +130,8 @@ graph TD
     openrouter.py --> config.py
     health.py --> config.py
     storage.py --> config.py
+    council.py --> logger.py
+    logger.py --> config.py
 ```
 
 ### 3.2 模块职责表
@@ -143,6 +145,7 @@ graph TD
 | **健康管理** | `health.py` | 模型健康状态追踪、冷却机制、探测调度 | `HealthManager`, `HealthRecord`, `update_status()`, `probe_model()` |
 | **配置中心** | `config.py` | 全局配置：模型池、超时、并发、健康参数 | `GLOBAL_MODEL_POOL`, `COUNCILORS`, `CHAIRMAN`, `HEALTH_TTL_SECONDS` |
 | **健康校验** | `validation.py` | 封装健康探测逻辑、Chairman 选择 | `refresh_council_health()`, `get_council_health_status()` |
+| **日志记录** | `logger.py` | 结构化请求日志 (JSON)、性能计时 | `log_request_timing()`, `setup_request_logger()` |
 | **Persona 加载** | `persona_loader.py` | 预加载 Persona 文本到内存 | `preload_personas()` |
 
 ### 3.3 关键数据结构
@@ -444,6 +447,20 @@ stateDiagram-v2
             使用          标记 Councilor 不可用
                           (Ignored)
 ```
+
+### 8.4 监控与维护
+
+#### 8.4.1 结构化请求日志
+系统记录详细的 JSON 格式请求日志到 `backend/logs/request.log`，包含：
+- **TTFT (Time To First Token)**: 衡量 OpenRouter 响应延迟。
+- **Model Select Latency**: 本地模型选择耗时。
+- **Total Generation Time**: 完整回复生成耗时。
+
+#### 8.4.2 健康检查时段控制
+为节省资源，健康检查仅在活跃时段运行：
+- **默认时段**: 10:00 - 24:00 (Asia/Shanghai)
+- **间隔**: 每 2 小时 (7200s)
+- 非活跃时段自动跳过检查。
 
 ---
 

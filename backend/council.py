@@ -6,6 +6,7 @@ import asyncio
 import re
 import sys
 import os
+import time
 
 # Ensure backend directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -25,6 +26,7 @@ from config import (
     GLOBAL_MODEL_MAP,
 )
 from health import health_manager
+from logger import log_request_timing
 
 THINKING_TOOL_DEF = [
     {
@@ -272,6 +274,10 @@ async def _request_stage1_bounded(
     enable_thinking: bool = True
 ) -> Dict[str, Any]:
     
+    # 计时开始
+    t_start = time.time()
+    t_model_select = None
+    
     persona = fetch_persona(PERSONA_CACHE, councilor.get("persona_path", ""))
     stage_limits = councilor.get("stage_limits", {}).get("stage1", {})
     timeout = stage_limits.get("timeout", DEFAULT_STAGE1_TIMEOUT)
@@ -326,6 +332,10 @@ async def _request_stage1_bounded(
     while True:
         # A. Select Model
         selected_model = select_best_model(candidates, excluded_models)
+        
+        # 记录模型选择耗时（仅第一次）
+        if t_model_select is None:
+            t_model_select = time.time()
         
         if not selected_model:
             # No healthy models available
@@ -410,6 +420,27 @@ async def _request_stage1_bounded(
                     except Exception:
                         pass
 
+            # 计算耗时并输出日志
+            t_end = time.time()
+            ttft_ms = response.get("ttft_ms")
+            model_select_ms = int((t_model_select - t_start) * 1000) if t_model_select else 0
+            total_ms = int((t_end - t_start) * 1000)
+            generation_ms = total_ms - (ttft_ms or 0) - model_select_ms
+            
+            log_request_timing(
+                stage="stage1",
+                councilor_id=councilor["id"],
+                councilor_name=councilor.get("name", ""),
+                model=response.get("model", selected_model),
+                timing={
+                    "total_ms": total_ms,
+                    "model_select_ms": model_select_ms,
+                    "ttft_ms": ttft_ms,
+                    "generation_ms": max(0, generation_ms)
+                },
+                status="ok"
+            )
+
             return {
                 "councilor_id": councilor["id"],
                 "councilor_name": councilor.get("name"),
@@ -436,6 +467,26 @@ async def _request_stage1_bounded(
         # If failed, we seek next candidate in Outer Loop
             
     # If we exited without returning
+    # 记录失败日志
+    t_end = time.time()
+    model_select_ms = int((t_model_select - t_start) * 1000) if t_model_select else 0
+    total_ms = int((t_end - t_start) * 1000)
+    
+    log_request_timing(
+        stage="stage1",
+        councilor_id=councilor["id"],
+        councilor_name=councilor.get("name", ""),
+        model=councilor["model"],
+        timing={
+            "total_ms": total_ms,
+            "model_select_ms": model_select_ms,
+            "ttft_ms": None,
+            "generation_ms": 0
+        },
+        status="failed",
+        error=str(last_error or "All candidates failed")
+    )
+    
     return {
         "councilor_id": councilor["id"],
         "councilor_name": councilor.get("name"),
