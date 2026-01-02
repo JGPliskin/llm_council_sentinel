@@ -25,6 +25,17 @@ LLM Council 是一个三阶段异步协作系统：
 - 可选 Thinking 工具调用（前端在内容区/详情面板展示）
 - 固定模型分配（创建时分配并固定整个对话生命周期）
 
+### 2.3 Active Councilors (Configuration)
+
+The specific personas loaded in the current system (defined in `backend/config.py`):
+
+| ID | Name | Role | Model | Persona / Style |
+| :--- | :--- | :--- | :--- | :--- |
+| **`immanuel_kant`** | 康德 | Councilor | `openai/gpt-oss-20b:free` | **Moral Philosopher**: Prioritizes universal ethics, categorial imperatives, and logical consistency. Judge style: Analytical, focus on long-term robustness. |
+| **`donald_trump`** | 特朗普 | Councilor | `openai/gpt-oss-20b:free` | **Pragmatist/Populist**: Focuses on "America First" style realism, direct benefits, strength, and deal-making. Judge style: Executive execution, risk isolation. |
+| **`hideo_kojima`** | 小岛秀夫 | Councilor | `openai/gpt-oss-20b:free` | **Auteur/Visionary**: Emphasizes narrative, connectivity, complex systems, and artistic integrity. Judge style: Academic rigor, source verification. |
+| **`chairman`** | 共识主席 | **Chairman** | `amazon/nova-2-lite-v1:free` | **Synthesizer**: Neutral moderator. Detects consensus, highlights unresolvable conflicts, and provides the final actionable verdict. |
+
 ---
 
 ## 2. 架构与模块
