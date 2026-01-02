@@ -1,40 +1,61 @@
-import { useState, useEffect } from "react";
-import { useNavigate, useParams, Routes, Route } from "react-router-dom";
-import { useTranslation } from "react-i18next";
+import React, { useState, useEffect } from "react";
+import { createRoot } from "react-dom/client";
+import { BrowserRouter, Routes, Route, useNavigate, useParams } from "react-router-dom";
 import { Toaster } from "sonner";
-import Sidebar from "./components/Sidebar";
-import ChatInterface from "./components/ChatInterface";
-import PartnerFooter from "./components/PartnerFooter";
-import LanguageSwitcher from "./components/LanguageSwitcher";
-import { api } from "./api";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { Button } from "@/components/ui/button";
-import { Menu } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { PanelLeftClose, PanelLeftOpen, PanelRightOpen, RotateCcw } from 'lucide-react';
+
+import { api } from "@/api";
+import { useParliamentEngine } from "@/hooks/useParliamentEngine";
+import Sidebar from "@/components/Sidebar";
+import TacticalHUD from "@/components/TacticalHUD";
+import { WelcomeScreen } from "@/components/WelcomeScreen";
+import StageContentArea from "@/components/StageContentArea";
+import DetailPanel from "@/components/DetailPanel";
 
 function AppContent() {
   const { t } = useTranslation();
-  const [conversations, setConversations] = useState([]);
-  const [currentConversation, setCurrentConversation] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-
   const navigate = useNavigate();
   const { conversationId } = useParams();
 
-  // Load conversations on mount
+  // === Global State ===
+  const [conversations, setConversations] = useState([]);
+  const [allCouncilors, setAllCouncilors] = useState([]);
+  const [selectedAgentIds, setSelectedAgentIds] = useState(['immanuel_kant', 'donald_trump', 'hideo_kojima']);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 768);
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
+
+  // === Engine Hook ===
+  const engine = useParliamentEngine();
+
+  // === Loading Data ===
   useEffect(() => {
     loadConversations();
+    loadCouncilors();
   }, []);
 
-  // Load conversation details when URL changes
   useEffect(() => {
     if (conversationId) {
-      loadConversation(conversationId);
+      // Prevent redundant reload if we just created this session locally
+      if (engine.conversation?.id === conversationId && engine.stage !== 'idle') {
+        return;
+      }
+      loadConversationAndStates(conversationId);
     } else {
-      setCurrentConversation(null);
+      engine.reset();
     }
   }, [conversationId]);
 
+  // Auto-open panel on stage change (Desktop)
+  useEffect(() => {
+    if (engine.stage !== 'idle' && window.innerWidth >= 768) {
+      setIsPanelOpen(true);
+    } else if (engine.stage === 'idle') {
+      setIsPanelOpen(false);
+    }
+  }, [engine.stage]);
+
+  // === API handlers ===
   const loadConversations = async () => {
     try {
       const convs = await api.listConversations();
@@ -44,384 +65,211 @@ function AppContent() {
     }
   };
 
-  const loadConversation = async (id) => {
+  const loadCouncilors = async () => {
+    try {
+      const response = await api.getCouncilors();
+      // API returns object with .councilors array, or directly array in some mocks (but backend returns object)
+      // Safety check
+      if (response && response.councilors && Array.isArray(response.councilors)) {
+        setAllCouncilors(response.councilors);
+      } else if (Array.isArray(response)) {
+        setAllCouncilors(response);
+      } else {
+        setAllCouncilors([]);
+        console.warn("Unexpected councilors format", response);
+      }
+    } catch (error) {
+      console.error("Failed to load councilors", error);
+    }
+  };
+
+  const loadConversationAndStates = async (id) => {
     try {
       const conv = await api.getConversation(id);
-      setCurrentConversation(conv);
+      engine.loadSession(conv);
     } catch (error) {
       console.error("Failed to load conversation:", error);
     }
   };
 
-  const handleNewConversation = async () => {
-    try {
-      const newConv = await api.createConversation();
-      setConversations([
-        { id: newConv.id, created_at: newConv.created_at, message_count: 0 },
-        ...conversations,
-      ]);
-      // Navigate to new conversation URL
-      navigate(`/c/${newConv.id}`);
-    } catch (error) {
-      console.error("Failed to create conversation:", error);
-    }
-  };
-
-  const handleSelectConversation = (id) => {
-    // Navigate to conversation URL
-    navigate(`/c/${id}`);
-  };
-
-  const handleSendMessage = async (content, councilorIds = null) => {
-    if (!conversationId) return;
-
-    setIsLoading(true);
-    try {
-      // Optimistically add user message to UI
-      const userMessage = { role: "user", content };
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: [...prev.messages, userMessage],
-      }));
-
-      // Create a partial assistant message that will be updated progressively
-      const assistantMessage = {
-        role: "assistant",
-        stage1: null,
-        stage2: null,
-        stage3: null,
-        metadata: null,
-        loading: {
-          stage1: false,
-          stage2: false,
-          stage3: false,
-        },
-      };
-
-      // Add the partial assistant message
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: [...prev.messages, assistantMessage],
-      }));
-
-      // Send message with streaming
-      await api.sendMessageStream(
-        conversationId,
-        content,
-        (eventType, event) => {
-          switch (eventType) {
-            case "meta":
-              // Store updated councilor info for this run
-              setCurrentConversation((prev) => {
-                return {
-                  ...prev,
-                  // We can store run-specific councilors here to help UI lookup
-                  // v2: Update active_councilor_ids so that ChatInterface knows what to render (e.g. thinking state)
-                  resolved_councilors: event.resolved_councilors,
-                  active_councilor_ids: event.resolved_councilor_ids
-                };
-              });
-              break;
-
-            case "stage1_start":
-              setCurrentConversation((prev) => {
-                const messages = [...prev.messages];
-                const lastMsg = messages[messages.length - 1];
-                lastMsg.loading.stage1 = true;
-                lastMsg.stage1 = []; // Init empty for accumulating items
-                return { ...prev, messages };
-              });
-              break;
-
-            case "stage1_item":
-              setCurrentConversation((prev) => {
-                const messages = [...prev.messages];
-                const lastMsg = messages[messages.length - 1];
-                if (!lastMsg.stage1) lastMsg.stage1 = [];
-                // Deduplicate by councilor_id to prevent duplicate keys
-                const existingIds = new Set(lastMsg.stage1.map(r => r.councilor_id));
-                if (!existingIds.has(event.data.councilor_id)) {
-                  lastMsg.stage1.push(event.data);
-                }
-                return { ...prev, messages };
-              });
-              break;
-
-            case "stage1_complete":
-              setCurrentConversation((prev) => {
-                const messages = [...prev.messages];
-                const lastMsg = messages[messages.length - 1];
-                lastMsg.stage1 = event.data; // Replace with final authoritative list
-                lastMsg.loading.stage1 = false;
-                return { ...prev, messages };
-              });
-              break;
-
-            case "stage2_start":
-              setCurrentConversation((prev) => {
-                const messages = [...prev.messages];
-                const lastMsg = messages[messages.length - 1];
-                lastMsg.loading.stage2 = true;
-                lastMsg.stage2 = []; // Init for items
-                // Handle early metadata if present
-                if (event.anon_map) {
-                  lastMsg.metadata = { ...lastMsg.metadata, anon_to_councilor: event.anon_map };
-                }
-                if (event.skipped) {
-                  lastMsg.skipped = true;
-                  lastMsg.skipped_reason = event.skipped_reason;
-                }
-                return { ...prev, messages };
-              });
-              break;
-
-            case "stage2_item":
-              setCurrentConversation((prev) => {
-                const messages = [...prev.messages];
-                const lastMsg = messages[messages.length - 1];
-                if (!lastMsg.stage2) lastMsg.stage2 = [];
-                // Deduplicate by judge_councilor_id
-                const existingJudgeIds = new Set(lastMsg.stage2.map(r => r.judge_councilor_id));
-                if (!existingJudgeIds.has(event.data.judge_councilor_id)) {
-                  lastMsg.stage2.push(event.data);
-                }
-                return { ...prev, messages };
-              });
-              break;
-
-            case "stage2_complete":
-              setCurrentConversation((prev) => {
-                const messages = [...prev.messages];
-                const lastMsg = messages[messages.length - 1];
-                // Event data is the full unified dict now (with reviews field)
-                // BUT my ChatInterface/Stage2 expects an array of reviews.
-                // stage2_result dict structure: { skipped, skipped_reason, reviews, anon_map, judge_failures }
-                // So I should assign event.data.reviews to lastMsg.stage2
-
-                if (event.data.skipped) {
-                  lastMsg.stage2 = event.data.reviews || []; // Might be empty
-                  lastMsg.skipped = true;
-                  lastMsg.skipped_reason = event.data.skipped_reason;
-                } else {
-                  lastMsg.stage2 = event.data.reviews;
-                }
-
-                lastMsg.metadata = {
-                  ...lastMsg.metadata,
-                  ...event.metadata,
-                  // If stage2_complete brings updated anon_map, ensure it's set
-                  anon_to_councilor: event.data.anon_map
-                };
-                lastMsg.loading.stage2 = false;
-
-                // Update conversation active_councilor_ids if provided
-                if (councilorIds) {
-                  // logic to update conversation state if we want optimistic update
-                  // but re-fetch on complete handles it usually.
-                }
-                return { ...prev, messages };
-              });
-              break;
-
-            case "stage3_start":
-              setCurrentConversation((prev) => {
-                const messages = [...prev.messages];
-                const lastMsg = messages[messages.length - 1];
-                lastMsg.loading.stage3 = true;
-                return { ...prev, messages };
-              });
-              break;
-
-            case "stage3_complete":
-              setCurrentConversation((prev) => {
-                const messages = [...prev.messages];
-                const lastMsg = messages[messages.length - 1];
-                lastMsg.stage3 = event.data;
-                lastMsg.loading.stage3 = false;
-                return { ...prev, messages };
-              });
-              break;
-
-            case "title_complete":
-              // Reload conversations to get updated title
-              loadConversations();
-              break;
-
-            case "complete":
-              // Stream complete, reload conversations list
-              loadConversations();
-              setIsLoading(false);
-              break;
-
-            case "error":
-              console.error("Stream error:", event.message);
-              setIsLoading(false);
-              break;
-
-            default:
-              console.log("Unknown event type:", eventType);
-          }
-        },
-        councilorIds
-      );
-    } catch (error) {
-      console.error("Failed to send message:", error);
-      // Remove optimistic messages on error
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: prev.messages.slice(0, -2),
-      }));
-      setIsLoading(false);
-    }
-  };
-
-  const handleBulkDeleteConversations = async (ids) => {
-    try {
-      const result = await api.bulkDeleteConversations(ids);
-      const { deletedIds, failed } = result;
-
-      // Update state first
-      if (deletedIds && deletedIds.length > 0) {
-        setConversations((prev) => prev.filter(c => !deletedIds.includes(c.id)));
-
-        // Check if current conversation is deleted
-        if (conversationId && deletedIds.includes(conversationId)) {
-          navigate("/");
-          setCurrentConversation(null);
-        }
-      }
-
-      return result; // return to sidebar for its internal logic
-    } catch (error) {
-      console.error("Failed to bulk delete:", error);
-    }
+  const handleNewConversation = () => {
+    navigate("/");
+    engine.reset();
   };
 
   const handleDeleteConversation = async (id) => {
     try {
       await api.deleteConversation(id);
-
-      // Remove from list
-      setConversations((prev) => prev.filter((c) => c.id !== id));
-
-      // If current was deleted, navigate away
+      setConversations(prev => prev.filter(c => c.id !== id));
       if (conversationId === id) {
         navigate("/");
-        setCurrentConversation(null);
+        engine.reset();
       }
     } catch (error) {
-      console.error("Failed to delete conversation:", error);
+      console.error("Failed to delete", error);
     }
   };
 
+  const handleStartSession = async (prompt) => {
+    // Must have selected agents
+    await engine.startSession(prompt, selectedAgentIds);
+    // Wait for created conversation ID to update URL?
+    // engine.conversation is set in startSession.
+    // But startSession is async.
+    // Actually, startSession sets conversation state.
+    // We can observe engine.conversation and navigate if it's new.
+  };
+
+  // Observe conversation creation to update URL
+  useEffect(() => {
+    if (engine.conversation && engine.conversation.id && !conversationId) {
+      navigate(`/c/${engine.conversation.id}`, { replace: true });
+      loadConversations(); // Refresh list
+    }
+  }, [engine.conversation, conversationId, navigate]);
+
+  const handleToggleAgent = (id) => {
+    setSelectedAgentIds(prev => {
+      if (prev.includes(id)) return prev.filter(x => x !== id);
+      return [...prev, id];
+    });
+  };
+
+  // === Render ===
   return (
-    <div className="flex h-screen w-screen overflow-hidden">
-      {/* Desktop Sidebar */}
-      <div className="hidden md:block md:w-80 md:flex-shrink-0">
+    <div className="flex flex-col h-screen w-full bg-zinc-950 overflow-hidden font-sans text-zinc-100">
+      <div className="flex-1 flex overflow-hidden relative">
+
+        {/* Mobile Overlay */}
+        {isSidebarOpen && (
+          <div
+            className="absolute inset-0 bg-black/50 z-30 md:hidden backdrop-blur-sm transition-opacity"
+            onClick={() => setIsSidebarOpen(false)}
+          />
+        )}
+
+        {/* Sidebar */}
         <Sidebar
           conversations={conversations}
           currentConversationId={conversationId}
-          onSelectConversation={handleSelectConversation}
+          onSelectConversation={(id) => navigate(`/c/${id}`)}
           onNewConversation={handleNewConversation}
           onDeleteConversation={handleDeleteConversation}
-          onBulkDeleteConversations={handleBulkDeleteConversations}
+          isOpen={isSidebarOpen}
         />
+
+        {/* Main Content */}
+        <div className="flex flex-col h-full w-full relative transition-all duration-500">
+          {engine.stage === 'idle' ? (
+            <div className="flex-1 overflow-hidden relative">
+              <WelcomeScreen
+                onStart={handleStartSession}
+                councilors={allCouncilors}
+                selectedIds={selectedAgentIds}
+                onToggleId={handleToggleAgent}
+              />
+            </div>
+          ) : (
+            <StageContentArea
+              activeTab={engine.activeTab}
+              onTabSelect={engine.setActiveTab}
+              stage={engine.stage}
+              consensusUnlocked={engine.consensusUnlocked}
+              hasViewedConsensus={engine.hasViewedConsensus}
+              onManualConsensusView={engine.viewConsensus}
+              resolvedCouncilors={engine.resolvedCouncilors}
+              stage1Results={engine.stage1Results}
+              stage3Result={engine.stage3Result}
+              stage3AnswerStream={engine.stage3AnswerStream}
+              thinkingByCouncilor={engine.thinkingByCouncilor}
+              thinkingExpanded={engine.thinkingExpanded}
+              onToggleThinking={engine.toggleThinkingExpanded}
+              stage1AnswerStream={engine.stage1AnswerStream}
+            />
+          )}
+
+          {/* Desktop Toggle Buttons (Tactical Style) */}
+          <div className="absolute bottom-6 left-6 z-20 flex gap-1 pointer-events-auto">
+            {/* Sidebar Toggle */}
+            <button
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              className={`
+                 relative group flex items-center justify-center w-12 h-10 border-t border-b border-l transform skew-x-[-15deg] transition-all duration-300
+                 ${isSidebarOpen ? 'bg-zinc-900 border-zinc-700 text-zinc-400' : 'bg-zinc-950/80 border-zinc-600 text-zinc-500 hover:text-white hover:border-orange-500/50'}
+              `}
+              title="Toggle Sidebar"
+            >
+              <div className="transform skew-x-[15deg] flex items-center justify-center">
+                {isSidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+              </div>
+              {/* Active Indicator */}
+              {isSidebarOpen && <div className="absolute bottom-0 left-0 w-full h-0.5 bg-orange-500/50"></div>}
+            </button>
+
+            {/* Detail Panel Toggle */}
+            {engine.stage !== 'idle' && (
+              <button
+                onClick={() => setIsPanelOpen(!isPanelOpen)}
+                className={`
+                   relative group flex items-center justify-center w-12 h-10 border transform skew-x-[-15deg] hover:z-10 transition-all duration-300
+                   ${isPanelOpen ? 'bg-zinc-900 border-zinc-700 text-zinc-400' : 'bg-zinc-950/80 border-zinc-600 text-zinc-500 hover:text-white hover:border-orange-500/50'}
+                `}
+                title="Toggle Detail Panel"
+              >
+                <div className="transform skew-x-[15deg] flex items-center justify-center">
+                  {isPanelOpen ? <PanelRightOpen size={16} className="rotate-180" /> : <PanelRightOpen size={16} />}
+                </div>
+                {/* Active Indicator */}
+                {isPanelOpen && <div className="absolute bottom-0 right-0 w-full h-0.5 bg-orange-500/50"></div>}
+              </button>
+            )}
+
+            {/* Reload/Reset (Optional, for style matching) */}
+            <button
+              onClick={() => { if (confirm('Reset Session?')) engine.reset(); }}
+              className="relative group flex items-center justify-center w-12 h-10 border-t border-b border-r bg-zinc-950/80 border-zinc-600 text-zinc-500 hover:text-white hover:border-orange-500/50 transform skew-x-[-15deg] transition-all duration-300"
+              title="Reset Session"
+            >
+              <div className="transform skew-x-[15deg]">
+                <RotateCcw size={14} />
+              </div>
+            </button>
+          </div>
+        </div>
+
+        {/* Right Detail Panel */}
+        {engine.stage !== 'idle' && (
+          <div
+            className={`
+                    fixed inset-y-0 right-0 z-50 w-full md:relative md:z-0 md:w-[400px] border-l border-zinc-800 transition-all duration-500
+                    ${isPanelOpen ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0 md:w-0'}
+                `}
+            style={{ transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)' }}
+          >
+            <DetailPanel
+              stage={engine.stage}
+              activeTab={engine.activeTab}
+              evaluationComments={engine.evaluationComments}
+              synthesisSteps={engine.synthesisSteps}
+              onClose={() => setIsPanelOpen(false)}
+            />
+          </div>
+        )}
       </div>
 
-      {/* Mobile Menu Sheet */}
-      <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
-        <SheetContent side="left" className="w-[320px] p-0">
-          <Sidebar
-            conversations={conversations}
-            currentConversationId={conversationId}
-            onSelectConversation={(id) => {
-              handleSelectConversation(id);
-              setIsMobileMenuOpen(false);
-            }}
-            onNewConversation={() => {
-              handleNewConversation();
-              setIsMobileMenuOpen(false);
-            }}
-            onDeleteConversation={handleDeleteConversation}
-            onBulkDeleteConversations={handleBulkDeleteConversations}
-          />
-        </SheetContent>
-      </Sheet>
-
-      {/* Main Content */}
-      <div className="flex flex-1 flex-col overflow-hidden pb-14">
-        {/* Mobile Menu Button */}
-        <div className="flex items-center justify-between gap-3 border-b bg-card p-4 md:hidden shadow-sm">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setIsMobileMenuOpen(true)}
-            >
-              <Menu className="h-5 w-5" />
-            </Button>
-            <h1 className="text-xl font-bold">{t('appTitle')}</h1>
-          </div>
-          <div className="flex items-center gap-2">
-            <LanguageSwitcher />
-            <a
-              href="https://github.com/wquguru/llm-council-zenmux"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="rounded-lg p-2 text-muted-foreground transition-all hover:bg-muted hover:text-foreground hover:scale-110"
-              title="View on GitHub"
-            >
-              <svg height="20" width="20" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path>
-              </svg>
-            </a>
-          </div>
-        </div>
-
-        {/* Desktop Header */}
-        <div className="hidden items-center justify-between border-b bg-card px-6 py-4 md:flex shadow-sm">
-          <h1 className="text-2xl font-bold">{t('appTitle')}</h1>
-          <div className="flex items-center gap-2">
-            <LanguageSwitcher />
-            <a
-              href="https://github.com/wquguru/llm-council-zenmux"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="rounded-lg p-2 text-muted-foreground transition-all hover:bg-muted hover:text-foreground hover:scale-110"
-              title="View on GitHub"
-            >
-              <svg height="24" width="24" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path>
-              </svg>
-            </a>
-          </div>
-        </div>
-
-        {/* Info banners - shown on all screen sizes */}
-        <div className="flex items-center justify-center gap-2 border-b bg-primary/5 px-4 py-2.5 text-xs md:px-6 md:py-3 md:text-sm text-foreground/80 border-primary/10">
-          <span>💡</span>
-          <span className="line-clamp-1 md:line-clamp-none">
-            {t('tagline')}
-          </span>
-        </div>
-        <div className="flex items-center justify-center gap-2 border-b bg-warning/10 px-4 py-2.5 text-xs font-semibold text-warning md:px-6 md:py-3 md:text-sm border-warning/20">
-          <span>⚠️</span>
-          <span className="line-clamp-1 md:line-clamp-none">
-            {t('privacyWarning')}
-          </span>
-        </div>
-
-        <ChatInterface
-          conversation={currentConversation}
-          onSendMessage={handleSendMessage}
-          isLoading={isLoading}
-          onNewConversation={handleNewConversation}
-          conversationId={conversationId}
-        />
-      </div>
-
-      {/* Fixed Footer */}
-      <PartnerFooter />
+      {/* Footer HUD */}
+      <TacticalHUD
+        stage={engine.stage}
+        agentProgress={engine.agentProgress}
+        aggregateRankings={engine.aggregateRankings}
+        resolvedCouncilors={engine.resolvedCouncilors}
+        consensusUnlocked={engine.consensusUnlocked}
+        hasViewedConsensus={engine.hasViewedConsensus}
+        onConsensusClick={engine.viewConsensus}
+        // IDLE props
+        selectedAgentIds={selectedAgentIds}
+        allCouncilors={allCouncilors}
+      />
     </div>
   );
 }
@@ -429,7 +277,7 @@ function AppContent() {
 function App() {
   return (
     <>
-      <Toaster position="top-center" richColors closeButton />
+      <Toaster position="top-center" richColors theme="dark" closeButton />
       <Routes>
         <Route path="/" element={<AppContent />} />
         <Route path="/c/:conversationId" element={<AppContent />} />

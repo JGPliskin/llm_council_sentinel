@@ -1,9 +1,11 @@
 """Configuration for the LLM Council."""
 
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # OpenRouter API key
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -37,46 +39,39 @@ STAGE2_DEADLINE = None
 # ----------------------------
 GLOBAL_MODEL_POOL = [
     {
-        "id": "openai/gpt-oss-20b:free",
-        "name": "GPT-OSS 20B (Free)",
+        "id": "xiaomi/mimo-v2-flash:free",
+        "name": "Mimo V2 Flash (Free)",
+        "concurrency_limit": 5,
+        "category": "fast",
+        "capabilities": {"thinking": True, "mode": "standard"},
+    },
+    {
+        "id": "nvidia/nemotron-nano-9b-v2:free",
+        "name": "Nemotron Nano 9B V2 (Free)",
+        "concurrency_limit": 5,
+        "category": "fast",
+        "capabilities": {"thinking": True, "mode": "tool"},
+    },
+    {
+        "id": "nvidia/nemotron-3-nano-30b-a3b:free",
+        "name": "Nemotron 3 Nano 30B (Free)",
+        "concurrency_limit": 3,
+        "category": "reasoning",
+        "capabilities": {"thinking": True, "mode": "tool"},
+    },
+    {
+        "id": "nvidia/nemotron-nano-12b-v2-vl:free",
+        "name": "Nemotron Nano 12B VL (Free)",
         "concurrency_limit": 4,
-        "category": "general"
+        "category": "reasoning",
+        "capabilities": {"thinking": True, "mode": "tool"},
     },
     {
         "id": "tngtech/tng-r1t-chimera:free",
         "name": "TNG R1T Chimera (Free)",
         "concurrency_limit": 3,
-        "category": "reasoning"
-    },
-    {
-        "id": "tngtech/deepseek-r1t2-chimera:free",
-        "name": "DeepSeek R1T2 Chimera (Free)",
-        "concurrency_limit": 3,
-        "category": "reasoning"
-    },
-    {
-        "id": "nvidia/nemotron-nano-9b-v2:free",
-        "name": "Nemotron Nano 9B (Free)",
-        "concurrency_limit": 5,
-        "category": "fast"
-    },
-    {
-        "id": "z-ai/glm-4.5-air:free",
-        "name": "GLM 4.5 Air (Free)",
-        "concurrency_limit": 3,
-        "category": "general"
-    },
-    {
-        "id": "amazon/nova-2-lite-v1:free",
-        "name": "Amazon Nova 2 Lite (Free)",
-        "concurrency_limit": 3,
-        "category": "fast"
-    },
-    {
-        "id": "alibaba/tongyi-deepresearch-30b-a3b:free",
-        "name": "Tongyi DeepResearch 30B (Free)",
-        "concurrency_limit": 2,
-        "category": "research"
+        "category": "reasoning",
+        "capabilities": {"thinking": True, "mode": "tool"},
     },
 ]
 
@@ -87,13 +82,13 @@ COUNCILORS = [
     {
         "id": "immanuel_kant",
         "name": "康德",
-        "model": "openai/gpt-oss-20b:free",
+        "model": "xiaomi/mimo-v2-flash:free",
         "model_candidates": [
-            "openai/gpt-oss-20b:free",
-            "tngtech/tng-r1t-chimera:free",
-            "tngtech/deepseek-r1t2-chimera:free",
+            "xiaomi/mimo-v2-flash:free",
             "nvidia/nemotron-nano-9b-v2:free",
-            "z-ai/glm-4.5-air:free",
+            "nvidia/nemotron-3-nano-30b-a3b:free",
+            "nvidia/nemotron-nano-12b-v2-vl:free",
+            "tngtech/tng-r1t-chimera:free",
         ],
         "avatar": "🧠",
         "persona_path": "backend/personas/immanuel_kant.md",
@@ -104,19 +99,20 @@ COUNCILORS = [
         ),
         "stage_limits": {
             "stage1": {"max_output_tokens": 800, "timeout": DEFAULT_STAGE1_TIMEOUT},
-            "stage2": {"max_output_tokens": 360, "timeout": 75.0},  # Custom overrides can remain
+            "stage2": {"max_output_tokens": 360, "timeout": 75.0},
         },
+        "auto_route_by_speed": True,  # 是否启用速度自动选路
     },
     {
         "id": "donald_trump",
         "name": "特朗普",
-        "model": "openai/gpt-oss-20b:free",
+        "model": "xiaomi/mimo-v2-flash:free",
         "model_candidates": [
-            "openai/gpt-oss-20b:free",
-            "tngtech/tng-r1t-chimera:free",
-            "tngtech/deepseek-r1t2-chimera:free",
+            "xiaomi/mimo-v2-flash:free",
             "nvidia/nemotron-nano-9b-v2:free",
-            "z-ai/glm-4.5-air:free",
+            "nvidia/nemotron-3-nano-30b-a3b:free",
+            "nvidia/nemotron-nano-12b-v2-vl:free",
+            "tngtech/tng-r1t-chimera:free",
         ],
         "avatar": "🧱",
         "persona_path": "backend/personas/donald_trump.md",
@@ -129,17 +125,18 @@ COUNCILORS = [
             "stage1": {"max_output_tokens": 820, "timeout": DEFAULT_STAGE1_TIMEOUT},
             "stage2": {"max_output_tokens": 360, "timeout": 75.0},
         },
+        "auto_route_by_speed": True,
     },
     {
         "id": "hideo_kojima",
         "name": "小岛秀夫",
-        "model": "openai/gpt-oss-20b:free",
+        "model": "xiaomi/mimo-v2-flash:free",
         "model_candidates": [
-            "openai/gpt-oss-20b:free",
-            "tngtech/tng-r1t-chimera:free",
-            "tngtech/deepseek-r1t2-chimera:free",
+            "xiaomi/mimo-v2-flash:free",
             "nvidia/nemotron-nano-9b-v2:free",
-            "z-ai/glm-4.5-air:free",
+            "nvidia/nemotron-3-nano-30b-a3b:free",
+            "nvidia/nemotron-nano-12b-v2-vl:free",
+            "tngtech/tng-r1t-chimera:free",
         ],
         "avatar": "🎮",
         "persona_path": "backend/personas/hideo_kojima.md",
@@ -152,21 +149,20 @@ COUNCILORS = [
             "stage1": {"max_output_tokens": 820, "timeout": DEFAULT_STAGE1_TIMEOUT},
             "stage2": {"max_output_tokens": 360, "timeout": 75.0},
         },
+        "auto_route_by_speed": True,
     },
 ]
 
 CHAIRMAN = {
     "id": "chairman",
     "name": "共识主席",
-    "model": "amazon/nova-2-lite-v1:free",
+    "model": "xiaomi/mimo-v2-flash:free",
     "model_candidates": [
-        "amazon/nova-2-lite-v1:free",
-        "alibaba/tongyi-deepresearch-30b-a3b:free",
-        "openai/gpt-oss-20b:free",
-        "tngtech/tng-r1t-chimera:free",
-        "tngtech/deepseek-r1t2-chimera:free",
+        "xiaomi/mimo-v2-flash:free",
         "nvidia/nemotron-nano-9b-v2:free",
-        "z-ai/glm-4.5-air:free",
+        "nvidia/nemotron-3-nano-30b-a3b:free",
+        "nvidia/nemotron-nano-12b-v2-vl:free",
+        "tngtech/tng-r1t-chimera:free",
     ],
     "avatar": "🪶",
     "persona_path": "backend/personas/chairman.md",
@@ -203,3 +199,18 @@ HARD_FAILURE_PATTERNS = [
     "unauthorized",
     "disabled",
 ]
+
+# ----------------------------
+HEALTH_CHECK_START_HOUR = 10   # 早上 10 点开始
+HEALTH_CHECK_END_HOUR = 24     # 午夜 24 点结束 (即 0 点)
+HEALTH_CHECK_INTERVAL = 7200   # 每 2 小时 = 7200 秒
+HEALTH_CHECK_TIMEZONE = "Asia/Shanghai"
+
+# ----------------------------
+# 速度自动选路 (需求3)
+# ----------------------------
+SPEED_ROUTE_SWITCH_ABS_MS = 800      # 切换绝对阈值 (ms)
+SPEED_ROUTE_SWITCH_REL_PCT = 0.30    # 切换相对阈值 (30%)
+EMERGENCY_PROBE_TTFT_THRESHOLD = 20000  # 紧急探测触发阈值 (ms)
+EMERGENCY_PROBE_TTFT_MULTIPLIER = 3    # 紧急探测触发: TTFT >= EMA * 此值
+EMERGENCY_PROBE_COOLDOWN_MINUTES = 30  # 紧急探测冷却 (分钟，per-model)

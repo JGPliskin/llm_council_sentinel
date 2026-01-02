@@ -1,0 +1,182 @@
+
+[1m[46m RUN [49m[22m [36mv4.0.16 [39m[90mF:/OneDrive/PY/ZYZ/project/llm_council_sentinel/frontend[39m
+
+ [32m鉁?[39m src/hooks/__tests__/useParliamentEngine.test.js [2m([22m[2m5 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+stderr | src/__tests__/AppIntegration.test.jsx > App Integration Flow (Simulated E2E) > completes a full session flow
+react-i18next:: useTranslation: You will need to pass in an i18next instance by using initReactI18next { code: 'NO_I18NEXT_INSTANCE' }
+
+ [31m鉂?[39m src/__tests__/AppIntegration.test.jsx [2m([22m[2m1 test[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 212[2mms[22m[39m
+[31m     [31m脳[31m completes a full session flow[39m[32m 210[2mms[22m[39m
+
+鈳幆鈳幆鈳幆鈳?[39m Failed Tests 1 鈳幆鈳幆鈳幆鈳?[39m
+
+ FAIL  src/__tests__/AppIntegration.test.jsx > App Integration Flow (Simulated E2E) > completes a full session flow
+TestingLibraryElementError: Unable to find an element with the text: /INITIATE PROTOCOL/i. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+<body>
+  <div>
+    <section
+      aria-atomic="false"
+      aria-label="Notifications alt+T"
+      aria-live="polite"
+      aria-relevant="additions text"
+      tabindex="-1"
+    />
+    <div
+      class="flex flex-col h-screen w-full bg-zinc-950 overflow-hidden font-sans text-zinc-100"
+    >
+      <div
+        class="flex-1 flex overflow-hidden relative"
+      >
+        <div
+          class="hidden md:flex flex-col border-r border-zinc-800 bg-zinc-950 transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] overflow-hidden relative z-40 h-full w-64 opacity-100"
+        >
+          <div
+            class="h-14 flex items-center px-4 border-b border-zinc-800 bg-zinc-900/20"
+          >
+            <svg
+              aria-hidden="true"
+              class="lucide lucide-layout-grid w-5 h-5 text-zinc-500 mr-2"
+              fill="none"
+              height="24"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+              width="24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <rect
+                height="7"
+                rx="1"
+                width="7"
+                x="3"
+                y="3"
+              />
+              <rect
+                height="7"
+                rx="1"
+                width="7"
+                x="14"
+                y="3"
+              />
+              <rect
+                height="7"
+                rx="1"
+                width="7"
+                x="14"
+                y="14"
+              />
+              <rect
+                height="7"
+                rx="1"
+                width="7"
+                x="3"
+                y="14"
+              />
+            </svg>
+            <span
+              class="text-xs font-bold text-zinc-300 tracking-widest uppercase"
+            >
+              Mission Logs
+            </span>
+          </div>
+          <div
+            class="p-4"
+          >
+            <button
+              class="w-full group relative flex items-center justify-center gap-2 py-3 px-4 bg-teal-900/10 border border-teal-500/50 hover:bg-teal-500/20 text-teal-400 text-xs font-bold uppercase tracking-wider transition-all"
+              style="clip-path: polygon(10px 0,100%0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px);"
+            >
+              <svg
+                aria-hidden="true"
+                class="lucide lucide-plus w-4 h-4"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="M5 12h14"
+                />
+                <path
+                  d="M12 5v14"
+                />
+              </svg>
+              <span>
+                Initiate Session
+              </span>
+              <div
+                class="absolute inset-0 bg-grid-pattern opacity-10 pointer-events-none group-hover:opacity-20"
+              />
+            </button>
+          </div>
+          <div
+            class="flex-1 overflow-y-auto px-4 pb-4 space-y-2 custom-scrollbar"
+          >
+            <div
+              class="text-[10px] text-zinc-600 font-mono mb-2 mt-2 uppercase"
+            >
+              Recent Archives
+            </div>
+            <div
+              class="text-xs text-zinc-600 font-mono p-2 text-center border border-dashed border-zinc-800 rounded"
+            >
+              NO ARCHIVES FOUND
+            </div>
+          </div>
+          <div
+            class="p-4 border-t border-zinc-800 bg-zinc-900/40"
+          >
+            <div
+              class="flex items-center gap-3 mb-3"
+            >
+              <div
+                class="w-10 h-10 rounded bg-zinc-800 border border-zinc-700 flex items-center justify-center"
+              >
+                <svg
+                  aria-hidden="true"
+                  class="lucide lucide-fingerprint-pattern w-6 h-6 text-zinc-500"
+                  fill="none"
+                  height="24"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"
+                  />
+                  <path
+                    d="M14 13.12c0 2.38 0 6.38-1 8.88"
+                  />
+            ...
+ 鉂?[22m Object.getElementError node_modules/@testing-library/dom/dist/config.js:37:19
+ 鉂?[22m node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ 鉂?[22m node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ 鉂?[22m node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ 鉂?[22m src/__tests__/AppIntegration.test.jsx:43:23
+     41| 
+     42|         // 1. Verify Welcome Screen
+     43|         expect(screen.getByText(/INITIATE PROTOCOL/i)).toBeInTheDocume鈥?       |                       ^
+     44| 
+     45|         // 2. Start Session (Click Input)
+
+鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆鈳幆[1/1]鈳?[22m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m1 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m5 passed[39m[22m[90m (6)[39m
+[2m   Start at [22m 00:26:07
+[2m   Duration [22m 7.21s[2m (transform 790ms, setup 663ms, import 4.13s, tests 261ms, environment 5.16s)[22m
+

@@ -1,0 +1,25 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.11, pytest-8.4.2, pluggy-1.5.0
+rootdir: F:\OneDrive\PY\ZYZ\project\llm_council_sentinel
+configfile: pytest.ini
+plugins: asyncio-1.0.0
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 0 items / 1 error
+
+=================================== ERRORS ====================================
+___________ ERROR collecting tests/test_backend_integration_sync.py ___________
+ImportError while importing test module 'F:\OneDrive\PY\ZYZ\project\llm_council_sentinel\tests\test_backend_integration_sync.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+D:\ProgramData\Miniconda\Lib\importlib\__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_backend_integration_sync.py:13: in <module>
+    from backend.main import send_message_stream
+backend\main.py:7: in <module>
+    from fastapi import FastAPI, HTTPException, Request, Header, Depends
+E   ModuleNotFoundError: No module named 'fastapi'
+=========================== short test summary info ===========================
+ERROR tests/test_backend_integration_sync.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+============================== 1 error in 0.45s ===============================

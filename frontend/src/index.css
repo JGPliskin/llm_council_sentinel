@@ -59,6 +59,39 @@
 
     --radius: 0.75rem;
 
+    /* Refactor Variables from UI_STYLE_GUIDE.md */
+    /* 背景 */
+    --bg-primary: #09090b;     /* zinc-950 */
+    --bg-secondary: #18181b;   /* zinc-900 */
+    --bg-tertiary: #27272a;    /* zinc-800 */
+    
+    /* 文字 */
+    --text-primary: #f4f4f5;   /* zinc-100 */
+    --text-secondary: #71717a; /* zinc-500 */
+    --text-muted: #3f3f46;     /* zinc-700 */
+    
+    /* 边框 */
+    --border-default: #27272a; /* zinc-800 */
+    --border-subtle: #18181b;  /* zinc-900 */
+    
+    /* 强调色 */
+    --accent-orange: #f97316;
+    --accent-blue: #3b82f6;
+    --accent-purple: #a855f7;
+    --accent-teal: #14b8a6;
+    --accent-red: #ef4444;
+    --accent-yellow: #facc15;
+    
+    /* 动画时长 */
+    --duration-fast: 150ms;
+    --duration-normal: 300ms;
+    --duration-slow: 500ms;
+    
+    /* 圆角 */
+    --radius-sm: 2px;
+    --radius-md: 4px;
+    --radius-lg: 8px;
+
     --chart-1: 142 76% 40%;
     --chart-2: 173 58% 39%;
     --chart-3: 197 37% 24%;

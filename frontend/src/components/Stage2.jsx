@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { ModelAvatar } from "./CouncilAvatars";
+import { cn } from "@/lib/utils";
 
 const getCouncilorDisplay = (lookup, idOrModel) => {
   const item = lookup?.[idOrModel];
@@ -35,6 +36,11 @@ export default function Stage2({
 }) {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState("0");
+
+  // 增量显示增强：追踪刚完成的议员
+  const [justCompletedId, setJustCompletedId] = useState(null);
+  const [userHasManuallyChangedTab, setUserHasManuallyChangedTab] = useState(false);
+  const prevCompletedIdsRef = useRef(new Set());
 
   const resolvedCouncilors = metadata?.resolved_councilors || [];
 
@@ -66,6 +72,53 @@ export default function Stage2({
     }
   }, [activeModel, renderItems?.length]);
 
+  // 检测新完成的议员，触发高亮和自动切换
+  useEffect(() => {
+    if (!renderItems || renderItems.length === 0) return;
+
+    // 构建当前完成的议员 ID 集合
+    const currentCompletedIds = new Set(
+      renderItems
+        .filter(r =>
+          r.status === 'completed' ||
+          r.status === 'ok' ||
+          (r.ranking && r.ranking.length > 0)
+        )
+        .map(r => r.judge_councilor_id || r.model)
+    );
+
+    // 找出新完成的议员
+    const newlyCompletedId = [...currentCompletedIds].find(
+      id => !prevCompletedIdsRef.current.has(id)
+    );
+
+    if (newlyCompletedId) {
+      // 设置高亮
+      setJustCompletedId(newlyCompletedId);
+
+      // 2 秒后清除高亮
+      const timer = setTimeout(() => setJustCompletedId(null), 2000);
+
+      // 如果用户没有手动切换过 Tab，自动切换到新完成的 Tab
+      if (!userHasManuallyChangedTab) {
+        const newIndex = renderItems.findIndex(
+          r => (r.judge_councilor_id || r.model) === newlyCompletedId
+        );
+        if (newIndex !== -1) {
+          setActiveTab(String(newIndex));
+        }
+      }
+
+      // 更新 ref
+      prevCompletedIdsRef.current = currentCompletedIds;
+
+      return () => clearTimeout(timer);
+    }
+
+    // 仍然更新 ref（即使没有新完成的）
+    prevCompletedIdsRef.current = currentCompletedIds;
+  }, [renderItems, userHasManuallyChangedTab]);
+
   if (!renderItems || renderItems.length === 0) {
     return null;
   }
@@ -83,6 +136,7 @@ export default function Stage2({
 
   const handleTabChange = (value) => {
     setActiveTab(value);
+    setUserHasManuallyChangedTab(true); // 标记用户手动切换过
     const index = parseInt(value, 10);
     if (renderItems[index] && onSelectModel) {
       // onSelectModel(renderItems[index].model); // Optional sync
@@ -136,12 +190,17 @@ export default function Stage2({
               const judgeId = rank.judge_councilor_id || rank.councilor_id;
               const judgeItem = resolveItem(councilorLookup, judgeId || rank.model);
               const isThinking = rank.status === "thinking";
+              const isJustCompleted = justCompletedId === (judgeId || rank.model);
 
               return (
                 <TabsTrigger
                   key={index}
                   value={String(index)}
-                  className="flex items-center gap-2 text-xs md:text-sm font-semibold data-[state=active]:bg-card data-[state=active]:shadow-sm px-3 py-2"
+                  className={cn(
+                    "flex items-center gap-2 text-xs md:text-sm font-semibold data-[state=active]:bg-card data-[state=active]:shadow-sm px-3 py-2 transition-all duration-300",
+                    // 刚完成的议员高亮效果
+                    isJustCompleted && "ring-2 ring-green-500 bg-green-50 dark:bg-green-900/20 animate-pulse"
+                  )}
                 >
                   <div className="scale-75 origin-left relative">
                     <ModelAvatar
@@ -151,8 +210,14 @@ export default function Stage2({
                     />
                     {isThinking && <div className="absolute inset-0 bg-background/50 animate-pulse rounded-full" />}
                   </div>
-                  <span className={isThinking ? "opacity-70" : ""}>{judgeItem.name || rank.councilor_name || rank.model}</span>
+                  <span className={cn(
+                    isThinking && "opacity-70",
+                    isJustCompleted && "text-green-700 dark:text-green-400 font-bold"
+                  )}>
+                    {judgeItem.name || rank.councilor_name || rank.model}
+                  </span>
                   {isThinking && <span className="animate-spin ml-1 text-muted-foreground">⟳</span>}
+                  {isJustCompleted && <span className="ml-1 text-green-600">✓</span>}
                 </TabsTrigger>
               );
             })}

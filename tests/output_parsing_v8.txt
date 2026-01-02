@@ -1,0 +1,194 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.11, pytest-8.4.2, pluggy-1.5.0
+rootdir: F:\OneDrive\PY\ZYZ\project\llm_council_sentinel
+configfile: pytest.ini
+plugins: asyncio-1.0.0
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 1 item
+
+tests\test_openrouter_parsing.py F                                       [100%]
+
+================================== FAILURES ===================================
+_______________________ test_stream_model_parsing_sync ________________________
+
+    @patch('backend.openrouter.httpx', MagicMock()) # Double ensure patched
+    def test_stream_model_parsing_sync():
+        """Sync wrapper for async test."""
+    
+        async def run_test():
+            # Mock response chunks simulating a tool call
+            mock_chunks = [
+                # Chunk 1: Tool call start
+                {
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "function": {
+                                    "name": "emit_thinking",
+                                    "arguments": "{\"title\": \"Analy"
+                                },
+                                 "id": "call_123"
+                            }]
+                        }
+                    }]
+                },
+                # Chunk 2: Tool call continue
+                {
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "function": {
+                                    "arguments": "zing Request\"}"
+                                }
+                            }]
+                        }
+                    }]
+                },
+                {
+                    "choices": [{
+                        "delta": {
+                            "content": "Here is the answer."
+                        }
+                    }]
+                }
+            ]
+    
+            # Mock AsyncClient
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+    
+            # mimic aiter for streaming response
+            async def chunk_generator():
+                for chunk in mock_chunks:
+                    yield json.dumps(chunk).encode('utf-8')
+    
+            mock_response.aiter_lines.return_value = chunk_generator()
+            mock_response.status_code = 200
+    
+            # Setup async context manager for stream()
+            mock_client.stream.return_value.__aenter__ = MagicMock(side_effect=lambda: async_return(mock_response))
+            mock_client.stream.return_value.__aexit__ = MagicMock(side_effect=lambda *a, **k: async_return(None))
+    
+            # Setup async context manager for AsyncClient() itself
+            mock_client.__aenter__ = MagicMock(side_effect=lambda: async_return(mock_client))
+            mock_client.__aexit__ = MagicMock(side_effect=lambda *a, **k: async_return(None))
+    
+            thinking_titles = []
+            # Test both sync and async callbacks (backend supports both now)
+            async def on_thinking(title):
+                thinking_titles.append(title)
+    
+            with patch('backend.openrouter.httpx.AsyncClient', return_value=mock_client), \
+                 patch('backend.openrouter.OPENROUTER_API_KEY', "test-key"):
+                result = await stream_model(
+                    "test-model",
+                    [{"role": "user", "content": "hi"}],
+                    on_thinking=on_thinking,
+                    tools=[{"type": "function", "function": {"name": "emit_thinking"}}]
+                )
+    
+            # Verify thinking callback was triggered
+            assert "Analyzing Request" in thinking_titles
+            assert result["content"] == "Here is the answer."
+    
+>       asyncio.run(run_test())
+
+tests\test_openrouter_parsing.py:96: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+D:\ProgramData\Miniconda\Lib\asyncio\runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+D:\ProgramData\Miniconda\Lib\asyncio\runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+D:\ProgramData\Miniconda\Lib\asyncio\base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    async def run_test():
+        # Mock response chunks simulating a tool call
+        mock_chunks = [
+            # Chunk 1: Tool call start
+            {
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "function": {
+                                "name": "emit_thinking",
+                                "arguments": "{\"title\": \"Analy"
+                            },
+                             "id": "call_123"
+                        }]
+                    }
+                }]
+            },
+            # Chunk 2: Tool call continue
+            {
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "function": {
+                                "arguments": "zing Request\"}"
+                            }
+                        }]
+                    }
+                }]
+            },
+            {
+                "choices": [{
+                    "delta": {
+                        "content": "Here is the answer."
+                    }
+                }]
+            }
+        ]
+    
+        # Mock AsyncClient
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+    
+        # mimic aiter for streaming response
+        async def chunk_generator():
+            for chunk in mock_chunks:
+                yield json.dumps(chunk).encode('utf-8')
+    
+        mock_response.aiter_lines.return_value = chunk_generator()
+        mock_response.status_code = 200
+    
+        # Setup async context manager for stream()
+        mock_client.stream.return_value.__aenter__ = MagicMock(side_effect=lambda: async_return(mock_response))
+        mock_client.stream.return_value.__aexit__ = MagicMock(side_effect=lambda *a, **k: async_return(None))
+    
+        # Setup async context manager for AsyncClient() itself
+        mock_client.__aenter__ = MagicMock(side_effect=lambda: async_return(mock_client))
+        mock_client.__aexit__ = MagicMock(side_effect=lambda *a, **k: async_return(None))
+    
+        thinking_titles = []
+        # Test both sync and async callbacks (backend supports both now)
+        async def on_thinking(title):
+            thinking_titles.append(title)
+    
+        with patch('backend.openrouter.httpx.AsyncClient', return_value=mock_client), \
+             patch('backend.openrouter.OPENROUTER_API_KEY', "test-key"):
+            result = await stream_model(
+                "test-model",
+                [{"role": "user", "content": "hi"}],
+                on_thinking=on_thinking,
+                tools=[{"type": "function", "function": {"name": "emit_thinking"}}]
+            )
+    
+        # Verify thinking callback was triggered
+>       assert "Analyzing Request" in thinking_titles
+E       AssertionError: assert 'Analyzing Request' in []
+
+tests\test_openrouter_parsing.py:93: AssertionError
+---------------------------- Captured stdout call -----------------------------
+Error streaming model test-model: startswith first arg must be bytes or a tuple of bytes, not str
+=========================== short test summary info ===========================
+FAILED tests/test_openrouter_parsing.py::test_stream_model_parsing_sync - Ass...
+============================== 1 failed in 0.42s ==============================

@@ -36,10 +36,16 @@ class TestApiCouncilors(unittest.TestCase):
 
     def test_send_message_with_councilor_ids(self):
         """Test sending a message with specific councilor IDs."""
+        if len(COUNCILORS) < 2:
+            self.skipTest("Not enough councilors configured to run test.")
+
+        requested_ids = [COUNCILORS[0]["id"], COUNCILORS[1]["id"]]
         # Mock storage and council execution
         with patch("backend.main.storage") as mock_storage, \
              patch("backend.main.run_full_council") as mock_run, \
-             patch("backend.main.generate_conversation_title", return_value="Test Title"):
+             patch("backend.main.generate_conversation_title", return_value="Test Title"), \
+             patch("backend.main.ACTIVE_COUNCIL", COUNCILORS), \
+             patch("backend.validation.health_manager.get_status", return_value={"health_status": "healthy", "healthy": True}):
             
             mock_storage.get_conversation.return_value = {
                 "id": "test_conv",
@@ -52,7 +58,7 @@ class TestApiCouncilors(unittest.TestCase):
             
             payload = {
                 "content": "Hello",
-                "councilor_ids": ["hefei-strategist", "qinling-engineer"]
+                "councilor_ids": requested_ids
             }
             
             response = client.post("/api/conversations/test_conv/message", json=payload)
@@ -65,12 +71,12 @@ class TestApiCouncilors(unittest.TestCase):
             active_councilors = args[1]
             self.assertEqual(len(active_councilors), 2)
             ids = sorted([c["id"] for c in active_councilors])
-            self.assertEqual(ids, ["hefei-strategist", "qinling-engineer"])
+            self.assertEqual(ids, sorted(requested_ids))
 
             # Verify storage update was called
             mock_storage.update_conversation_schema.assert_called()
             call_args = mock_storage.update_conversation_schema.call_args
-            self.assertEqual(sorted(call_args[0][1]), ["hefei-strategist", "qinling-engineer"])
+            self.assertEqual(sorted(call_args[0][1]), sorted(requested_ids))
             if len(call_args[0]) > 2:
                  self.assertEqual(call_args[0][2], 2)
             else:

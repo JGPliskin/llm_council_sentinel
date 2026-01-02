@@ -26,7 +26,10 @@ def create_conversation(
     conversation_id: str, 
     active_models: Optional[List[str]] = None,
     active_councilor_ids: Optional[List[str]] = None,
-    active_chairman: Optional[str] = None
+    active_chairman: Optional[str] = None,
+    model_assignments: Optional[Dict[str, str]] = None,
+    assignment_seed: Optional[str] = None,
+    assignment_strategy: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Create a new conversation.
@@ -36,11 +39,17 @@ def create_conversation(
         active_models: Legacy (optional)
         active_councilor_ids: List of active councilor IDs (v2)
         active_chairman: Active chairman model for this conversation
+        model_assignments: 固定模型分配 (v3)
+        assignment_seed: 分配种子，用于复现 (v3)
+        assignment_strategy: 分配策略 (v3)
 
     Returns:
         New conversation dict
     """
     ensure_data_dir()
+
+    # 根据是否有 model_assignments 决定 schema_version
+    schema_version = 3 if model_assignments else 2
 
     conversation = {
         "id": conversation_id,
@@ -50,7 +59,10 @@ def create_conversation(
         "active_models": active_models,
         "active_councilor_ids": active_councilor_ids,
         "active_chairman": active_chairman,
-        "schema_version": 2
+        "schema_version": schema_version,
+        "model_assignments": model_assignments,
+        "assignment_seed": assignment_seed,
+        "assignment_strategy": assignment_strategy
     }
 
     # Save to file
@@ -206,6 +218,26 @@ def update_conversation_schema(conversation_id: str, active_councilor_ids: List[
         
     conversation["active_councilor_ids"] = active_councilor_ids
     conversation["schema_version"] = version
+    save_conversation(conversation)
+
+
+def update_conversation_assignments(
+    conversation_id: str,
+    model_assignments: Dict[str, str],
+    assignment_seed: str,
+    assignment_strategy: str
+):
+    """
+    Persist model assignments (schema_version=3).
+    """
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        return
+
+    conversation["model_assignments"] = model_assignments
+    conversation["assignment_seed"] = assignment_seed
+    conversation["assignment_strategy"] = assignment_strategy
+    conversation["schema_version"] = 3
     save_conversation(conversation)
 
 

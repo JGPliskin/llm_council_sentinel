@@ -1,0 +1,60 @@
+/* 呼吸扩散动画 */
+@keyframes beacon-ping {
+    0% {
+        transform: scale(1);
+        opacity: 1;
+    }
+
+    75%,
+    100% {
+        transform: scale(2);
+        opacity: 0;
+    }
+}
+
+/* Beacon 按钮 */
+.consensus-beacon {
+    position: fixed;
+    bottom: 180px;
+    /* 在 HUD 上方 */
+    right: 24px;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: #9333ea;
+    /* theme('colors.purple.600') */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 35;
+    transition: transform 0.2s, box-shadow 0.2s;
+    color: white;
+}
+
+.consensus-beacon:hover {
+    transform: scale(1.1);
+    box-shadow: 0 0 30px rgba(168, 85, 247, 0.6);
+}
+
+/* 首次出现：呼吸动画 */
+.consensus-beacon--pinging::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: #a855f7;
+    /* theme('colors.purple.500') */
+    animation: beacon-ping 1.5s ease-out infinite;
+    z-index: -1;
+}
+
+/* 已查看：静止状态 */
+.consensus-beacon--static {
+    opacity: 0.8;
+}
+
+.consensus-beacon--static::before {
+    display: none;
+    /* 移除呼吸动画 */
+}

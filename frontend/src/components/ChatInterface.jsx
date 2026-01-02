@@ -6,11 +6,13 @@ import Stage2 from "./Stage2";
 import Stage3 from "./Stage3";
 import CouncilAvatars from "./CouncilAvatars";
 import ShareButton from "./ShareButton";
+import ThinkingConsole from "./ThinkingConsole";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { Brain } from "lucide-react";
 import { MAX_MESSAGE_LENGTH, api } from "@/api";
 
 // Default model configuration (mirrors backend ids for graceful fallback)
@@ -21,12 +23,36 @@ const DEFAULT_COUNCILORS = [
 ];
 const DEFAULT_CHAIRMAN = { id: "chairman", name: "共识主席", model: "amazon/nova-2-lite-v1:free" };
 
+// Helper to transform persisted backend thinking log to frontend prop format
+const transformThinkingLog = (log) => {
+  if (!log) return {};
+  const result = {};
+  // Backend log structure: { stage1: { cid: [{t, title}, ...] }, stage2: ... }
+  ["stage1", "stage2", "stage3"].forEach(stage => {
+    if (!log[stage]) return;
+    Object.keys(log[stage]).forEach(cid => {
+      const entries = log[stage][cid]; // Array of {t, title}
+      if (!entries) return;
+
+      if (!result[cid]) {
+        result[cid] = { title: null, history: [] };
+      }
+      // Merge history
+      result[cid].history.push(...entries);
+    });
+  });
+  return result;
+};
+
 export default function ChatInterface({
   conversation,
   onSendMessage,
   isLoading,
   onNewConversation,
   conversationId,
+  activeThinking,
+  enableThinking,
+  setEnableThinking,
 }) {
   const { t } = useTranslation();
   const [input, setInput] = useState("");
@@ -36,6 +62,7 @@ export default function ChatInterface({
   // Model state
   const [councilors, setCouncilors] = useState(DEFAULT_COUNCILORS);
   const [chairman, setChairman] = useState(DEFAULT_CHAIRMAN);
+  // activeThinking is now a prop: activeThinking
 
   const messagesEndRef = useRef(null);
   const scrollAreaRef = useRef(null);
@@ -249,6 +276,27 @@ export default function ChatInterface({
           // consoleLog(eventType, event);
 
           switch (eventType) {
+            case "thinking":
+              setActiveThinking(prev => {
+                const cid = event.councilor_id; // Check ID first
+                const model = event.model;
+                // Prefer ID as key
+                const key = cid || model;
+                if (!key) return prev;
+
+                const existing = prev[key] || { title: "", history: [] };
+
+                // Update title and append to history
+                return {
+                  ...prev,
+                  [key]: {
+                    title: event.delta,
+                    history: [...existing.history, { title: event.delta, t: event.t }]
+                  }
+                };
+              });
+              break;
+
             case "meta":
               setCurrentConversation((prev) => {
                 const messages = [...prev.messages];
@@ -330,6 +378,12 @@ export default function ChatInterface({
                 lastMsg.stage1 = event.data;
                 lastMsg.loading.stage1 = false;
                 return { ...prev, messages };
+              });
+              // Clear titles
+              setActiveThinking(prev => {
+                const next = { ...prev };
+                Object.keys(next).forEach(k => next[k] = { ...next[k], title: null });
+                return next;
               });
               break;
 
@@ -418,6 +472,12 @@ export default function ChatInterface({
 
                 return { ...prev, messages };
               });
+              // Clear titles
+              setActiveThinking(prev => {
+                const next = { ...prev };
+                Object.keys(next).forEach(k => next[k] = { ...next[k], title: null });
+                return next;
+              });
               break;
 
             case "stage3_start":
@@ -436,6 +496,12 @@ export default function ChatInterface({
                 lastMsg.stage3 = event.data;
                 lastMsg.loading.stage3 = false;
                 return { ...prev, messages };
+              });
+              // Clear titles
+              setActiveThinking(prev => {
+                const next = { ...prev };
+                Object.keys(next).forEach(k => next[k] = { ...next[k], title: null });
+                return next;
               });
               break;
 
@@ -605,6 +671,22 @@ export default function ChatInterface({
                     >
                       {charCount}/{MAX_MESSAGE_LENGTH}
                     </div>
+                    {/* Brain Toggle for Empty State - Mirrored from main input */}
+                    <div className="absolute top-2 right-2 flex items-center gap-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={cn(
+                          "h-6 w-6 rounded-full transition-colors",
+                          enableThinking ? "bg-violet-100 text-violet-600 hover:bg-violet-200" : "text-slate-400 hover:text-slate-600"
+                        )}
+                        onClick={() => setEnableThinking && setEnableThinking(!enableThinking)}
+                        title={enableThinking ? t("disableThinking") : t("enableThinking")}
+                      >
+                        <Brain className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   </div>
                   <Button
                     type="submit"
@@ -748,6 +830,9 @@ export default function ChatInterface({
                               onChairmanClick={handleChairmanClick}
                               modelStatuses={getModelStatuses(msg, messageCouncilModels, messageChairmanModel)}
                               isChairman={messageChairmanModel === activeModel}
+                              thinkingStates={msg.metadata?.thinking
+                                ? transformThinkingLog(msg.metadata.thinking)
+                                : (msg.loading ? activeThinking : {})}
                             />
                           );
                       })()}
@@ -827,6 +912,11 @@ export default function ChatInterface({
             </div>
           </ScrollArea>
 
+          {/* Thinking Console */}
+          {enableThinking && (
+            <ThinkingConsole activeThinking={activeThinking} councilorLookup={councilorLookup} />
+          )}
+
           {/* Only show input form if conversation is not complete (no stage3 response yet) */}
           {!conversation.messages.some(
             (msg) => msg.role === "assistant" && msg.stage3,
@@ -851,6 +941,21 @@ export default function ChatInterface({
                     rows={3}
                   />
                   {/* Character counter */}
+                  <div className="absolute top-2 right-2 flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        "h-6 w-6 rounded-full transition-colors",
+                        enableThinking ? "bg-violet-100 text-violet-600 hover:bg-violet-200" : "text-slate-400 hover:text-slate-600"
+                      )}
+                      onClick={() => setEnableThinking && setEnableThinking(!enableThinking)}
+                      title={enableThinking ? t("disableThinking") : t("enableThinking")}
+                    >
+                      <Brain className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                   <div
                     className={cn(
                       "absolute bottom-2 right-2 text-xs",

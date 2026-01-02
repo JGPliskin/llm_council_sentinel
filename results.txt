@@ -1,0 +1,6 @@
+--- Testing Thinking Toggle Propagation ---
+  [A] PASS: Instruction Injected
+  [B] PASS: Instruction Excluded
+
+--- Testing API Integration (Mocked) ---
+  [API] PASS: Default is True

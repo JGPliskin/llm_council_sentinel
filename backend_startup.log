@@ -1,0 +1,19 @@
+INFO:     Started server process [8668]
+INFO:     Waiting for application startup.
+[01:53:55] Skipping health refresh (Outside allowed hours 10-24)
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8010 (Press CTRL+C to quit)
+INFO:     127.0.0.1:2316 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:2317 - "GET /api/councilors HTTP/1.1" 200 OK
+INFO:     127.0.0.1:2316 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:2317 - "GET /api/councilors HTTP/1.1" 200 OK
+INFO:     127.0.0.1:2320 - "OPTIONS /api/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:2320 - "POST /api/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:2320 - "OPTIONS /api/conversations/f6dbf332-3b1a-4a58-8258-3ee387389d17/message/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:2320 - "POST /api/conversations/f6dbf332-3b1a-4a58-8258-3ee387389d17/message/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:2321 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:httpx:HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [8668]

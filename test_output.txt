@@ -1,0 +1,28 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.11, pytest-8.4.2, pluggy-1.5.0 -- D:\ProgramData\Miniconda\python.exe
+cachedir: .pytest_cache
+rootdir: F:\OneDrive\PY\ZYZ\project\llm_council_sentinel
+configfile: pytest.ini
+plugins: anyio-4.12.0, asyncio-1.0.0
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 0 items / 1 error
+
+=================================== ERRORS ====================================
+______________ ERROR collecting backend/tests/test_fast_lane.py _______________
+ImportError while importing test module 'F:\OneDrive\PY\ZYZ\project\llm_council_sentinel\backend\tests\test_fast_lane.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+D:\ProgramData\Miniconda\Lib\importlib\__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend\tests\test_fast_lane.py:13: in <module>
+    from council import select_best_model, _request_stage1_bounded
+backend\council.py:31: in <module>
+    from logger import log_request_timing
+backend\logger.py:8: in <module>
+    import pytz
+E   ModuleNotFoundError: No module named 'pytz'
+=========================== short test summary info ===========================
+ERROR backend/tests/test_fast_lane.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+============================== 1 error in 0.89s ===============================
