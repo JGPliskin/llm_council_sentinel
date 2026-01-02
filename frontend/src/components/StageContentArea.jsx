@@ -77,7 +77,16 @@ function StageContentArea({
     // Refactor used explicit 'purple' / 'orange'.
     // I will use explicit styles based on color or standard mapped classes.
 
-    const thinkingEntry = !isFinal ? thinkingByCouncilor?.[activeTab] : null;
+    // Thinking entry: 优先显示当前 councilor 的 thinking，如果没有则显示预设 thinking
+    const thinkingEntry = useMemo(() => {
+        if (isFinal) return null;
+        const councilorThinking = thinkingByCouncilor?.[activeTab];
+        if (councilorThinking && councilorThinking.steps && councilorThinking.steps.length > 0) {
+            return councilorThinking;
+        }
+        // 回退到预设 thinking
+        return thinkingByCouncilor?.['__preload__'] || null;
+    }, [isFinal, thinkingByCouncilor, activeTab]);
     const hasThinkingSteps = !!(thinkingEntry && thinkingEntry.steps && thinkingEntry.steps.length > 0);
     const isThinkingExpanded = thinkingExpanded?.[activeTab] !== false;
     const hasAnswerStarted = !isFinal && Boolean(stage1AnswerStream?.[activeTab]);

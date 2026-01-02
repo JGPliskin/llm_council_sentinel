@@ -441,176 +441,176 @@
         }
 
         async function sendMessage() {
-        const message = userInput.value.trim();
-        if (!message || isStreaming) return;
+            const message = userInput.value.trim();
+            if (!message || isStreaming) return;
 
-        isStreaming = true;
-        sendBtn.disabled = true;
-        userInput.value = '';
+            isStreaming = true;
+            sendBtn.disabled = true;
+            userInput.value = '';
 
-        // 添加用户消息
-        addMessage(message, true);
+            // 添加用户消息
+            addMessage(message, true);
 
-        // 创建思考容器
-        let thinkingContainer = null;
-        let answerContainer = null;
-        let answerEl = null;
-        let hasStartedContent = false; // 跟踪是否已经开始输出有效内容
+            // 创建思考容器
+            let thinkingContainer = null;
+            let answerContainer = null;
+            let answerEl = null;
+            let hasStartedContent = false; // 跟踪是否已经开始输出有效内容
 
-        try {
-            setStatus('连接中...', 'connecting');
+            try {
+                setStatus('连接中...', 'connecting');
 
-            const response = await fetch('/api/chat/stream', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    message: message,
-                    model: modelSelect.value
-                })
-            });
+                const response = await fetch('/api/chat/stream', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: message,
+                        model: modelSelect.value
+                    })
+                });
 
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
 
-            setStatus('接收中...', 'connecting');
+                setStatus('接收中...', 'connecting');
 
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
 
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
 
-                buffer += decoder.decode(value, { stream: true });
+                    buffer += decoder.decode(value, { stream: true });
 
-                // 解析 SSE 事件
-                const lines = buffer.split('\n');
-                buffer = lines.pop() || '';
+                    // 解析 SSE 事件
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
 
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
+                    for (const line of lines) {
+                        if (!line.startsWith('data: ')) continue;
 
-                    try {
-                        const event = JSON.parse(line.slice(6));
+                        try {
+                            const event = JSON.parse(line.slice(6));
 
-                        switch (event.type) {
-                            case 'thinking':
-                                // 确保思考容器优先创建
-                                if (!thinkingContainer) {
-                                    thinkingContainer = createThinkingContainer();
-                                }
-                                addThinkingBullet(
-                                    thinkingContainer,
-                                    event.title,
-                                    event.detail,
-                                    event.bullet_id
-                                );
-                                setStatus(`思考中: ${event.title}`, 'connecting');
-                                break;
+                            switch (event.type) {
+                                case 'thinking':
+                                    // 确保思考容器优先创建
+                                    if (!thinkingContainer) {
+                                        thinkingContainer = createThinkingContainer();
+                                    }
+                                    addThinkingBullet(
+                                        thinkingContainer,
+                                        event.title,
+                                        event.detail,
+                                        event.bullet_id
+                                    );
+                                    setStatus(`思考中: ${event.title}`, 'connecting');
+                                    break;
 
-                            case 'content':
-                                // 无论先收到什么，都确保思考容器先创建
-                                if (!thinkingContainer) {
-                                    thinkingContainer = createThinkingContainer();
-                                }
-                                // 然后创建答案容器
-                                if (!answerContainer) {
-                                    answerContainer = createAnswerContainer();
-                                    answerEl = answerContainer.querySelector('.final-answer');
-                                }
-                                
-                                // 过滤多余的空白字符（特别是开头的大量空行和连续空行）
-                                let content = event.delta;
-                                
-                                // 处理初始内容的空白过滤
-                                if (!hasStartedContent) {
-                                    if (content.trim() === '') {
-                                        // 纯空白，跳过
-                                        break;
-                                    } else {
-                                        // 找到有效内容的开始位置
-                                        const firstNonWhitespaceIndex = content.search(/\S/);
-                                        if (firstNonWhitespaceIndex >= 0) {
-                                            // 只取有效内容部分
-                                            content = content.substring(firstNonWhitespaceIndex);
-                                            hasStartedContent = true;
-                                        } else {
-                                            // 仍然没有有效内容，跳过
+                                case 'content':
+                                    // 无论先收到什么，都确保思考容器先创建
+                                    if (!thinkingContainer) {
+                                        thinkingContainer = createThinkingContainer();
+                                    }
+                                    // 然后创建答案容器
+                                    if (!answerContainer) {
+                                        answerContainer = createAnswerContainer();
+                                        answerEl = answerContainer.querySelector('.final-answer');
+                                    }
+
+                                    // 过滤多余的空白字符（特别是开头的大量空行和连续空行）
+                                    let content = event.delta;
+
+                                    // 处理初始内容的空白过滤
+                                    if (!hasStartedContent) {
+                                        if (content.trim() === '') {
+                                            // 纯空白，跳过
                                             break;
+                                        } else {
+                                            // 找到有效内容的开始位置
+                                            const firstNonWhitespaceIndex = content.search(/\S/);
+                                            if (firstNonWhitespaceIndex >= 0) {
+                                                // 只取有效内容部分
+                                                content = content.substring(firstNonWhitespaceIndex);
+                                                hasStartedContent = true;
+                                            } else {
+                                                // 仍然没有有效内容，跳过
+                                                break;
+                                            }
                                         }
                                     }
-                                }
-                                
-                                // 确保内容非空
-                                if (!content) {
-                                    break;
-                                }
-                                
-                                // 获取当前已有的内容
-                                let currentText = answerEl.textContent;
-                                
-                                // 过滤连续空行：如果当前内容以换行结尾，且新内容以换行开始，只保留一个换行
-                                if (currentText.endsWith('\n') && content.startsWith('\n')) {
-                                    // 只保留新内容中的非初始换行部分
-                                    content = content.replace(/^\n+/, '');
-                                }
-                                
-                                // 如果内容非空，则追加
-                                if (content) {
-                                    answerEl.textContent += content;
-                                    
-                                    // 后处理：将多个连续换行替换为单个换行
-                                    let finalText = answerEl.textContent;
-                                    // 将两个或多个连续换行替换为单个换行
-                                    finalText = finalText.replace(/\n\s*\n+/g, '\n\n');
-                                    // 如果需要更严格的控制，将所有连续换行替换为单个换行
-                                    // finalText = finalText.replace(/\n+/g, '\n');
-                                    
-                                    // 更新处理后的内容
-                                    if (finalText !== answerEl.textContent) {
-                                        answerEl.textContent = finalText;
+
+                                    // 确保内容非空
+                                    if (!content) {
+                                        break;
                                     }
-                                    
-                                    messagesEl.scrollTop = messagesEl.scrollHeight;
-                                    setStatus('生成中...', 'connecting');
-                                }
-                                break;
 
-                            case 'done':
-                                // 无论是否有思考容器，都结束思考状态
-                                if (thinkingContainer) {
-                                    finalizeThinking(thinkingContainer);
-                                }
-                                setStatus('');
-                                break;
+                                    // 获取当前已有的内容
+                                    let currentText = answerEl.textContent;
 
-                            case 'error':
-                                setStatus(`错误: ${event.message}`, 'error');
-                                break;
+                                    // 过滤连续空行：如果当前内容以换行结尾，且新内容以换行开始，只保留一个换行
+                                    if (currentText.endsWith('\n') && content.startsWith('\n')) {
+                                        // 只保留新内容中的非初始换行部分
+                                        content = content.replace(/^\n+/, '');
+                                    }
+
+                                    // 如果内容非空，则追加
+                                    if (content) {
+                                        answerEl.textContent += content;
+
+                                        // 后处理：将多个连续换行替换为单个换行
+                                        let finalText = answerEl.textContent;
+                                        // 将两个或多个连续换行替换为单个换行
+                                        finalText = finalText.replace(/\n\s*\n+/g, '\n\n');
+                                        // 如果需要更严格的控制，将所有连续换行替换为单个换行
+                                        // finalText = finalText.replace(/\n+/g, '\n');
+
+                                        // 更新处理后的内容
+                                        if (finalText !== answerEl.textContent) {
+                                            answerEl.textContent = finalText;
+                                        }
+
+                                        messagesEl.scrollTop = messagesEl.scrollHeight;
+                                        setStatus('生成中...', 'connecting');
+                                    }
+                                    break;
+
+                                case 'done':
+                                    // 无论是否有思考容器，都结束思考状态
+                                    if (thinkingContainer) {
+                                        finalizeThinking(thinkingContainer);
+                                    }
+                                    setStatus('');
+                                    break;
+
+                                case 'error':
+                                    setStatus(`错误: ${event.message}`, 'error');
+                                    break;
+                            }
+                        } catch (e) {
+                            console.error('Parse error:', e, line);
                         }
-                    } catch (e) {
-                        console.error('Parse error:', e, line);
                     }
                 }
-            }
 
-            // 安全保障：如果流结束但没有收到done事件，手动结束
-            if (thinkingContainer && !thinkingContainer.querySelector('.thinking-header').textContent.includes('完成')) {
-                finalizeThinking(thinkingContainer);
+                // 安全保障：如果流结束但没有收到done事件，手动结束
+                if (thinkingContainer && !thinkingContainer.querySelector('.thinking-header').textContent.includes('完成')) {
+                    finalizeThinking(thinkingContainer);
+                    setStatus('');
+                }
+
+            } catch (error) {
+                setStatus(`错误: ${error.message}`, 'error');
+                console.error('Stream error:', error);
+            } finally {
+                isStreaming = false;
+                sendBtn.disabled = false;
                 setStatus('');
             }
-
-        } catch (error) {
-            setStatus(`错误: ${error.message}`, 'error');
-            console.error('Stream error:', error);
-        } finally {
-            isStreaming = false;
-            sendBtn.disabled = false;
-            setStatus('');
         }
-    }
 
         // 事件绑定
         sendBtn.addEventListener('click', sendMessage);

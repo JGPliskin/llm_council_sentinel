@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { api } from '@/api';
+import { startPreloadTimer, stopPreloadTimer, isPreloadBullet } from '@/utils/preloadThinking';
 
 /**
  * Parliament Engine Hook
@@ -305,7 +306,7 @@ export function useParliamentEngine() {
     const startSession = useCallback(async (prompt, councilorIds) => {
         try {
             // 1. 创建对话
-            const newConv = await api.createConversation();
+            const newConv = await api.createConversation(councilorIds);
             setConversation(newConv);
 
             // 2. 重置状态
@@ -327,6 +328,33 @@ export function useParliamentEngine() {
             setAggregateRankings([]);
             stage2AnonMapRef.current = null;
 
+            // 2.5 启动预设思考定时器
+            // 使用特殊的 councilor_id "__preload__" 来存储预设 thinking
+            startPreloadTimer((preload) => {
+                setThinkingByCouncilor(prev => {
+                    const preloadKey = '__preload__';
+                    const existing = prev[preloadKey] || { status: 'thinking', steps: [] };
+                    const newStep = {
+                        bullet_id: preload.bullet_id,
+                        title: preload.title,
+                        detail: preload.detail,
+                        t: null
+                    };
+                    return {
+                        ...prev,
+                        [preloadKey]: {
+                            status: 'thinking',
+                            steps: [...existing.steps, newStep]
+                        }
+                    };
+                });
+                // 自动展开预设 thinking
+                setThinkingExpanded(prev => ({
+                    ...prev,
+                    '__preload__': true
+                }));
+            });
+
             // 3. 发送消息并订阅 SSE
             // Note: councilorIds here are passed to backend. The backend resolves them and sends back 'meta' event.
             await api.sendMessageStream(
@@ -338,6 +366,7 @@ export function useParliamentEngine() {
             );
         } catch (error) {
             console.error("Failed to start session:", error);
+            stopPreloadTimer(); // 确保出错时也停止预设定时器
             setIsLoading(false);
         }
     }, []);
@@ -430,11 +459,18 @@ export function useParliamentEngine() {
     }, []);
 
     const handleThinking = useCallback((event) => {
+        // 检测到真实思考到达时，停止预设定时器
+        const bulletId = event.bullet_id || '';
+        if (!isPreloadBullet(bulletId)) {
+            // 这是真实思考，停止预设定时器
+            stopPreloadTimer();
+        }
+
         if (event.stage === 'stage1') {
             const cid = event.councilor_id;
             if (!cid) return;
 
-            const bulletId = event.bullet_id || `${cid}-${Date.now()}-${Math.random()}`;
+            const newBulletId = bulletId || `${cid}-${Date.now()}-${Math.random()}`;
             const title = event.title || event.delta || '';
             const detail = event.detail || null;
             const op = event.op || 'append';
@@ -444,7 +480,7 @@ export function useParliamentEngine() {
                 const existing = prev[cid] || { status: 'thinking', steps: [] };
                 const steps = [...existing.steps];
                 if (op === 'update') {
-                    const index = steps.findIndex(s => s.bullet_id === bulletId);
+                    const index = steps.findIndex(s => s.bullet_id === newBulletId);
                     if (index >= 0) {
                         steps[index] = {
                             ...steps[index],
@@ -453,10 +489,10 @@ export function useParliamentEngine() {
                             t: t ?? steps[index].t
                         };
                     } else {
-                        steps.push({ bullet_id: bulletId, title, detail, t });
+                        steps.push({ bullet_id: newBulletId, title, detail, t });
                     }
                 } else {
-                    steps.push({ bullet_id: bulletId, title, detail, t });
+                    steps.push({ bullet_id: newBulletId, title, detail, t });
                 }
                 return {
                     ...prev,
@@ -586,9 +622,16 @@ export function useParliamentEngine() {
                 handleStage3Complete(event.data);
                 break;
             case 'complete':
+                stopPreloadTimer(); // 停止预设定时器
+                // 清理预设 thinking（不保存到历史）
+                setThinkingByCouncilor(prev => {
+                    const { __preload__, ...rest } = prev;
+                    return rest;
+                });
                 setIsLoading(false);
                 break;
             case 'error':
+                stopPreloadTimer(); // 停止预设定时器
                 console.error('SSE Error:', event.message);
                 setIsLoading(false);
                 break;
@@ -626,6 +669,7 @@ export function useParliamentEngine() {
     }, []);
 
     const reset = useCallback(() => {
+        stopPreloadTimer(); // 停止预设定时器
         setStage('idle');
         setConversation(null);
         setResolvedCouncilors([]);

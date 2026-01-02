@@ -55,7 +55,7 @@
 
 **文件路径**: `data/conversations/{conversation_id}.json`
 
-**Schema 版本**: 2
+**Schema 版本**: 3
 
 ```json
 {
@@ -69,7 +69,14 @@
   "active_models": null,
   "active_councilor_ids": ["immanuel_kant", "donald_trump", "hideo_kojima"],
   "active_chairman": "chairman",
-  "schema_version": 2
+  "model_assignments": {
+    "immanuel_kant": "nvidia/nemotron-3-nano-30b-a3b:free",
+    "donald_trump": "xiaomi/mimo-v2-flash:free",
+    "chairman": "xiaomi/mimo-v2-flash:free"
+  },
+  "assignment_seed": "2026-01-02T10:22:31Z-3f9a",
+  "assignment_strategy": "healthy_first",
+  "schema_version": 3
 }
 ```
 
@@ -84,6 +91,9 @@
 | `active_models` | array | 否 | **[已废弃]** v1 兼容字段，模型 ID 列表 |
 | `active_councilor_ids` | array | 否 | v2 字段，Councilor ID 列表 |
 | `active_chairman` | string | 否 | Chairman ID |
+| `model_assignments` | object | 否 | v3 字段，固定模型分配结果 |
+| `assignment_seed` | string | 否 | v3 字段，可复现分配种子 |
+| `assignment_strategy` | string | 否 | v3 字段，分配策略标记（`healthy_first` / `healthy_first_then_unknown`） |
 | `schema_version` | integer | 否 | Schema 版本号 (默认 1) |
 
 **版本迁移说明**:
@@ -92,6 +102,7 @@
 |---|---|---|
 | v1 | 使用 `active_models`，无 `schema_version` | 读取时转换为 Councilor ID |
 | v2 | 使用 `active_councilor_ids`，`schema_version=2` | 原生支持 |
+| v3 | 使用 `model_assignments` 等固定分配字段，`schema_version=3` | 创建时分配，旧对话不升级 |
 
 ---
 
@@ -471,6 +482,9 @@ erDiagram
         array messages
         array active_councilor_ids
         string active_chairman
+        object model_assignments
+        string assignment_seed
+        string assignment_strategy
         int schema_version
     }
 
@@ -691,7 +705,14 @@ erDiagram
   ],
   "active_councilor_ids": ["immanuel_kant", "donald_trump"],
   "active_chairman": "chairman",
-  "schema_version": 2
+  "model_assignments": {
+    "immanuel_kant": "nvidia/nemotron-3-nano-30b-a3b:free",
+    "donald_trump": "xiaomi/mimo-v2-flash:free",
+    "chairman": "xiaomi/mimo-v2-flash:free"
+  },
+  "assignment_seed": "2026-01-02T10:22:31Z-3f9a",
+  "assignment_strategy": "healthy_first",
+  "schema_version": 3
 }
 ```
 

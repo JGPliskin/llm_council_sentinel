@@ -239,10 +239,13 @@ function AppContent() {
 
         {/* Right Detail Panel */}
         {engine.stage !== 'idle' && (
-          <div className={`
-                    fixed inset-y-0 right-0 z-50 w-full md:relative md:z-0 md:w-[400px] border-l border-zinc-800 transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]
+          <div
+            className={`
+                    fixed inset-y-0 right-0 z-50 w-full md:relative md:z-0 md:w-[400px] border-l border-zinc-800 transition-all duration-500
                     ${isPanelOpen ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0 md:w-0'}
-                `}>
+                `}
+            style={{ transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)' }}
+          >
             <DetailPanel
               stage={engine.stage}
               activeTab={engine.activeTab}

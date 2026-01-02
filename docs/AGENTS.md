@@ -22,7 +22,8 @@ LLM Council 是一个三阶段异步协作系统：
 - 模型健康管理（健康/冷却/不可用）
 - 对话持久化（JSON 文件）
 - 流式 SSE 输出（前端实时渲染）
-- 可选 Thinking 工具调用（前端显示 Console 与头像历史）
+- 可选 Thinking 工具调用（前端在内容区/详情面板展示）
+- 固定模型分配（创建时分配并固定整个对话生命周期）
 
 ---
 
@@ -34,6 +35,7 @@ LLM Council 是一个三阶段异步协作系统：
 |---|---|---|
 | `main.py` | FastAPI 入口 | API 路由、流式 SSE、对话存储、rate limit、输入校验、健康刷新调度 |
 | `council.py` | 三阶段编排 | Stage1/2/3 执行、并发控制、重试策略、匿名映射、thinking 注入 |
+| `model_assigner.py` | 固定分配 | 模型分配、种子复现、主席模型选择 |
 | `openrouter.py` | LLM 客户端 | 请求 OpenRouter API、解析流式 tool_calls、回调 thinking |
 | `storage.py` | 存储层 | JSON 持久化、对话列表、单/批量删除、schema 迁移 |
 | `validation.py` / `health.py` | 健康系统 | 健康探测、状态缓存、冷却与失败阈值 |
@@ -45,10 +47,11 @@ LLM Council 是一个三阶段异步协作系统：
 | 模块 | 作用 | 关键职责 |
 |---|---|---|
 | `App.jsx` | 应用入口 | 会话加载、流式消息渲染、全局 thinking 状态管理 |
-| `ChatInterface.jsx` | 核心 UI | 输入区、Stage1/2/3 渲染、SSE 事件分发、空白态 |
-| `CouncilAvatars.jsx` | 成员展示 | 头像状态、不可用列表、thinking 历史展开 |
-| `ThinkingConsole.jsx` | 全局 Console | 实时显示思考标题流 |
+| `WelcomeScreen.jsx` | 启动页 | Councilor 选择与会话启动 |
+| `StageContentArea.jsx` | 内容区 | Stage1/Stage3 内容渲染与 Thinking 展示 |
+| `DetailPanel.jsx` | 侧边栏 | 评审/主席思考详情 |
 | `TacticalHUD.jsx` | 战术 HUD | 底部状态栏、Councilor 卡片、共识信号 |
+| `Sidebar.jsx` | 会话列表 | 新建/选择/删除会话 |
 | `api.js` | API 客户端 | 所有 REST/SSE 请求封装 |
 
 ---
@@ -62,7 +65,7 @@ LLM Council 是一个三阶段异步协作系统：
 - **Chairman**: 共识主席 (🪶)
 
 **配置结构概览**:
-- `model_candidates`: 候选模型列表（按优先级排序，自动回退）
+- `model_candidates`: 候选模型列表（`auto_route_by_speed=true` 时按 TTFT 速度优先）
 - `persona_path`: Stage1 人设文件路径
 - `judge_persona_path`: Stage2 评审人设路径
 - `stage_limits`: 阶段级超时与 Token 限制
@@ -206,13 +209,21 @@ flowchart TB
   "active_models": null,
   "active_councilor_ids": ["id1", "id2"],
   "active_chairman": "chairman_id",
-  "schema_version": 2
+  "model_assignments": {
+    "immanuel_kant": "nvidia/nemotron-3-nano-30b-a3b:free",
+    "donald_trump": "xiaomi/mimo-v2-flash:free",
+    "chairman": "xiaomi/mimo-v2-flash:free"
+  },
+  "assignment_seed": "2026-01-02T10:22:31Z-3f9a",
+  "assignment_strategy": "healthy_first",
+  "schema_version": 3
 }
 ```
 
 **说明**：
 - 流式与非流式均会保存完整 `assistant` 消息。
 - `metadata.thinking` 现已包含 Thinking 步骤日志（有数量限制）。
+- `assignment_seed` 用于可复现的模型分配（伪随机）。
 
 > 详细字段说明参见 [DATA_SCHEMA.md](./DATA_SCHEMA.md)
 
@@ -297,6 +308,8 @@ meta → stage1_start → [thinking]* → [stage1_item]* → stage1_complete
      → stage3_start → [thinking]* → stage3_complete
      → [title_complete] → complete
 ```
+
+**meta 事件补充**：包含 `resolved_councilors`/`chairman`，并在固定分配时包含 `model_assignments`。
 
 **Thinking 事件**（最新格式）：
 ```json
@@ -422,20 +435,22 @@ sequenceDiagram
 2. conversation 记录的 `active_councilor_ids` (会话级)
 3. 当前健康的默认 councilors (全局)
 
+**固定分配优先级**：当对话已存在 `model_assignments` 且 `schema_version>=3` 时，payload 的 `councilor_ids` 会被忽略，始终使用已持久化的会话配置与固定模型分配。
+
 **严格过滤**：任何不健康 ID 都会被忽略并列入 `ignored_ids`。
 
 ### 10.5 模型选择与回退 (Resilience)
 
 Councilor 定义中包含 `model` (首选) 和 `model_candidates` (备选列表)。
 
-**选择逻辑**：
-1. 检查 `model` 是否健康 (`healthy=True`)。
-2. 若健康，直接使用。
-3. 若不健康，按序遍历 `model_candidates`。
-4. 选中第一个健康的 candidate 作为本次请求的执行模型。
-5. 若所有 candidate 均不可用，该 councilor 标记为不可用 (Ignored)。
+**动态模式（无固定分配）**：
+1. 候选池过滤为 `healthy/unknown`。
+2. `auto_route_by_speed=true` 时按 TTFT 速度排序并使用双阈值防抖切换；为 `false` 时按 `model_candidates` 顺序。
+3. 失败后从候选中剔除，尝试下一个模型。
 
-此机制确保单个模型 API 故障不会瘫痪整个系统。
+**固定模式（有 `model_assignments`）**：
+- Stage1/Stage2/Stage3 直接使用分配的模型。
+- 调用失败不自动切换，直接返回错误。
 
 ---
 
@@ -445,28 +460,27 @@ Councilor 定义中包含 `model` (首选) 和 `model_candidates` (备选列表)
 
 | 状态 | 类型 | 描述 |
 |---|---|---|
-| `activeThinking` | `{ [id]: { title, history[] } }` | 当前活跃的 Thinking 状态 |
-| `enableThinking` | `boolean` | 是否启用 Thinking (默认 true) |
-| `currentConversation` | `Conversation` | 当前对话对象 |
-| `councilors` | `Councilor[]` | 已加载的 Councilor 列表 |
-| `chairman` | `Councilor` | Chairman 信息 |
+| `stage` | `'idle'|'stage1'|'stage2'|'stage3'` | 当前阶段 |
+| `conversation` | `Conversation` | 当前对话对象 |
+| `resolvedCouncilors` | `Councilor[]` | 当前会话解析出的 Councilor 列表 |
+| `thinkingByCouncilor` | `{ [id]: { status, steps[] } }` | Thinking 步骤状态 |
+| `aggregateRankings` | `array` | Stage2 聚合排名结果 |
+| `synthesisSteps` | `array` | Stage3 主席思考过程 |
 
 ### 11.2 核心组件职责
 
 | 组件 | 职责 |
 |---|---|
-| `ChatInterface.jsx` | SSE 事件分发、Stage 渲染协调、消息发送 |
-| `Stage1.jsx` | 渲染 Councilor 观点卡片 |
-| `Stage2.jsx` | 渲染匿名互评与排名结果 |
-| `Stage3.jsx` | 渲染 Chairman 最终综合 |
+| `WelcomeScreen.jsx` | 会话启动与 Councilor 选择 |
+| `StageContentArea.jsx` | Stage1/Stage3 内容渲染与 Thinking 展示 |
+| `DetailPanel.jsx` | 评审/主席思考详情 |
 | `TacticalHUD.jsx` | 底部状态栏、Councilor 状态卡片 |
-| `ThinkingConsole.jsx` | 实时显示 Thinking 标题流 |
-| `CouncilAvatars.jsx` | 头像展示、`ThinkingHistory` 弹层 |
+| `Sidebar.jsx` | 会话列表、选择与删除 |
 
 ### 11.3 已知行为差异（现状）
 
 - empty state 输入区 **没有** thinking toggle。
-- thinking 历史显示依赖 `CouncilAvatars` 中的 `ThinkingHistory` 弹层。
+- Thinking 步骤在 `StageContentArea` 内联展示，无独立历史弹层。
 
 ---
 
@@ -475,7 +489,7 @@ Councilor 定义中包含 `model` (首选) 和 `model_candidates` (备选列表)
 - **流式消息必存储**：`send_message_stream` 已写入 `storage.add_assistant_message`。
 - **thinking 已持久化**：`metadata.thinking` 包含 Thinking 步骤（有数量限制）。
 - **删除保护**：`verify_admin` 当前默认放行（debug）。**生产必须启用真实 token 校验**。
-- **定时健康刷新**：后台任务每 `HEALTH_TTL_SECONDS` (3600s) 执行一次全局健康刷新。
+- **定时健康刷新**：后台任务按 `HEALTH_CHECK_INTERVAL` (默认 7200s) 运行，并受 `HEALTH_CHECK_START_HOUR`/`HEALTH_CHECK_END_HOUR` 时段限制。
 
 ---
 
@@ -505,7 +519,7 @@ Councilor 定义中包含 `model` (首选) 和 `model_candidates` (备选列表)
 
 ```bash
 # 后端
-cd backend && uvicorn main:app --host 0.0.0.0 --port 8000
+cd backend && uvicorn main:app --host 0.0.0.0 --port 8010
 
 # 前端
 cd frontend && npm run dev

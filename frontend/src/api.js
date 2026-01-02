@@ -94,13 +94,14 @@ export const api = {
   /**
    * Create a new conversation.
    */
-  async createConversation() {
+  async createConversation(councilorIds = null) {
+    const payload = Array.isArray(councilorIds) ? { councilor_ids: councilorIds } : {};
     const response = await fetch(`${API_BASE}/api/conversations`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({}),
+      body: JSON.stringify(payload),
     });
     if (!response.ok) {
       throw new Error("Failed to create conversation");

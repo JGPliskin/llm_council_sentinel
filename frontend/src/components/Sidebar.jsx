@@ -15,7 +15,10 @@ function Sidebar({
   const { t } = useTranslation();
 
   return (
-    <div className={`flex flex-col border-r border-zinc-800 bg-zinc-950 transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] overflow-hidden absolute md:relative h-full z-40 ${isOpen ? 'w-64 opacity-100 translate-x-0' : 'w-0 opacity-0 -translate-x-full md:translate-x-0'}`}>
+    <div
+      className={`flex flex-col border-r border-zinc-800 bg-zinc-950 transition-all duration-500 overflow-hidden absolute md:relative h-full z-40 ${isOpen ? 'w-64 opacity-100 translate-x-0' : 'w-0 opacity-0 -translate-x-full md:translate-x-0'}`}
+      style={{ transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)' }}
+    >
       <div className="h-14 flex items-center px-4 border-b border-zinc-800 bg-zinc-900/20">
         <LayoutGrid className="w-5 h-5 text-zinc-500 mr-2" />
         <span className="text-xs font-bold text-zinc-300 tracking-widest uppercase">Mission Logs</span>

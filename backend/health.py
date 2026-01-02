@@ -234,24 +234,41 @@ class HealthManager:
         """
         触发紧急探测 (针对候选集)
         - 仅探测满足冷却条件的模型
+        - 检查是否正在探测或最近已检查过 (避免资源浪费)
         - 不阻塞，Fire-and-forget 模式 (由调用方 create_task)
         """
         tasks = []
+        models_to_probe = []
+        now = datetime.datetime.now()
+
+        # 获取正在进行的探测快照，避免重复触发
+        async with self._lock:
+            pending_snapshot = set(self._pending_probes)
+
         for mid in models:
+            # 1. 检查是否正在探测中
+            if mid in pending_snapshot:
+                continue
+
             record = self._records.get(mid)
             if not record:
-                # Should we create it? Maybe not. Only existing records matter?
-                # But if it's in candidates, it should be probed.
                 record = HealthRecord()
                 self._records[mid] = record
             
+            # 2. 检查是否最近已检查过 (常规检查或探测)
+            # 如果最近已更新状态，无需再次紧急探测
+            if record.last_checked and \
+               (now - record.last_checked).total_seconds() < REFRESH_COOLDOWN_SECONDS:
+                continue
+
+            # 3. 检查紧急探测冷却 (防止对同一模型频繁发起紧急探测)
             if record.can_emergency_probe(cooldown_minutes):
                 record.mark_emergency_probed()
-                # Use probe_model which handles concurrency limits
                 tasks.append(self.probe_model(mid, probe_func))
+                models_to_probe.append(mid)
         
         if tasks:
-            logger.warning(f"Triggering emergency probe for {len(tasks)} models: {[m for m in models]}")
+            logger.warning(f"Triggering emergency probe for {len(tasks)} models: {models_to_probe}")
             # Run concurrently
             await asyncio.gather(*tasks)
 

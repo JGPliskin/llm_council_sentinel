@@ -10,7 +10,7 @@
 
 | 项目 | 值 |
 |---|---|
-| **Base URL** | `http://localhost:8000` (开发) / `http://localhost/api` (Docker) |
+| **Base URL** | `http://localhost:8010` (开发) / `http://localhost/api` (Docker) |
 | **协议** | HTTP/1.1 |
 | **认证** | `X-Admin-Token` Header (仅删除操作) |
 | **内容类型** | `application/json` |
@@ -173,7 +173,7 @@ GET /api/councilors?refresh=true HTTP/1.1
 
 ### 4.2 POST `/api/conversations`
 
-**描述**: 创建新对话
+**描述**: 创建新对话（创建时进行固定模型分配）
 
 **请求体**:
 ```json
@@ -195,9 +195,19 @@ GET /api/councilors?refresh=true HTTP/1.1
   "messages": [],
   "active_councilor_ids": ["immanuel_kant", "donald_trump"],
   "active_chairman": "chairman",
-  "schema_version": 2
+  "model_assignments": {
+    "immanuel_kant": "nvidia/nemotron-3-nano-30b-a3b:free",
+    "donald_trump": "xiaomi/mimo-v2-flash:free",
+    "chairman": "xiaomi/mimo-v2-flash:free"
+  },
+  "assignment_seed": "2026-01-02T10:22:31Z-3f9a",
+  "assignment_strategy": "healthy_first",
+  "schema_version": 3
 }
 ```
+
+**说明**：
+- 若固定分配失败，`model_assignments` 可能为空，`schema_version` 回退为 2。
 
 ---
 
@@ -232,7 +242,14 @@ GET /api/councilors?refresh=true HTTP/1.1
   ],
   "active_councilor_ids": ["immanuel_kant", "donald_trump", "hideo_kojima"],
   "active_chairman": "chairman",
-  "schema_version": 2
+  "model_assignments": {
+    "immanuel_kant": "nvidia/nemotron-3-nano-30b-a3b:free",
+    "donald_trump": "xiaomi/mimo-v2-flash:free",
+    "chairman": "xiaomi/mimo-v2-flash:free"
+  },
+  "assignment_seed": "2026-01-02T10:22:31Z-3f9a",
+  "assignment_strategy": "healthy_first",
+  "schema_version": 3
 }
 ```
 
@@ -305,7 +322,7 @@ X-Admin-Token: your-secret-token
 
 ### 5.1 POST `/api/conversations/{id}/message` (同步)
 
-**描述**: 发送消息并等待完整响应
+**描述**: 发送消息并等待完整响应（已固定模型分配时会忽略 payload 中的 `councilor_ids`）
 
 **Rate Limit**: 5 请求/分钟
 
@@ -321,7 +338,7 @@ X-Admin-Token: your-secret-token
 | 字段 | 类型 | 必填 | 约束 | 描述 |
 |---|---|---|---|---|
 | `content` | string | 是 | 最大 1000 字符 | 用户消息内容 |
-| `councilor_ids` | array | 否 | — | 临时指定参与的 Councilor |
+| `councilor_ids` | array | 否 | — | 临时指定参与的 Councilor（已固定分配时会被忽略） |
 | `enable_thinking` | boolean | 否 | 默认 `true` | 是否启用 Thinking 工具 |
 
 **响应结构**:
@@ -381,7 +398,7 @@ X-Admin-Token: your-secret-token
 
 ### 5.2 POST `/api/conversations/{id}/message/stream` (流式)
 
-**描述**: 发送消息并通过 SSE 流式接收响应
+**描述**: 发送消息并通过 SSE 流式接收响应（已固定模型分配时会忽略 payload 中的 `councilor_ids`）
 
 **Rate Limit**: 5 请求/分钟
 
@@ -445,7 +462,12 @@ X-Admin-Token: your-secret-token
   ],
   "chairman": {"id": "chairman", "name": "共识主席", "avatar": "🪶", "model": "xiaomi/mimo-v2-flash:free"},
   "ignored_ids": [],
-  "spec_version": "stage2_v1.2"
+  "spec_version": "stage2_v1.2",
+  "model_assignments": {
+    "immanuel_kant": "nvidia/nemotron-3-nano-30b-a3b:free",
+    "donald_trump": "xiaomi/mimo-v2-flash:free",
+    "chairman": "xiaomi/mimo-v2-flash:free"
+  }
 }
 ```
 
@@ -787,7 +809,7 @@ async def send_message_stream(conversation_id: str, content: str):
     async with httpx.AsyncClient() as client:
         async with client.stream(
             "POST",
-            f"http://localhost:8000/api/conversations/{conversation_id}/message/stream",
+            f"http://localhost:8010/api/conversations/{conversation_id}/message/stream",
             json={"content": content, "enable_thinking": True}
         ) as response:
             async for line in response.aiter_lines():

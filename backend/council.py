@@ -359,7 +359,8 @@ async def _request_stage1_bounded(
     user_query: str,
     on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
     on_answer_delta: Optional[Callable[[str, str], Any]] = None,
-    enable_thinking: bool = True
+    enable_thinking: bool = True,
+    fixed_model: Optional[str] = None  # 固定模型分配：如果提供则直接使用，失败不切换
 ) -> Dict[str, Any]:
     
     # 计时开始
@@ -416,30 +417,40 @@ async def _request_stage1_bounded(
 
     last_error = None
     
+    # 固定模型分配模式：直接使用分配的模型，失败不切换
+    if fixed_model:
+        selected_model = fixed_model
+        t_model_select = 0  # 无需选择
+        
+        # 检查固定模型是否在候选池内
+        if fixed_model not in candidates:
+            print(f"[FixedModel] 警告: 固定模型 {fixed_model} 不在候选池 {candidates} 中，但仍将使用", flush=True)
+    else:
+        selected_model = None
+    
     # Outer Loop: Candidate Selection
     while True:
-        # A. Select Model (Stage1 使用速度选路)
-        auto_route = councilor.get("auto_route_by_speed", True)
-        
-        # 记录模型选择开始时间（仅第一次）
-        t_select_start = time.time() if t_model_select is None else None
-        
-        selected_model = select_best_model(
-            candidates, 
-            excluded_models, 
-            councilor_id=councilor["id"],
-            auto_route_by_speed=auto_route
-        )
-        
-        # 记录模型选择结束时间（仅第一次）
-        if t_model_select is None:
-            t_model_select = time.time() - t_select_start  # 直接存储耗时（秒）
+        # A. Select Model
+        if not fixed_model:
+            # 动态模型选择 (旧逻辑)
+            auto_route = councilor.get("auto_route_by_speed", True)
+            
+            # 记录模型选择开始时间（仅第一次）
+            t_select_start = time.time() if t_model_select is None else None
+            
+            selected_model = select_best_model(
+                candidates, 
+                excluded_models, 
+                councilor_id=councilor["id"],
+                auto_route_by_speed=auto_route
+            )
+            
+            # 记录模型选择结束时间（仅第一次）
+            if t_model_select is None:
+                t_model_select = time.time() - t_select_start
         
         if not selected_model:
             # No healthy models available
-            # If we haven't tried anything yet, and maybe all are "unknown" but we are strict?
-            # Or if we exhausted all.
-            # We fail.
             break
             
         model_sem = await model_concurrency_manager.get_semaphore(selected_model)
@@ -586,12 +597,15 @@ async def _request_stage1_bounded(
         status_code = response.get('status_code') if response else None
 
         health_manager.update_status(selected_model, False, err_msg, status_code, source="runtime")
-        excluded_models.add(selected_model) # In-Flight Exclusion
-        continue
         
-        # End of Inner Loop
-        # If we are here, we either succeeded (returned already) or failed (break)
-        # If failed, we seek next candidate in Outer Loop
+        # 固定模型模式：失败不切换，直接退出
+        if fixed_model:
+            print(f"[FixedModel] 固定模型 {fixed_model} 调用失败，不切换: {err_msg}", flush=True)
+            break
+        
+        # 动态模式：继续尝试其他模型
+        excluded_models.add(selected_model)
+        continue
             
     # If we exited without returning
     # 记录失败日志
@@ -636,7 +650,8 @@ async def stage1_collect_responses(
     on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
     on_answer_delta: Optional[Callable[[str, str], Any]] = None,
     on_answer_done: Optional[Callable[[str], Any]] = None,
-    enable_thinking: bool = True
+    enable_thinking: bool = True,
+    model_assignments: Optional[Dict[str, str]] = None  # 固定模型分配
 ) -> List[Dict[str, Any]]:
     """Stage 1: Collect initial responses from all councilors with strict control."""
     semaphore = asyncio.Semaphore(DEFAULT_CONCURRENCY_STAGE1)
@@ -653,7 +668,8 @@ async def stage1_collect_responses(
                 user_query,
                 on_thinking,
                 on_answer_delta,
-                enable_thinking
+                enable_thinking,
+                fixed_model=model_assignments.get(c["id"]) if model_assignments else None
             )
         )
         for c in councilors
@@ -965,7 +981,8 @@ async def _collect_single_ranking_bounded(
     expected_anon_ids: List[str],
     timeout: float,
     on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
-    enable_thinking: bool = True
+    enable_thinking: bool = True,
+    fixed_model: Optional[str] = None  # 固定模型分配
 ) -> Dict[str, Any]:
     """Collect ranking with fallback routing."""
     
@@ -982,19 +999,31 @@ async def _collect_single_ranking_bounded(
     if enable_thinking:
         rubric_text += (
             "\n\nIMPORTANT: You MUST call the `emit_thinking` tool MULTIPLE times "
-            "before outputting your JSON to explain your ranking logic."
+            "to share your thinking/analysis before outputting the final JSON. "
+            "Example tool call pattern: "
+            "1) emit_thinking(title='Analyzing candidate anon_1 approach') "
+            "2) emit_thinking(title='Comparing novelty and depth') "
+            "3) emit_thinking(title='Finalizing ranking') "
+            "Then output the JSON after thorough analysis."
         )
-
+    
     messages = _build_ranking_messages(user_query, candidates, persona_text, rubric_text)
     
-    candidates = get_candidates(councilor_obj)
-    excluded_models = set()
-    attempted_models = []
-
+    candidate_models = get_candidates(councilor_obj)
+    excluded_models: set = set()                                                   
+    attempted_models: List[str] = []
     last_error = None
     
+    # 固定模型模式
+    fixed_mode = fixed_model is not None
+    if fixed_mode:
+        selected_model = fixed_model
+    else:
+        selected_model = None
+    
     while True: # Outer Loop: Candidates
-        selected_model = select_best_model(candidates, excluded_models)
+        if not fixed_mode:
+            selected_model = select_best_model(candidate_models, excluded_models)
         if not selected_model:
             break
             
@@ -1071,6 +1100,11 @@ async def _collect_single_ranking_bounded(
                 last_error = f"Network Error ({selected_model}): {err_msg}"
                 status_code = response.get('status_code') if response else None 
                 health_manager.update_status(selected_model, False, err_msg, status_code, source="runtime")
+                
+                # 固定模型模式：失败不切换
+                if fixed_mode:
+                    break
+                    
                 excluded_models.add(selected_model)
                 break # Break inner, next candidate
                 
@@ -1094,8 +1128,12 @@ async def _collect_single_ranking_bounded(
                    current_messages = messages + [retry_msg]
                 else:
                    # 2nd fail
-                   excluded_models.add(selected_model)
+                   if not fixed_mode:
+                       excluded_models.add(selected_model)
                    break
+
+        if fixed_mode:
+            break
             
     # Fail
     return {
@@ -1116,7 +1154,8 @@ async def stage2_collect_rankings(
     councilors: List[Dict[str, Any]],
     on_result: Optional[Callable[[Dict[str, Any]], Any]] = None,
     on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
-    enable_thinking: bool = True
+    enable_thinking: bool = True,
+    model_assignments: Optional[Dict[str, str]] = None  # 固定模型分配
 ) -> Dict[str, Any]:
     """
     Stage 2: Each model ranks the anonymized responses.
@@ -1161,6 +1200,9 @@ async def stage2_collect_rankings(
         limits = councilor.get("stage_limits", {}).get("stage2", {})
         timeout = limits.get("timeout", DEFAULT_STAGE2_TIMEOUT)
         
+        # 获取固定模型（如果有）
+        fixed_model = model_assignments.get(councilor["id"]) if model_assignments else None
+        
         t = asyncio.create_task(
             _collect_single_ranking_bounded(
                 semaphore, 
@@ -1173,7 +1215,8 @@ async def stage2_collect_rankings(
                 anon_ids, 
                 timeout,
                 on_thinking,
-                enable_thinking
+                enable_thinking,
+                fixed_model=fixed_model
             )
         )
         tasks.append((councilor, t))
@@ -1281,7 +1324,8 @@ async def stage3_synthesize_final(
     chairman: Dict[str, Any],
     on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
     on_answer_delta: Optional[Callable[[str], Any]] = None,
-    enable_thinking: bool = True
+    enable_thinking: bool = True,
+    fixed_model: Optional[str] = None  # 固定主席模型
 ) -> Dict[str, Any]:
     persona = fetch_persona(PERSONA_CACHE, chairman.get("persona_path", ""))
     stage_limits = chairman.get("stage_limits", {}).get("stage3", {})
@@ -1310,48 +1354,63 @@ async def stage3_synthesize_final(
     skipped_reason_map = {
         "all_stage1_failed": "所有模型第一阶段均失败（理论上不应运行到此）",
         "insufficient_candidates": "有效候选方案少于2个，无需排序",
-        "all_judges_failed": "所有评审员在排序阶段均运行失败"
+        "no_judges_completed": "所有评审员均超时或失败",
     }
-
+    
     if stage2_result.get("skipped"):
-        reason_code = stage2_result.get("skipped_reason")
-        reason_text = skipped_reason_map.get(reason_code, reason_code)
-        stage2_text = f"（阶段二已跳过：{reason_text}，请直接基于阶段一回答进行总结）"
+        reason = stage2_result.get("skipped_reason", "unknown")
+        stage2_text = f"[评审阶段已跳过：{skipped_reason_map.get(reason, reason)}]"
     else:
-        # Process Reviews
-        reviews_text_parts = []
-        for result in stage2_result.get("reviews", []):
-            ranking_summary = " > ".join(result.get("ranking", []))
-            scores_summary = result.get("scores") if result.get("scores") else "None"
-            rationale_summary = result.get("rationale") if result.get("rationale") else "None"
-            reviews_text_parts.append(
-                f"Model: {result['model']}\nRanking: {ranking_summary}\nScores: {scores_summary}\nRationale: {rationale_summary}"
-            )
-        stage2_text = "\n\n".join(reviews_text_parts)
+        reviews = stage2_result.get("reviews", [])
+        anon_map = stage2_result.get("anon_map", {})
+        
+        review_texts = []
+        for r in reviews:
+            judge = r.get("judge_councilor_id", "")
+            rankings = r.get("rankings", [])
+            reasoning = r.get("reasoning", "")
+            
+            ranking_str = " > ".join([
+                f"{x.get('anon_id')} ({x.get('score', '')})" for x in rankings
+            ])
+            review_texts.append(f"评审员 {judge}：{ranking_str}\n理由：{reasoning}")
+        
+        if review_texts:
+            stage2_text = "\n\n".join(review_texts)
+        else:
+            stage2_text = "[无有效评审结果]"
+    
+    # Build Prompt
+    thinking_instructions = ""
+    if enable_thinking:
+        thinking_instructions = """
+
+## 思考规则
+在总结前，请调用 `emit_thinking` 工具展示你的综合分析过程：
+- emit_thinking(title="总结多方观点......") 
+- emit_thinking(title="寻找共识与分歧......")
+- emit_thinking(title="形成最终建议......")
+然后在 content 中输出最终综合答案（纯 Markdown）。
+"""
 
     system_prompt = (
-        f"{persona}\n"
-        f"{chairman.get('judge_system_prompt', '')}\n"
-        "保持简洁、公允，无需自我介绍或复述问题。"
+        f"{persona}\n\n"
+        "你是决策主席，任务是根据以下各议员陈述和评审结果，撰写一份公允、可落地的综合答案。\n"
+        "输出格式：Markdown；可包含标题/列表/高亮；语言与用户问题保持一致。\n"
+        "要求：\n"
+        "1. 综合各议员观点，突出共识与分歧\n"
+        "2. 给出你的推荐立场或建议\n"
+        "3. 简洁、不重复原文\n"
+        "4. 直接输出结果，不要有任何 JSON 或 tool call 内容"
+        f"{thinking_instructions}"
     )
 
-    if enable_thinking:
-        system_prompt += (
-            "\n\nIMPORTANT: You MUST call the `emit_thinking` tool MULTIPLE times (3-5 times) "
-            "before your final synthesis to explain how you are weighing the different opinions."
-        )
-
-    chairman_prompt = f"""
-用户问题：{user_query}
-
-阶段一答案与评审卡：
-{stage1_text}
-
-阶段二匿名排序与打分：
-{stage2_text}
-
-请综合给出精炼的最终回答，可列出关键行动要点与风险提示，保持原问题语言。
-"""
+    chairman_prompt = (
+        f"用户问题：{user_query}\n\n"
+        f"==== 各议员观点 ====\n{stage1_text}\n\n"
+        f"==== 评审结果 ====\n{stage2_text}\n\n"
+        "请综合以上信息，给出最终建议。"
+    )
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -1363,9 +1422,17 @@ async def stage3_synthesize_final(
     attempted_models = []
     
     last_error = None
+    
+    # 固定模型模式
+    fixed_mode = fixed_model is not None
+    if fixed_mode:
+        selected_model = fixed_model
+    else:
+        selected_model = None
 
     while True: # Outer Loop: Candidates
-        selected_model = select_best_model(candidates, excluded_models)
+        if not fixed_mode:
+            selected_model = select_best_model(candidates, excluded_models)
         if not selected_model:
             break
             
@@ -1455,8 +1522,12 @@ async def stage3_synthesize_final(
                      continue # Retry inner
                  else:
                      # 2nd fail or fatal
-                     excluded_models.add(selected_model)
+                     if not fixed_mode:
+                         excluded_models.add(selected_model)
                      break # Break inner
+         
+        if fixed_mode:
+            break
                      
     return {
         "status": "failed",
@@ -1534,11 +1605,16 @@ async def run_full_council(
     councilors: List[Dict[str, Any]], 
     chairman: Dict[str, Any],
     on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
-    enable_thinking: bool = True
+    enable_thinking: bool = True,
+    model_assignments: Optional[Dict[str, str]] = None
 ) -> Tuple[List, Dict, Dict, Dict]:
     # Stage 1
     stage1_results = await stage1_collect_responses(
-        user_query, councilors, on_thinking=on_thinking, enable_thinking=enable_thinking
+        user_query,
+        councilors,
+        on_thinking=on_thinking,
+        enable_thinking=enable_thinking,
+        model_assignments=model_assignments
     )
 
     # Use active models for ranking (using councilors models)
@@ -1546,7 +1622,12 @@ async def run_full_council(
     
     # Stage 2 (Unified Dict)
     stage2_result = await stage2_collect_rankings(
-        user_query, stage1_results, councilors, on_thinking=on_thinking, enable_thinking=enable_thinking
+        user_query,
+        stage1_results,
+        councilors,
+        on_thinking=on_thinking,
+        enable_thinking=enable_thinking,
+        model_assignments=model_assignments
     )
 
     # Aggregate Rankings (if not skipped)
@@ -1558,7 +1639,13 @@ async def run_full_council(
 
     # Stage 3
     stage3_result = await stage3_synthesize_final(
-        user_query, stage1_results, stage2_result, chairman, on_thinking=on_thinking, enable_thinking=enable_thinking
+        user_query,
+        stage1_results,
+        stage2_result,
+        chairman,
+        on_thinking=on_thinking,
+        enable_thinking=enable_thinking,
+        fixed_model=model_assignments.get("chairman") if model_assignments else None
     )
 
     metadata = {

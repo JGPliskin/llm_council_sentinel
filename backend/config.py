@@ -211,6 +211,6 @@ HEALTH_CHECK_TIMEZONE = "Asia/Shanghai"
 # ----------------------------
 SPEED_ROUTE_SWITCH_ABS_MS = 800      # 切换绝对阈值 (ms)
 SPEED_ROUTE_SWITCH_REL_PCT = 0.30    # 切换相对阈值 (30%)
-EMERGENCY_PROBE_TTFT_THRESHOLD = 5000  # 紧急探测触发阈值 (ms)
+EMERGENCY_PROBE_TTFT_THRESHOLD = 20000  # 紧急探测触发阈值 (ms)
 EMERGENCY_PROBE_TTFT_MULTIPLIER = 3    # 紧急探测触发: TTFT >= EMA * 此值
-EMERGENCY_PROBE_COOLDOWN_MINUTES = 10  # 紧急探测冷却 (分钟，per-model)
+EMERGENCY_PROBE_COOLDOWN_MINUTES = 30  # 紧急探测冷却 (分钟，per-model)

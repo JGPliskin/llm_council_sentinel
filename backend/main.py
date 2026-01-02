@@ -350,26 +350,19 @@ async def create_conversation(request: CreateConversationRequest):
     """
     Create a new conversation.
     Uses the currently cached active models.
+    执行固定模型分配 (schema_version=3)。
     """
     global ACTIVE_COUNCIL, ACTIVE_CHAIRMAN
     
-    # Ensure we have active models (fallback if cache empty)
-    # ACTIVE_COUNCIL is initialized on startup.
-    # But if it's empty/all unhealthy, maybe we force a refresh here?
-    # User spec: "Startup... unknown".
-    # If I create conversation, I want healthy models.
-    # Let's allow one auto-refresh if we have NO active models at all?
-    # "Cache empty, validating..." 
-    # If status is unknown, we might want to check.
-    # However, for a NEW conversation, we probably want at least one healthy.
-    # Let's perform a single check if default list is empty.
-    # Ensure we have active models (fallback if cache empty)
-    # ACTIVE_COUNCIL is initialized on startup.
-    # We do NOT force refresh here to avoid latency/blocking.
-    # If no healthy models, default_ids will be empty, which is handled downstream.
-    current_actives = [c for c in ACTIVE_COUNCIL if c.get("healthy") is True]
-
+    # 导入模型分配引擎
+    from model_assigner import (
+        assign_models_for_councilors, 
+        assign_chairman_model,
+        CandidateIntersectionEmptyError
+    )
+    
     conversation_id = str(uuid.uuid4())
+    
     # v2: Store active_councilor_ids
     # Priority: Request > Default
     default_ids = [c["id"] for c in ACTIVE_COUNCIL]
@@ -379,11 +372,36 @@ async def create_conversation(request: CreateConversationRequest):
         valid_requested = [cid for cid in normalized if cid in COUNCILOR_MAP]
         if valid_requested:
             default_ids = valid_requested
+    
+    # 执行固定模型分配
+    model_assignments = None
+    assignment_seed = None
+    assignment_strategy = None
+    
+    try:
+        model_assignments, assignment_seed, assignment_strategy = assign_models_for_councilors(
+            default_ids, COUNCILOR_MAP
+        )
+        chairman_model = assign_chairman_model(CHAIRMAN)
+        model_assignments["chairman"] = chairman_model
+        
+        print(f"[ModelAssignment] 对话 {conversation_id[:8]}... 分配完成: {model_assignments}", flush=True)
+        print(f"[ModelAssignment] seed={assignment_seed}, strategy={assignment_strategy}", flush=True)
+        
+    except CandidateIntersectionEmptyError as e:
+        # 候选池与可用模型无交集
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        # 其他错误时回退到无分配模式 (schema_version=2)
+        print(f"[ModelAssignment] 分配失败，回退到旧逻辑: {e}", flush=True)
             
     conversation = storage.create_conversation(
         conversation_id,
         active_councilor_ids=default_ids,
-        active_chairman=ACTIVE_CHAIRMAN.get("id") if ACTIVE_CHAIRMAN else None
+        active_chairman=ACTIVE_CHAIRMAN.get("id") if ACTIVE_CHAIRMAN else None,
+        model_assignments=model_assignments,
+        assignment_seed=assignment_seed,
+        assignment_strategy=assignment_strategy
     )
     return conversation
 
@@ -584,14 +602,57 @@ async def send_message(request: Request, conversation_id: str, body: SendMessage
         title = await generate_conversation_title(body.content)
         storage.update_conversation_title(conversation_id, title)
 
+    # ========== 固定模型分配处理 ==========
+    from model_assigner import (
+        assign_models_for_councilors,
+        assign_chairman_model,
+        CandidateIntersectionEmptyError
+    )
+
+    model_assignments = conversation.get("model_assignments")
+    schema_version = conversation.get("schema_version", 1)
+    assignment_seed = ""
+    assignment_strategy = ""
+
+    if model_assignments and schema_version >= 3:
+        if body.councilor_ids:
+            print(f"[ModelAssignment] 对话已固定，忽略 payload.councilor_ids: {body.councilor_ids}", flush=True)
+
     # Resolution Logic
-    active_councilors, needs_migration, ignored_ids = resolve_target_councilors(body.councilor_ids, conversation)
+    effective_councilor_ids = body.councilor_ids if not (model_assignments and schema_version >= 3) else None
+    active_councilors, needs_migration, ignored_ids = resolve_target_councilors(effective_councilor_ids, conversation)
+
+    # 首次发送补分配
+    if schema_version >= 3 and not model_assignments:
+        assign_ids = [c["id"] for c in active_councilors]
+        if assign_ids:
+            try:
+                model_assignments, assignment_seed, assignment_strategy = assign_models_for_councilors(
+                    assign_ids,
+                    COUNCILOR_MAP,
+                    seed=conversation.get("assignment_seed")
+                )
+                chairman_model = assign_chairman_model(CHAIRMAN)
+                model_assignments["chairman"] = chairman_model
+                storage.update_conversation_assignments(
+                    conversation_id, model_assignments, assignment_seed, assignment_strategy
+                )
+                print(f"[ModelAssignment] 补分配完成: {model_assignments}", flush=True)
+            except CandidateIntersectionEmptyError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                print(f"[ModelAssignment] 补分配失败，回退到旧逻辑: {e}", flush=True)
+                model_assignments = None
     
     active_chairman_id = conversation.get("active_chairman") or CHAIRMAN.get("id")
     active_chairman = CHAIRMAN if active_chairman_id == CHAIRMAN.get("id") else CHAIRMAN
 
     stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
-        body.content, active_councilors, active_chairman, enable_thinking=body.enable_thinking
+        body.content,
+        active_councilors,
+        active_chairman,
+        enable_thinking=body.enable_thinking,
+        model_assignments=model_assignments
     )
 
     # Add assistant message with all stages and metadata
@@ -606,12 +667,14 @@ async def send_message(request: Request, conversation_id: str, body: SendMessage
     current_ids = [c["id"] for c in active_councilors]
     
     should_update_schema = False
-    
-    # Logic: Update if (Payload Provided) OR (Needs Migration)
-    if body.councilor_ids:
-        should_update_schema = True
-    elif needs_migration:
-        should_update_schema = True
+
+    # 仅对 v2 以下进行更新，避免覆盖 v3 固定分配
+    if conversation.get("schema_version", 1) < 3:
+        # Logic: Update if (Payload Provided) OR (Needs Migration)
+        if body.councilor_ids:
+            should_update_schema = True
+        elif needs_migration:
+            should_update_schema = True
         
     if should_update_schema:
         # Handle Backup if this is first migration (v1 -> v2)
@@ -746,25 +809,85 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                     generate_conversation_title(body.content)
                 )
 
-            # Resolution Logic
-            active_councilors, needs_migration, ignored_ids = resolve_target_councilors(body.councilor_ids, conversation)
+            # ========== 固定模型分配处理 ==========
+            from model_assigner import (
+                assign_models_for_councilors,
+                assign_chairman_model,
+                CandidateIntersectionEmptyError
+            )
             
-            # Emit Meta Event
+            model_assignments = conversation.get("model_assignments")
+            schema_version = conversation.get("schema_version", 1)
+
+            # 检查是否已有分配
+            if model_assignments and schema_version >= 3:
+                # 已分配：忽略 payload 中的 councilor_ids
+                if body.councilor_ids:
+                    print(f"[ModelAssignment] 对话已固定，忽略 payload.councilor_ids: {body.councilor_ids}", flush=True)
+            elif schema_version < 3:
+                # 旧对话 (schema_version < 3): 不升级，使用旧逻辑
+                model_assignments = None
+
+            # ========== Resolution Logic ==========
+            # 对于已分配对话，使用存储的 councilor_ids，忽略 payload
+            effective_councilor_ids = body.councilor_ids if not (model_assignments and schema_version >= 3) else None
+            active_councilors, needs_migration, ignored_ids = resolve_target_councilors(
+                effective_councilor_ids, conversation
+            )
+
+            # schema_version=3 但无分配：首次发送补分配
+            if schema_version >= 3 and not model_assignments:
+                assign_ids = [c["id"] for c in active_councilors]
+                if assign_ids:
+                    try:
+                        model_assignments, seed, strategy = assign_models_for_councilors(
+                            assign_ids,
+                            COUNCILOR_MAP,
+                            seed=conversation.get("assignment_seed")
+                        )
+                        chairman_model = assign_chairman_model(CHAIRMAN)
+                        model_assignments["chairman"] = chairman_model
+                        storage.update_conversation_assignments(
+                            conversation_id, model_assignments, seed, strategy
+                        )
+                        print(f"[ModelAssignment] 补分配完成: {model_assignments}", flush=True)
+                    except CandidateIntersectionEmptyError as e:
+                        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                        return
+                    except Exception as e:
+                        print(f"[ModelAssignment] 补分配失败，回退到旧逻辑: {e}", flush=True)
+                        model_assignments = None
+            
+            # Emit Meta Event - 使用分配后的模型
+            def get_resolved_model(cid):
+                if model_assignments and cid in model_assignments:
+                    return model_assignments[cid]
+                councilor = COUNCILOR_MAP.get(cid)
+                return councilor["model"] if councilor else None
+            
+            chairman_model = model_assignments.get("chairman") if model_assignments else CHAIRMAN["model"]
+            
             meta_payload = {
                 "type": "meta",
                 "resolved_councilor_ids": [c["id"] for c in active_councilors],
                 "resolved_councilors": [
-                    {"id": c["id"], "name": c["name"], "avatar": c.get("avatar", ""), "model": c["model"]} 
+                    {
+                        "id": c["id"], 
+                        "name": c["name"], 
+                        "avatar": c.get("avatar", ""), 
+                        "model": get_resolved_model(c["id"])
+                    } 
                     for c in active_councilors
                 ],
                 "chairman": {
                     "id": CHAIRMAN["id"], 
                     "name": CHAIRMAN["name"], 
                     "avatar": CHAIRMAN.get("avatar", ""),
-                    "model": CHAIRMAN["model"]
+                    "model": chairman_model
                 },
                 "ignored_ids": ignored_ids,
                 "spec_version": "stage2_v1.2",
+                "model_assignments": model_assignments,
             }
             yield f"data: {json.dumps(meta_payload)}\n\n"
             
@@ -796,7 +919,8 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                     on_thinking=on_thinking,
                     on_answer_delta=on_stage1_answer_delta,
                     on_answer_done=on_stage1_answer_done,
-                    enable_thinking=body.enable_thinking
+                    enable_thinking=body.enable_thinking,
+                    model_assignments=model_assignments
                 )
             )
             
@@ -824,7 +948,8 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                 yield f"data: {json.dumps({'type': 'stage2_start', 'skipped': True, 'skipped_reason': 'insufficient_candidates'})}\n\n"
                 
                 stage2_result = await stage2_collect_rankings(
-                    body.content, stage1_results, active_councilors, on_thinking=on_thinking, enable_thinking=body.enable_thinking
+                    body.content, stage1_results, active_councilors, on_thinking=on_thinking, enable_thinking=body.enable_thinking,
+                    model_assignments=model_assignments
                 )
             else:
                 # Normal Case
@@ -849,7 +974,8 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                         active_councilors,
                         on_result=on_stage2_item,
                         on_thinking=on_thinking,
-                        enable_thinking=body.enable_thinking
+                        enable_thinking=body.enable_thinking,
+                        model_assignments=model_assignments
                     )
                 )
                 
@@ -892,7 +1018,8 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                     active_chairman,
                     on_thinking=on_thinking,
                     on_answer_delta=on_stage3_answer_delta,
-                    enable_thinking=body.enable_thinking
+                    enable_thinking=body.enable_thinking,
+                    fixed_model=model_assignments.get("chairman") if model_assignments else None
                 )
             )
             
@@ -926,8 +1053,11 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
 
             current_ids = [c["id"] for c in active_councilors]
             should_update_schema = False
-            if body.councilor_ids: should_update_schema = True
-            elif needs_migration: should_update_schema = True
+            if conversation.get("schema_version", 1) < 3:
+                if body.councilor_ids:
+                    should_update_schema = True
+                elif needs_migration:
+                    should_update_schema = True
             
             if should_update_schema:
                  if conversation.get("schema_version", 1) < 2:
