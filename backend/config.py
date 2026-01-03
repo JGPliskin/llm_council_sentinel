@@ -225,3 +225,14 @@ SPEED_ROUTE_SWITCH_REL_PCT = 0.30    # 切换相对阈值 (30%)
 EMERGENCY_PROBE_TTFT_THRESHOLD = 20000  # 紧急探测触发阈值 (ms)
 EMERGENCY_PROBE_TTFT_MULTIPLIER = 3    # 紧急探测触发: TTFT >= EMA * 此值
 EMERGENCY_PROBE_COOLDOWN_MINUTES = 30  # 紧急探测冷却 (分钟，per-model)
+
+# ----------------------------
+# ETA 进度预估配置 (冷启动默认值)
+# ----------------------------
+DEFAULT_ETA_CONFIG = {
+    "default_ttft_ms": 2000,         # 默认首 token 时间 (ms)
+    "default_generation_ms": 5000,   # 默认生成时间 (ms)
+    "default_queue_wait_ms": 1000,   # 默认队列等待时间 (ms)
+    "warmup_sample_count": 3,        # EMA 启动所需最小样本数
+}
+

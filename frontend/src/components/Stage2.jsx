@@ -8,7 +8,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import { ModelAvatar } from "./CouncilAvatars";
 import { cn } from "@/lib/utils";
 
@@ -32,7 +31,8 @@ export default function Stage2({
   onSelectModel,
   scrollToStage2,
   councilorLookup = {},
-  metadata
+  metadata,
+  etaMsRemaining
 }) {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState("0");
@@ -132,7 +132,9 @@ export default function Stage2({
     r.status === 'failed' ||
     (r.ranking && r.ranking.length > 0) // Implicit completion
   ).length;
-  const progressPercent = totalCount > 0 ? (doneCount / totalCount) * 100 : 0;
+  const etaSeconds = typeof etaMsRemaining === 'number' && etaMsRemaining > 0
+    ? Math.ceil(etaMsRemaining / 1000)
+    : null;
 
   const handleTabChange = (value) => {
     setActiveTab(value);
@@ -175,9 +177,13 @@ export default function Stage2({
             <span className={doneCount === totalCount ? "text-green-600 font-bold" : ""}>
               {doneCount}/{totalCount}
             </span>
+            {etaSeconds !== null && (
+              <span className="text-muted-foreground">
+                ETA ~ {etaSeconds}s
+              </span>
+            )}
           </div>
         </div>
-        <Progress value={progressPercent} className="h-1 mt-2" />
       </CardHeader>
       <CardContent>
         <h4 className="mb-4 text-sm font-bold uppercase tracking-wider text-muted-foreground mono">

@@ -36,12 +36,14 @@ from council import (
     stage3_synthesize_final,
     calculate_aggregate_rankings,
     set_persona_cache,
+    calculate_eta_ms,
 )
 from config import (
     COUNCILORS, CHAIRMAN, COUNCIL_SIZE, COUNCILOR_MAP, 
     HEALTH_STARTUP_CHECK, HEALTH_TTL_SECONDS,
     HEALTH_CHECK_START_HOUR, HEALTH_CHECK_END_HOUR,
-    HEALTH_CHECK_INTERVAL, HEALTH_CHECK_TIMEZONE
+    HEALTH_CHECK_INTERVAL, HEALTH_CHECK_TIMEZONE,
+    GLOBAL_MODEL_MAP,
 )
 from validation import get_council_health_status, refresh_council_health, select_active_chairman
 from persona_loader import preload_personas
@@ -915,9 +917,57 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
             # --- Stage 1: Collect responses ---
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
             
+            # 推送初始 ETA (queue_start)
+            from concurrency_tracker import concurrency_tracker
+            for councilor in active_councilors:
+                cid = councilor["id"]
+                # 获取分配的模型
+                assigned_model = model_assignments.get(cid) if model_assignments else councilor.get("model")
+                if not assigned_model:
+                    continue
+                
+                # 获取模型配置
+                model_cfg = GLOBAL_MODEL_MAP.get(assigned_model, {})
+                concurrency_limit = model_cfg.get("concurrency_limit", 3)
+                
+                # 获取当前队列状态
+                queued_count = concurrency_tracker.get_queued(assigned_model)
+                
+                # 计算 ETA
+                eta_data = calculate_eta_ms(
+                    model=assigned_model,
+                    stage="stage1",
+                    queued_count=queued_count,
+                    concurrency_limit=concurrency_limit
+                )
+                
+                # 推送 eta_update 事件
+                eta_event = {
+                    "type": "eta_update",
+                    "stage": "stage1",
+                    "councilor_id": cid,
+                    "eta_ms_remaining": eta_data["eta_ms_remaining"],
+                    "model": assigned_model,
+                    "reason": "queue_start"
+                }
+                yield f"data: {json.dumps(eta_event)}\n\n"
+            
             # Callback that puts items into the queue (NOT a generator)
             async def on_stage1_item(item):
+                # 推送完成事件
                 await event_queue.put(f"data: {json.dumps({'type': 'stage1_item', 'data': item})}\n\n")
+                
+                # 推送 ETA=0 (done)
+                cid = item.get("councilor_id")
+                if cid:
+                    eta_done_event = {
+                        "type": "eta_update",
+                        "stage": "stage1",
+                        "councilor_id": cid,
+                        "eta_ms_remaining": 0,
+                        "reason": "done"
+                    }
+                    await event_queue.put(f"data: {json.dumps(eta_done_event)}\n\n")
             
             async def on_stage1_answer_delta(cid, delta):
                 event = {"type": "stage1_answer_delta", "councilor_id": cid, "delta": delta}
@@ -965,6 +1015,18 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                 # Skipped Case
                 yield f"data: {json.dumps({'type': 'stage2_start', 'skipped': True, 'skipped_reason': 'insufficient_candidates'})}\n\n"
                 
+                # 推送所有 judge 的 ETA done 事件（设置 HUD 进度为 100%）
+                for judge in active_councilors:
+                    judge_id = judge["id"]
+                    eta_skipped_event = {
+                        "type": "eta_update",
+                        "stage": "stage2",
+                        "councilor_id": judge_id,
+                        "eta_ms_remaining": 0,
+                        "reason": "done"  # 直接标记完成
+                    }
+                    yield f"data: {json.dumps(eta_skipped_event)}\n\n"
+                
                 stage2_result = await stage2_collect_rankings(
                     body.content, stage1_results, active_councilors, on_thinking=on_thinking, enable_thinking=body.enable_thinking,
                     model_assignments=model_assignments
@@ -980,9 +1042,54 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                 
                 yield f"data: {json.dumps({'type': 'stage2_start', 'anon_map': anon_map_payload})}\n\n"
             
+                # 推送 Stage2 初始 ETA (queue_start) - 每个 judge 一个
+                for judge in active_councilors:
+                    judge_id = judge["id"]
+                    # 获取分配的模型
+                    assigned_model = model_assignments.get(judge_id) if model_assignments else judge.get("model")
+                    if not assigned_model:
+                        continue
+                    
+                    # 获取模型配置
+                    model_cfg = GLOBAL_MODEL_MAP.get(assigned_model, {})
+                    concurrency_limit = model_cfg.get("concurrency_limit", 3)
+                    
+                    # 计算 ETA (Stage2 分桶)
+                    queued_count = concurrency_tracker.get_queued(assigned_model)
+                    
+                    eta_data = calculate_eta_ms(
+                        model=assigned_model,
+                        stage="stage2",
+                        queued_count=queued_count,
+                        concurrency_limit=concurrency_limit
+                    )
+                    
+                    # 推送 eta_update 事件（councilor_id 填 judge_id）
+                    eta_event = {
+                        "type": "eta_update",
+                        "stage": "stage2",
+                        "councilor_id": judge_id,  # judge_id
+                        "eta_ms_remaining": eta_data["eta_ms_remaining"],
+                        "model": assigned_model,
+                        "reason": "queue_start"
+                    }
+                    yield f"data: {json.dumps(eta_event)}\n\n"
+            
                 # Callback for stage2 items (NOT a generator)
                 async def on_stage2_item(item):
                     await event_queue.put(f"data: {json.dumps({'type': 'stage2_item', 'data': item})}\n\n")
+                    
+                    # 推送 ETA done 事件
+                    judge_id = item.get("judge_councilor_id")
+                    if judge_id:
+                        eta_done_event = {
+                            "type": "eta_update",
+                            "stage": "stage2",
+                            "councilor_id": judge_id,
+                            "eta_ms_remaining": 0,
+                            "reason": "done"
+                        }
+                        await event_queue.put(f"data: {json.dumps(eta_done_event)}\n\n")
                 
                 # Start stage2 task
                 stage2_task = asyncio.create_task(

@@ -216,8 +216,8 @@
 ### 6.1 事件流顺序
 
 ```
-meta → stage1_start → [thinking]* → [stage1_item]* → stage1_complete
-     → stage2_start → [thinking]* → [stage2_item]* → stage2_complete
+meta → stage1_start → [eta_update]* → [thinking]* → [stage1_item]* → stage1_complete
+     → stage2_start → [eta_update]* → [thinking]* → [stage2_item]* → stage2_complete
      → stage3_start → [thinking]* → stage3_complete
      → [title_complete] → complete
 ```
@@ -271,7 +271,25 @@ meta → stage1_start → [thinking]* → [stage1_item]* → stage1_complete
 { "type": "stage1_answer_done", "councilor_id": "immanuel_kant" }
 ```
 
-#### 6.2.5 `stage2_start`
+#### 6.2.5 `eta_update`
+
+```json
+{
+  "type": "eta_update",
+  "stage": "stage1",
+  "councilor_id": "immanuel_kant",
+  "eta_ms_remaining": 5200,
+  "model": "xiaomi/mimo-v2-flash:free",
+  "reason": "queue_start"
+}
+```
+
+**说明**：
+- `councilor_id` 在 stage2 仍使用同字段承载 judge_id。
+- `reason`: `queue_start` / `done`。
+- Stage2 被跳过时，后端会对每个 judge 推送一次 `eta_update`（`reason=done`）以结束 HUD 进度。
+
+#### 6.2.6 `stage2_start`
 
 ```json
 { "type": "stage2_start", "anon_map": {"anon_1": "immanuel_kant"}, "skipped": false }
@@ -283,7 +301,7 @@ meta → stage1_start → [thinking]* → [stage1_item]* → stage1_complete
 { "type": "stage2_start", "skipped": true, "skipped_reason": "insufficient_candidates" }
 ```
 
-#### 6.2.6 `stage2_item`
+#### 6.2.7 `stage2_item`
 
 ```json
 {
@@ -302,7 +320,7 @@ meta → stage1_start → [thinking]* → [stage1_item]* → stage1_complete
 }
 ```
 
-#### 6.2.7 `stage2_complete`
+#### 6.2.8 `stage2_complete`
 
 ```json
 {
@@ -320,13 +338,13 @@ meta → stage1_start → [thinking]* → [stage1_item]* → stage1_complete
 }
 ```
 
-#### 6.2.8 `stage3_answer_delta`
+#### 6.2.9 `stage3_answer_delta`
 
 ```json
 { "type": "stage3_answer_delta", "councilor_id": "chairman", "delta": "..." }
 ```
 
-#### 6.2.9 `complete`
+#### 6.2.10 `complete`
 
 ```json
 { "type": "complete" }

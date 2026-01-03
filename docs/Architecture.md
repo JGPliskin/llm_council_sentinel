@@ -66,6 +66,8 @@ Data Storage: `data/conversations/*.json`
 | `main.py` | FastAPI 入口 | API 路由、SSE、限流、持久化、健康刷新 |
 | `council.py` | 编排引擎 | Stage1/2/3 并发执行、匿名映射、Thinking 注入 |
 | `openrouter.py` | LLM 客户端 | 流式解析、Tool Calls、Thinking 回调 |
+| `runtime_stats.py` | 运行时统计 | TTFT/Generation/Total EMA（按 model+stage） |
+| `concurrency_tracker.py` | 并发追踪 | per-model queued/inflight 统计，用于 ETA |
 | `model_assigner.py` | 固定分配 | 创建对话时分配模型并持久化 |
 | `storage.py` | 存储 | JSON 持久化、对话 CRUD |
 | `health.py` / `validation.py` | 健康 | 探测、冷却、健康过滤 |
@@ -88,13 +90,14 @@ Data Storage: `data/conversations/*.json`
 
 - 多 Councilor 并行请求
 - 支持 Thinking 工具与回答增量流
-- SSE 事件：`thinking`、`stage1_answer_delta`、`stage1_item`、`stage1_complete`
+- SSE 事件：`eta_update`、`thinking`、`stage1_answer_delta`、`stage1_item`、`stage1_complete`
 
 ### 4.2 Stage2
 
 - 生成匿名候选 `anon_1..n`
 - 每个评审员输出排序 JSON（`ranking` + `scores` + `per_candidate_comments`）
 - Thinking 事件必须携带 `target_anon_id`，用于 activeTab 过滤
+- SSE 事件：`eta_update`、`thinking`、`stage2_item`、`stage2_complete`
 
 ### 4.3 Stage3
 
@@ -125,6 +128,9 @@ sequenceDiagram
     C-->>BE: stage1_answer_delta
     BE-->>FE: SSE stage1_answer_delta
 
+    C-->>BE: eta_update
+    BE-->>FE: SSE eta_update (stage1)
+
     C-->>BE: stage1_item / stage1_complete
     BE-->>FE: SSE stage1_item / stage1_complete
 
@@ -134,6 +140,9 @@ sequenceDiagram
     BE-->>FE: SSE thinking (stage2)
 
     OR-->>C: stage2 JSON
+    C-->>BE: eta_update
+    BE-->>FE: SSE eta_update (stage2)
+
     C-->>BE: stage2_item / stage2_complete
     BE-->>FE: SSE stage2_item / stage2_complete
 

@@ -28,9 +28,12 @@ from config import (
     REQUEST_ERROR_CODES,
     REQUEST_ERROR_KEYWORDS,
     MODEL_ERROR_KEYWORDS,
+    DEFAULT_ETA_CONFIG,
 )
 from health import health_manager
 from logger import log_request_timing
+from runtime_stats import runtime_stats_manager
+from concurrency_tracker import concurrency_tracker
 
 THINKING_TOOL_DEF = [
     {
@@ -281,6 +284,78 @@ def classify_400_error(response_dict: Optional[Dict[str, Any]]) -> Tuple[str, bo
     # 其他 400：保守回退
     return ("unknown_400", True, True)
 
+
+# -------------------------------------------------------------------------
+# ETA 计算辅助函数
+# -------------------------------------------------------------------------
+
+def calculate_eta_ms(
+    model: str,
+    stage: str,
+    queued_count: int = 0,
+    concurrency_limit: int = 3
+) -> Dict[str, Any]:
+    """
+    计算指定模型和阶段的 ETA (预计剩余时间)
+
+    Args:
+        model: 模型 ID
+        stage: 阶段标识 ("stage1" / "stage2" / "stage3")
+        queued_count: 当前队列等待数
+        concurrency_limit: 并发限制
+
+    Returns:
+        {
+            "eta_ms_remaining": int,
+            "ttft_ms_est": float,
+            "generation_ms_est": float,
+            "queue_wait_ms": float,
+            "has_samples": bool,
+            "source": str  # "runtime_ema" / "health_fallback" / "default"
+        }
+    """
+    # 1) RuntimeStats (优先)
+    ttft_est = runtime_stats_manager.get_effective_ttft(model, stage)
+    gen_est = runtime_stats_manager.get_effective_generation(model, stage)
+    total_est = runtime_stats_manager.get_effective_total(model, stage)
+    has_samples = runtime_stats_manager.has_enough_samples(
+        model,
+        stage,
+        min_samples=DEFAULT_ETA_CONFIG.get("warmup_sample_count", 3)
+    )
+    source = "runtime_ema" if has_samples else "default"
+
+    # 2) Health 兜底 (仅 TTFT)
+    if ttft_est is None:
+        health_record = health_manager._records.get(model)
+        if health_record:
+            ttft_est = health_record.get_effective_ttft()
+            if ttft_est is not None:
+                source = "health_fallback"
+
+    # 3) 默认值兜底
+    if ttft_est is None:
+        ttft_est = float(DEFAULT_ETA_CONFIG.get("default_ttft_ms", 2000))
+    if gen_est is None:
+        gen_est = float(DEFAULT_ETA_CONFIG.get("default_generation_ms", 5000))
+    if total_est is None:
+        total_est = ttft_est + gen_est
+
+    # 4) 队列等待估算 (per-model)
+    if queued_count > 0 and concurrency_limit > 0 and total_est > 0:
+        queue_wait_ms = (queued_count / concurrency_limit) * total_est
+    else:
+        queue_wait_ms = 0.0
+
+    eta_ms_remaining = int(queue_wait_ms + ttft_est + gen_est)
+    return {
+        "eta_ms_remaining": eta_ms_remaining,
+        "ttft_ms_est": ttft_est,
+        "generation_ms_est": gen_est,
+        "queue_wait_ms": queue_wait_ms,
+        "has_samples": has_samples,
+        "source": source,
+    }
 
 
 # -------------------------------------------------------------------------
@@ -555,10 +630,17 @@ async def _request_stage1_bounded(
         ]
         response = None
         answer_chunks: List[str] = []
+        
+        # Concurrency Tracker: 进入队列
+        await concurrency_tracker.acquire(selected_model)
+        
         try:
             # Double Locking
             async with semaphore: # Stage Limit
                 async with model_sem: # Model Limit
+                    # Concurrency Tracker: 开始执行
+                    await concurrency_tracker.start(selected_model)
+                    
                     # Check Capabilities
                     model_cfg = GLOBAL_MODEL_MAP.get(selected_model, {})
                     caps = model_cfg.get("capabilities", {})
@@ -597,6 +679,9 @@ async def _request_stage1_bounded(
         except Exception as e:
             # Fallback for unexpected exceptions
             response = {"error": True, "content": str(e)}
+        finally:
+            # Concurrency Tracker: 完成执行（无论成功、失败、取消都执行）
+            await concurrency_tracker.release(selected_model)
 
         if selected_model not in attempted_models:
             attempted_models.append(selected_model)
@@ -629,6 +714,15 @@ async def _request_stage1_bounded(
             model_select_ms = int(t_model_select * 1000) if t_model_select else 0  # t_model_select 已经是耗时（秒）
             total_ms = int((t_end - t_start) * 1000)
             generation_ms = total_ms - (ttft_ms or 0) - model_select_ms
+
+            # 更新 RuntimeStats 统计 (Stage1 分桶)
+            if ttft_ms is not None and total_ms > 0:
+                await runtime_stats_manager.update_stats(
+                    model=selected_model,
+                    stage="stage1",
+                    ttft_ms=ttft_ms,
+                    total_ms=total_ms
+                )
             
             # 需求3 4.4: 检查是否需要触发紧急探测
             if ttft_ms is not None:
@@ -1189,157 +1283,179 @@ async def _collect_single_ranking_bounded(
             
         model_sem = await model_concurrency_manager.get_semaphore(selected_model)
         
-        current_messages = messages
+        # Concurrency Tracker: 进入队列
+        await concurrency_tracker.acquire(selected_model)
         
-        # Inner Loop: Logic Retry
-        for logic_attempt in range(2):
-            response = None
-            try:
-                async with semaphore:
-                    async with model_sem:
-                        # Check Capabilities
-                        model_cfg = GLOBAL_MODEL_MAP.get(selected_model, {})
-                        caps = model_cfg.get("capabilities", {})
-                        can_think = caps.get("thinking", False)
-                        
-                        if can_think and on_thinking:
-                            async def _think_cb(payload: Any):
-                                if on_thinking:
-                                    if isinstance(payload, dict):
-                                        thinking_payload = payload
-                                    else:
-                                        thinking_payload = {"title": str(payload)}
-                                    await on_thinking(councilor_id, "stage2", thinking_payload, selected_model)
-                                    
-                            response = await stream_model(
-                                selected_model, 
-                                current_messages, 
-                                on_thinking=_think_cb, 
-                                timeout=timeout, 
-                                max_output_tokens=max_tokens,
-                                tools=THINKING_TOOL_DEF
-                            )
-                        else:
-                            response = await query_model(selected_model, current_messages, timeout=timeout, max_output_tokens=max_tokens)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                response = {"error": True, "content": str(e)}
+        current_messages = messages
+        started = False
 
-            if selected_model not in attempted_models:
-                attempted_models.append(selected_model)
+        try:
+            # Inner Loop: Logic Retry
+            for logic_attempt in range(2):
+                response = None
+                try:
+                    async with semaphore:
+                        async with model_sem:
+                            # Concurrency Tracker: 开始执行
+                            if not started:
+                                await concurrency_tracker.start(selected_model)
+                                started = True
 
-            # Validation
-            success = False
-            parsed_result = None
-            should_retry_json = False
-            
-            attempt_res = {
-                "judge_councilor_id": councilor_id,
-                "judge_councilor_name": councilor_name,
-                "model": response.get("model", selected_model) if response else selected_model,
-                "raw_response": response.get("content", "") if response else ""
-            }
-            
-            if response and not response.get("error"):
-                # Network OK
-                health_manager.update_status(selected_model, True, source="runtime")
-                
-                parsed, error = _parse_ranking_response(attempt_res["raw_response"], expected_anon_ids)
-                if error:
-                    last_error = f"JSON/Usage Error ({selected_model}): {error}"
-                    should_retry_json = True
+                            # Check Capabilities
+                            model_cfg = GLOBAL_MODEL_MAP.get(selected_model, {})
+                            caps = model_cfg.get("capabilities", {})
+                            can_think = caps.get("thinking", False)
+
+                            if can_think and on_thinking:
+                                async def _think_cb(payload: Any):
+                                    if on_thinking:
+                                        if isinstance(payload, dict):
+                                            thinking_payload = payload
+                                        else:
+                                            thinking_payload = {"title": str(payload)}
+                                        await on_thinking(councilor_id, "stage2", thinking_payload, selected_model)
+
+                                response = await stream_model(
+                                    selected_model,
+                                    current_messages,
+                                    on_thinking=_think_cb,
+                                    timeout=timeout,
+                                    max_output_tokens=max_tokens,
+                                    tools=THINKING_TOOL_DEF
+                                )
+                            else:
+                                response = await query_model(selected_model, current_messages, timeout=timeout, max_output_tokens=max_tokens)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    response = {"error": True, "content": str(e)}
+
+                if selected_model not in attempted_models:
+                    attempted_models.append(selected_model)
+
+                # Validation
+                success = False
+                parsed_result = None
+                should_retry_json = False
+
+                attempt_res = {
+                    "judge_councilor_id": councilor_id,
+                    "judge_councilor_name": councilor_name,
+                    "model": response.get("model", selected_model) if response else selected_model,
+                    "raw_response": response.get("content", "") if response else ""
+                }
+
+                if response and not response.get("error"):
+                    # Network OK
+                    health_manager.update_status(selected_model, True, source="runtime")
+
+                    parsed, error = _parse_ranking_response(attempt_res["raw_response"], expected_anon_ids)
+                    if error:
+                        last_error = f"JSON/Usage Error ({selected_model}): {error}"
+                        should_retry_json = True
+                    else:
+                        attempt_res.update(parsed)
+                        attempt_res["fallback_used"] = in_fallback_mode or (selected_model != candidate_models[0])
+                        attempt_res["fallback_reason"] = fallback_reason
+                        parsed_result = attempt_res
+                        success = True
                 else:
-                    attempt_res.update(parsed)
-                    attempt_res["fallback_used"] = in_fallback_mode or (selected_model != candidate_models[0])
-                    attempt_res["fallback_reason"] = fallback_reason
-                    parsed_result = attempt_res
-                    success = True
-            else:
-                # Network Fail
-                err_msg = response.get('content') if response else 'No response'
-                status_code = response.get('status_code') if response else None
-                
-                # 400 错误分类
-                error_class, should_retry, update_health = classify_400_error(response)
-                last_error_class = error_class
-                
-                if update_health:
-                    health_manager.update_status(selected_model, False, err_msg, status_code, source="runtime")
-                
-                last_error = f"{error_class}({selected_model}): {err_msg}"
-                
-                # 请求错误：不回退
-                if not should_retry:
-                    print(f"[SoftFallback/Stage2] 请求错误，不回退: {error_class} - {err_msg}", flush=True)
-                    abort_request_error = True
+                    # Network Fail
+                    err_msg = response.get('content') if response else 'No response'
+                    status_code = response.get('status_code') if response else None
+
+                    # 400 错误分类
+                    error_class, should_retry, update_health = classify_400_error(response)
+                    last_error_class = error_class
+
+                    if update_health:
+                        health_manager.update_status(selected_model, False, err_msg, status_code, source="runtime")
+
+                    last_error = f"{error_class}({selected_model}): {err_msg}"
+
+                    # 请求错误：不回退
+                    if not should_retry:
+                        print(f"[SoftFallback/Stage2] 请求错误，不回退: {error_class} - {err_msg}", flush=True)
+                        abort_request_error = True
+                        break
+
+                    if not fallback_reason:
+                        fallback_reason = error_class
+
+                    # 固定模型模式：失败后进入回退流程
+                    if fixed_model:
+                        print(f"[SoftFallback/Stage2] 固定模型 {fixed_model} 调用失败，进入回退流程: {err_msg}", flush=True)
+                        in_fallback_mode = True
+                        fixed_model = None
+
+                    excluded_models.add(selected_model)
+                    break  # Break inner, next candidate
+
+                if success:
+                    t_end = time.time()
+                    ttft_ms = response.get("ttft_ms") if response else None
+                    total_ms = int((t_end - t_start) * 1000)
+                    generation_ms = total_ms - (ttft_ms or 0)
+
+                    # 更新 RuntimeStats 统计 (Stage2 分桶)
+                    if ttft_ms is not None and total_ms > 0:
+                        await runtime_stats_manager.update_stats(
+                            model=selected_model,
+                            stage="stage2",
+                            ttft_ms=ttft_ms,
+                            total_ms=total_ms
+                        )
+                    fallback_count = max(0, len(attempted_models) - 1)
+                    log_request_timing(
+                        stage="stage2",
+                        councilor_id=councilor_id,
+                        councilor_name=councilor_name or "",
+                        model=attempt_res.get("model", selected_model),
+                        timing={
+                            "total_ms": total_ms,
+                            "model_select_ms": 0,
+                            "ttft_ms": ttft_ms,
+                            "generation_ms": max(0, generation_ms),
+                        },
+                        status="ok",
+                        fallback_count=fallback_count,
+                        fallback_reason=fallback_reason,
+                        attempted_models=attempted_models
+                    )
+                    return parsed_result
+
+                if should_retry_json:
+                    if logic_attempt == 0:
+                       # Repair
+                       retry_msg = {
+                            "role": "user",
+                            "content": json.dumps(
+                                {
+                                    "error": last_error,
+                                    "instruction": f"Your previous reply was invalid. Reply again with ONLY the JSON object. You must include these anon_ids exactly once: {expected_anon_ids}",
+                                },
+                                ensure_ascii=False,
+                            ),
+                        }
+                       # Append to NEW list to avoid mutating shared `messages`
+                       current_messages = messages + [retry_msg]
+                    else:
+                       # 2nd fail
+                       excluded_models.add(selected_model)
+                       last_error_class = "json_invalid"
+                       if not fallback_reason:
+                           fallback_reason = "json_invalid"
+                       if fixed_model:
+                           in_fallback_mode = True
+                           fixed_model = None
+                       break
+
+                if abort_request_error:
                     break
-                
-                if not fallback_reason:
-                    fallback_reason = error_class
-                
-                # 固定模型模式：失败后进入回退流程
-                if fixed_model:
-                    print(f"[SoftFallback/Stage2] 固定模型 {fixed_model} 调用失败，进入回退流程: {err_msg}", flush=True)
-                    in_fallback_mode = True
-                    fixed_model = None
-                
-                excluded_models.add(selected_model)
-                break  # Break inner, next candidate
-                
-            if success:
-                t_end = time.time()
-                ttft_ms = response.get("ttft_ms") if response else None
-                total_ms = int((t_end - t_start) * 1000)
-                generation_ms = total_ms - (ttft_ms or 0)
-                fallback_count = max(0, len(attempted_models) - 1)
-                log_request_timing(
-                    stage="stage2",
-                    councilor_id=councilor_id,
-                    councilor_name=councilor_name or "",
-                    model=attempt_res.get("model", selected_model),
-                    timing={
-                        "total_ms": total_ms,
-                        "model_select_ms": 0,
-                        "ttft_ms": ttft_ms,
-                        "generation_ms": max(0, generation_ms),
-                    },
-                    status="ok",
-                    fallback_count=fallback_count,
-                    fallback_reason=fallback_reason,
-                    attempted_models=attempted_models
-                )
-                return parsed_result
-                
-            if should_retry_json:
-                if logic_attempt == 0:
-                   # Repair
-                   retry_msg = {
-                        "role": "user",
-                        "content": json.dumps(
-                            {
-                                "error": last_error,
-                                "instruction": f"Your previous reply was invalid. Reply again with ONLY the JSON object. You must include these anon_ids exactly once: {expected_anon_ids}",
-                            },
-                            ensure_ascii=False,
-                        ),
-                    }
-                   # Append to NEW list to avoid mutating shared `messages`
-                   current_messages = messages + [retry_msg]
-                else:
-                   # 2nd fail
-                   excluded_models.add(selected_model)
-                   last_error_class = "json_invalid"
-                   if not fallback_reason:
-                       fallback_reason = "json_invalid"
-                   if fixed_model:
-                       in_fallback_mode = True
-                       fixed_model = None
-                   break
-
-            if abort_request_error:
-                break
-
+        finally:
+            # Concurrency Tracker: 完成执行（无论成功、失败、取消都执行）
+            await concurrency_tracker.release(selected_model)
+        
         # 固定模型模式且不在回退模式，则退出
         if fixed_model and not in_fallback_mode:
             break

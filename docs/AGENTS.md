@@ -56,6 +56,8 @@ LLM Council 是一个三阶段异步协作系统：
 | `council.py` | 三阶段编排 | Stage1/2/3 执行、并发控制、重试策略、匿名映射、thinking 注入 |
 | `model_assigner.py` | 固定分配 | 创建对话时分配模型，保存到 `model_assignments` |
 | `openrouter.py` | LLM 客户端 | 流式请求、解析 tool_calls、回调 thinking |
+| `runtime_stats.py` | 运行时统计 | TTFT/Generation/Total EMA（按 model+stage） |
+| `concurrency_tracker.py` | 并发追踪 | per-model queued/inflight 统计，用于 ETA |
 | `storage.py` | 存储层 | JSON 持久化、对话列表、删除、schema 迁移 |
 | `validation.py` / `health.py` | 健康系统 | 状态缓存、冷却与失败阈值、探测逻辑 |
 | `persona_loader.py` | Persona 载入 | 启动预加载 persona 文件 |
@@ -143,8 +145,8 @@ Stage2 评审提示词要求：
 ### 5.1 事件序列（流式）
 
 ```
-meta → stage1_start → [thinking]* → [stage1_item]* → stage1_complete
-     → stage2_start → [thinking]* → [stage2_item]* → stage2_complete
+meta → stage1_start → [eta_update]* → [thinking]* → [stage1_item]* → stage1_complete
+     → stage2_start → [eta_update]* → [thinking]* → [stage2_item]* → stage2_complete
      → stage3_start → [thinking]* → stage3_complete
      → [title_complete] → complete
 ```
@@ -170,6 +172,22 @@ meta → stage1_start → [thinking]* → [stage1_item]* → stage1_complete
 - `councilor_id` 表示评审者（judge）
 - `target_anon_id` 表示被评审对象（匿名 ID）
 - 前端通过 `stage2_start.anon_map` 映射为真实 `councilor_id`
+
+### 5.3 ETA 事件（进度驱动）
+
+```json
+{
+  "type": "eta_update",
+  "stage": "stage2",
+  "councilor_id": "immanuel_kant",
+  "eta_ms_remaining": 5200,
+  "reason": "queue_start"
+}
+```
+
+**说明**：
+- `councilor_id` 在 stage2 仍使用同字段承载 judge_id。
+- `reason`: `queue_start` / `done`。
 
 ---
 
@@ -268,11 +286,20 @@ meta → stage1_start → [thinking]* → [stage1_item]* → stage1_complete
 - `stage2ThinkingByJudge`: Stage2 thinking（按 judge + target 分组）
 - `stage3AnswerStream`: Stage3 文本增量
 - `evaluationComments`: Stage2 评审 comments（按 target 分组）
+- `etaByCouncilor`: ETA 状态（stage1/2）
+- `stageEtaMs`: 阶段剩余时间（取 max ETA）
+- `stage2Skipped`: Stage2 是否被跳过（用于 HUD 标识）
 
 Stage2 DetailPanel 行为：
 
 - 只要任意 judge 仍为 `thinking`，DetailPanel 保持 Thinking 模式（无混合 Review）
 - 全部 judge 变为 `done` 后，整体切换为 Review 模式（动画衔接）
+
+Stage2 HUD 行为：
+
+- 进度柱为 per-judge 进度（`eta_update` 驱动）
+- Stage2 skipped 时 HUD 进度 100% 并显示 `SKIPPED`
+- Stage2 header 仅显示 `done/total + ETA 文本`（无进度条）
 
 ---
 

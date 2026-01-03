@@ -11,6 +11,7 @@ function TacticalHUD({
     consensusUnlocked,
     hasViewedConsensus,
     onConsensusClick,
+    stage2Skipped = false,
     // New props for IDLE stage
     selectedAgentIds = [],
     allCouncilors = [],
@@ -88,6 +89,7 @@ function TacticalHUD({
 
         const hasRanking = aggregateRankings && aggregateRankings.length > 0;
         const progress = agentProgress[agent.councilor_id] || 0;
+        const showSkippedBadge = stage === 'stage2' && stage2Skipped;
 
         return (
             <div
@@ -95,14 +97,14 @@ function TacticalHUD({
                 className={`agent-slice ${hasRanking ? 'border-opacity-100' : 'border-opacity-50'}`}
                 style={{ borderColor: `var(--accent-${uiConfig.color})` }}
             >
-                {/* Background Pattern & Progress Fill (Stage 1) */}
-                {stage === 'stage1' && progress > 0 && (
+                {/* Background Pattern & Progress Fill (Stage 1 & Stage 2) */}
+                {(stage === 'stage1' || stage === 'stage2') && progress > 0 && (
                     <div
                         className="progress-fill absolute bottom-0 left-0 right-0 z-0 transition-all duration-300 overflow-hidden"
                         style={{
                             height: `${progress}%`,
                             backgroundColor: `var(--accent-${uiConfig.color})`,
-                            opacity: 0.2
+                            opacity: stage === 'stage1' ? 0.2 : 0.12  // Stage2 lighter fill
                         }}
                     >
                         <div className="absolute inset-0 bg-stripe-pattern opacity-30 animate-[scanline_2s_linear_infinite]" />
@@ -121,14 +123,20 @@ function TacticalHUD({
                     {agent.name}
                 </div>
 
-                {/* Rank Badge for Consensus */}
-                {hasRanking && (
+                {/* Rank / Skipped Badge */}
+                {showSkippedBadge ? (
+                    <div className="absolute top-0 right-0 p-1 bg-black/40 backdrop-blur z-20 border-l border-b border-zinc-700/50 rounded-bl">
+                        <span className="text-[10px] font-bold text-zinc-300 font-mono">
+                            SKIPPED
+                        </span>
+                    </div>
+                ) : hasRanking ? (
                     <div className="absolute top-0 right-0 p-1 bg-black/40 backdrop-blur z-20 border-l border-b border-zinc-700/50 rounded-bl">
                         <span className="text-xs font-bold text-zinc-200 font-mono">
                             #{agent.average_rank?.toFixed(1) || index + 1}
                         </span>
                     </div>
-                )}
+                ) : null}
             </div>
         );
     };

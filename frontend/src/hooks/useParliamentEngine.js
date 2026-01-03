@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { api } from '@/api';
 import { startPreloadTimer, stopPreloadTimer, isPreloadBullet } from '@/utils/preloadThinking';
 
@@ -21,6 +21,8 @@ export function useParliamentEngine() {
     // === 进度状态 ===
     const [agentProgress, setAgentProgress] = useState({}); // { [councilor_id]: 0~100 }
     const [stageProgress, setStageProgress] = useState(0);  // 0~100
+    const [etaByCouncilor, setEtaByCouncilor] = useState({}); // { [councilor_id]: eta_ms_remaining }
+    const [stage2Skipped, setStage2Skipped] = useState(false);
 
     // === Thinking 状态 ===
     const [thinkingByCouncilor, setThinkingByCouncilor] = useState({}); // { [id]: { status, steps[] } }
@@ -193,6 +195,7 @@ export function useParliamentEngine() {
         setStage2Results(null);
         setStage3Result(null);
         setAggregateRankings([]);
+        setStage2Skipped(false);
 
         // Determine Stage
         console.log("[loadSession] Last msg:", lastMsg);
@@ -229,6 +232,8 @@ export function useParliamentEngine() {
         let stage2Data = lastMsg.stage2;
         let reviews = [];
         let anonMap = lastMsg.metadata?.anon_to_councilor;
+        const skipped = !!(stage2Data && typeof stage2Data === 'object' && stage2Data.skipped);
+        setStage2Skipped(skipped);
 
         if (stage2Data) {
             if (Array.isArray(stage2Data)) {
@@ -588,11 +593,22 @@ export function useParliamentEngine() {
         setAggregateRankings([]);
         setStage2ThinkingByJudge({}); // 重置 Stage2 thinking 状态
         stage2AnonMapRef.current = event?.anon_map || null;
+        setStage2Skipped(!!event?.skipped);
+
+        // 重置进度与 ETA，避免 Stage1 残留
+        Object.values(progressTimers.current).forEach(clearInterval);
+        progressTimers.current = {};
+        setEtaByCouncilor({});
+        const resetProgress = {};
+        resolvedCouncilors.forEach(c => {
+            resetProgress[c.id] = 0;
+        });
+        setAgentProgress(resetProgress);
 
         if (event.skipped) {
             // Stage 2 被跳过
         }
-    }, []);
+    }, [resolvedCouncilors]);
 
     const handleStage2Item = useCallback((item) => {
         setStage2Results(prev => {
@@ -657,6 +673,55 @@ export function useParliamentEngine() {
         setConsensusUnlocked(true);
     }, []);
 
+    const handleEtaUpdate = useCallback((event) => {
+        const cid = event.councilor_id;
+        const etaMs = event.eta_ms_remaining || 0;
+
+        if (!cid) return;
+
+        // 更新 ETA 状态
+        setEtaByCouncilor(prev => ({
+            ...prev,
+            [cid]: etaMs
+        }));
+
+        // 停止旧的进度定时器（防止与 ETA 冲突）
+        if (progressTimers.current[cid]) {
+            clearInterval(progressTimers.current[cid]);
+            delete progressTimers.current[cid];
+        }
+
+        if (event.reason === 'done') {
+            // 完成：设置为 100%
+            setAgentProgress(prev => ({ ...prev, [cid]: 100 }));
+        } else if (event.reason === 'queue_start' && etaMs > 0) {
+            // 基于 ETA 启动平滑进度定时器（Stage1/Stage2 通用）
+            // 进度从 0% 涨到 90%，用时 = etaMs * 0.9
+            const targetProgress = 90;
+            const updateInterval = 100; // 100ms 更新一次
+            const totalSteps = (etaMs * 0.9) / updateInterval;
+            const progressPerStep = totalSteps > 0 ? targetProgress / totalSteps : 2;
+
+            setAgentProgress(prev => ({ ...prev, [cid]: 0 }));
+
+            progressTimers.current[cid] = setInterval(() => {
+                setAgentProgress(prev => {
+                    const current = prev[cid] || 0;
+                    if (current >= targetProgress) {
+                        clearInterval(progressTimers.current[cid]);
+                        return prev;
+                    }
+                    return { ...prev, [cid]: Math.min(current + progressPerStep, targetProgress) };
+                });
+            }, updateInterval);
+        }
+    }, []);
+
+    const stageEtaMs = useMemo(() => {
+        const values = Object.values(etaByCouncilor).filter(v => typeof v === 'number' && v > 0);
+        return values.length > 0 ? Math.max(...values) : 0;
+    }, [etaByCouncilor]);
+
     // === SSE 事件分发 ===
     const handleSSEEvent = useCallback((eventType, event) => {
         switch (eventType) {
@@ -671,6 +736,9 @@ export function useParliamentEngine() {
                 break;
             case 'thinking':
                 handleThinking(event);
+                break;
+            case 'eta_update':
+                handleEtaUpdate(event);
                 break;
             case 'stage1_answer_delta':
                 handleStage1AnswerDelta(event);
@@ -721,6 +789,7 @@ export function useParliamentEngine() {
         handleStage1Start,
         handleStage1Item,
         handleThinking,
+        handleEtaUpdate,
         handleStage1AnswerDelta,
         handleStage1AnswerDone,
         handleStage3AnswerDelta,
@@ -763,6 +832,7 @@ export function useParliamentEngine() {
         setEvaluationComments({});
         setSynthesisSteps({});
         setStage2ThinkingByJudge({});
+        setStage2Skipped(false);
         setConsensusUnlocked(false);
         setHasViewedConsensus(false);
         setAggregateRankings([]);
@@ -790,6 +860,9 @@ export function useParliamentEngine() {
         stage3Result,
         agentProgress,
         stageProgress,
+        etaByCouncilor, // ETA 状态
+        stageEtaMs,
+        stage2Skipped,
         thinkingByCouncilor,
         thinkingExpanded,
         stage1AnswerStream,

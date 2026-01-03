@@ -268,6 +268,7 @@ function AppContent() {
         consensusUnlocked={engine.consensusUnlocked}
         hasViewedConsensus={engine.hasViewedConsensus}
         onConsensusClick={engine.viewConsensus}
+        stage2Skipped={engine.stage2Skipped}
         // IDLE props
         selectedAgentIds={selectedAgentIds}
         allCouncilors={allCouncilors}
