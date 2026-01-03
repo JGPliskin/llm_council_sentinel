@@ -16,7 +16,7 @@ LLM Council Sentinel 是一个**多 LLM 协作决策系统**，通过三阶段�
 | **匿名互评** | Stage2 所有观点匿名化后互相评分排序 |
 | **流式输出** | SSE 实时推送思考过程与结果 |
 | **健康管理** | 模型健康探测、冷却、自动降级 |
-| **固定模型分配** | 创建时分配并固定模型，Stage1/2/3 全流程一致 |
+| **固定模型分配 + 软回退** | 固定模型优先；失败或不健康时可回退至候选池 |
 | **持久化存储** | JSON 文件存储对话历史 |
 
 ---
@@ -144,7 +144,7 @@ graph TD
 |---|---|---|---|
 | **API 入口** | `main.py` | FastAPI 应用、路由定义、SSE 流、Rate Limit、输入校验 | `send_message_stream()`, `get_councilors()`, `create_conversation()` |
 | **Council 编排** | `council.py` | 三阶段执行、并发控制、重试策略、匿名映射、Thinking 注入 | `stage1_collect_responses()`, `stage2_collect_rankings()`, `stage3_synthesize_final()` |
-| **LLM 客户端** | `openrouter.py` | OpenRouter API 调用、流式解析、Tool Calls 处理 | `stream_model()`, `query_model()`, `query_models_parallel()` |
+| **LLM 客户端** | `openrouter.py` | OpenRouter API 调用、流式解析、Tool Calls 处理、错误时回传 `status_code/headers/error_payload` | `stream_model()`, `query_model()`, `query_models_parallel()` |
 | **存储层** | `storage.py` | 对话 JSON 持久化、CRUD 操作、Schema 迁移 | `create_conversation()`, `add_assistant_message()`, `delete_conversation()` |
 | **模型分配** | `model_assigner.py` | 固定模型分配、种子复现、主席模型选择 | `assign_models_for_councilors()`, `assign_chairman_model()` |
 | **健康管理** | `health.py` | 模型健康状态追踪、冷却机制、探测调度 | `HealthManager`, `HealthRecord`, `update_status()`, `probe_model()` |
@@ -289,7 +289,8 @@ sequenceDiagram
 ```
 
 **固定模型分配说明**：
-- 创建对话时分配 `model_assignments`，Stage1/2/3 全程固定使用。
+- 创建对话时分配 `model_assignments`，固定模型优先使用。
+- 固定模型健康为 `cooldown/unhealthy` 或调用失败时，进入软回退链路（不更新 `model_assignments`）。
 - 已固定分配时，`/message` 与 `/message/stream` 会忽略 payload 的 `councilor_ids`。
 
 ### 5.2 SSE 事件流时序
@@ -409,6 +410,12 @@ sequenceDiagram
 │  │ 请求级超时 (Per-Call Timeout)                                        │    │
 │  │   Stage1: 120s  |  Stage2: 180s  |  Stage3: 90s                     │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
+│                               │                                              │
+│                               ▼                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ 阶段级截止 (Stage Deadline)                                         │    │
+│  │   Stage1: 180s  |  Stage2: 180s  |  Stage3: 180s (软截止)           │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -432,9 +439,11 @@ stateDiagram-v2
 - 若开启 `auto_route_by_speed`，使用双阈值防抖切换更快模型。
 - 网络失败后将当前模型加入排除列表，尝试下一个候选。
 
-**固定模式（有 `model_assignments`）**：
-- Stage1/Stage2/Stage3 直接使用分配的模型。
-- 失败不自动切换，直接返回错误。
+**固定分配 + 软回退（有 `model_assignments`）**：
+- 优先使用分配模型；健康状态为 `cooldown/unhealthy` 时直接进入回退。
+- 调用失败时进入回退链路（不更新 `model_assignments`）。
+- 回退阶段强制速度排序，忽略 `auto_route_by_speed=false` 配置。
+- 400 请求错误不回退；模型错误/未知 400 允许回退。
 
 ### 8.4 监控与维护
 
@@ -443,6 +452,8 @@ stateDiagram-v2
 - **TTFT (Time To First Token)**: 衡量 OpenRouter 响应延迟。
 - **Model Select Latency**: 本地模型选择耗时。
 - **Total Generation Time**: 完整回复生成耗时。
+- **Fallback Fields**: `fallback_count` / `fallback_reason` / `attempted_models`
+- **Error Class**: `error_class` (400 分类结果)
 
 #### 8.4.2 健康检查时段控制
 为节省资源，健康检查仅在活跃时段运行：
@@ -513,4 +524,4 @@ llm_council_sentinel/
 
 ---
 
-*文档版本: 1.0.0 | 最后更新: 2026-01-01*
+*文档版本: 1.0.0 | 最后更新: 2026-01-03*

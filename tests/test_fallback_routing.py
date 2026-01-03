@@ -29,8 +29,8 @@ def test_select_best_model_basic(mock_health_reset):
         # Setup
         candidates = ["model_A", "model_B", "model_C"]
         
-        # All unknown -> None (strict)
-        assert select_best_model(candidates, set()) is None
+        # All unknown -> Accept (Optimistic)
+        assert select_best_model(candidates, set()) == "model_A"
         
         # A healthy
         mock_health_reset.update_status("model_A", True)
@@ -38,8 +38,8 @@ def test_select_best_model_basic(mock_health_reset):
         
         assert select_best_model(candidates, set()) == "model_A"
         
-        # A excluded
-        assert select_best_model(candidates, {"model_A"}) is None
+        # A excluded -> Return B (Optimistic)
+        assert select_best_model(candidates, {"model_A"}) == "model_B"
         
         # B healthy
         mock_health_reset.update_status("model_B", True)
