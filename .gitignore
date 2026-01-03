@@ -21,4 +21,4 @@ frontend/dist/
 frontend/.vite/
 
 # Backend
-*.log
+*.logbackend/logs/*.log
