@@ -749,6 +749,11 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
             t_val = round(time.time() - start_time, 2)
             normalized = _normalize_thinking_payload(payload, stage, cid)
             
+            # Extract target_anon_id (for Stage2)
+            target_anon_id = None
+            if isinstance(payload, dict):
+                target_anon_id = payload.get("target_anon_id")
+            
             # Emit Event
             event = {
                 "type": "thinking",
@@ -761,6 +766,11 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                 "op": normalized["op"],
                 "t": t_val
             }
+            
+            # Add target_anon_id if present (Stage2)
+            if target_anon_id:
+                event["target_anon_id"] = target_anon_id
+            
             await event_queue.put(f"data: {json.dumps(event, ensure_ascii=False)}\n\n")
             
             # Persistence Log (Limit: 50 per model/stage, 200 total)
@@ -777,25 +787,33 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
                                 step["title"] = normalized["title"]
                             if normalized["detail"] is not None:
                                 step["detail"] = normalized["detail"]
+                            if target_anon_id:
+                                step["target_anon_id"] = target_anon_id
                             step["t"] = t_val
                             break
                     else:
                         if len(steps) < 50:
-                            steps.append({
+                            step_data = {
                                 "bullet_id": normalized["bullet_id"],
                                 "title": normalized["title"],
                                 "detail": normalized["detail"],
                                 "t": t_val
-                            })
+                            }
+                            if target_anon_id:
+                                step_data["target_anon_id"] = target_anon_id
+                            steps.append(step_data)
                             thinking_count += 1
                 else:
                     if len(steps) < 50:
-                        steps.append({
+                        step_data = {
                             "bullet_id": normalized["bullet_id"],
                             "title": normalized["title"],
                             "detail": normalized["detail"],
                             "t": t_val
-                        })
+                        }
+                        if target_anon_id:
+                            step_data["target_anon_id"] = target_anon_id
+                        steps.append(step_data)
                         thinking_count += 1
 
         try:

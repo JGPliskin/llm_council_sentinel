@@ -57,6 +57,10 @@ THINKING_TOOL_DEF = [
                         "type": "string",
                         "enum": ["append", "update"],
                         "description": "append to add, update to modify a prior step."
+                    },
+                    "target_anon_id": {
+                        "type": "string",
+                        "description": "(Stage2 only) Indicates which anonymous candidate this thinking step is evaluating (e.g. anon_1, anon_2)."
                     }
                 },
                 "required": ["title"]
@@ -1124,13 +1128,19 @@ async def _collect_single_ranking_bounded(
 
     if enable_thinking:
         rubric_text += (
-            "\n\nIMPORTANT: You MUST call the `emit_thinking` tool MULTIPLE times "
-            "to share your thinking/analysis before outputting the final JSON. "
-            "Example tool call pattern: "
-            "1) emit_thinking(title='Analyzing candidate anon_1 approach') "
-            "2) emit_thinking(title='Comparing novelty and depth') "
-            "3) emit_thinking(title='Finalizing ranking') "
-            "Then output the JSON after thorough analysis."
+            "\n\n## 思考规则（Thinking Rules）\n"
+            "1. 在输出最终 JSON 前，你必须多次调用 `emit_thinking` 工具展示你的评审思考过程\n"
+            "2. **重要**：每次调用 `emit_thinking` 时，必须用中文填写 `title` 和 `detail`\n"
+            "3. **重要**：必须指定 `target_anon_id` 参数，表示当前正在评估的候选方案（如 anon_1、anon_2）\n"
+            "4. `title` 应为 6-12 个中文字的简短摘要（如：\"分析 anon_1 的可行性\"）\n"
+            "5. `detail` 应为 1-2 行的详细说明（如：\"关注成本控制与时间安排的合理性\"）\n"
+            "\n"
+            "## 示例思考流程\n"
+            "- emit_thinking(title=\"评估 anon_1 的逻辑一致性\", detail=\"检查假设的可验证性\", target_anon_id=\"anon_1\")\n"
+            "- emit_thinking(title=\"对比 anon_2 与 anon_1\", detail=\"分析创新性与深度差异\", target_anon_id=\"anon_2\")\n"
+            "- emit_thinking(title=\"确定最终排序\", detail=\"综合考虑各维度权重\", target_anon_id=\"anon_1\")\n"
+            "\n"
+            "思考完成后，输出最终的 JSON 排名结果。"
         )
     
     messages = _build_ranking_messages(user_query, candidates, persona_text, rubric_text)
