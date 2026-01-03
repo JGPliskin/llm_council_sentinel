@@ -19,12 +19,17 @@ function StageContentArea({
     thinkingExpanded = {},
     onToggleThinking,
     stage1AnswerStream = {},
+    chairmanId = null, // Added Prop
     // stage2Results not directly displayed in content area ? Refactor shows Stage 1/3 content. Stage 2 evaluates.
 }) {
     const isFinal = activeTab === 'final';
     const scrollRef = useRef(null);
     const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
     const [showJump, setShowJump] = useState(false);
+
+    // Tab 切换折叠逻辑：追踪是否曾离开过 final tab
+    const [hasLeftFinalTab, setHasLeftFinalTab] = useState(false);
+    const prevActiveTabRef = useRef(activeTab);
 
     // Find active agent info
     const activeAgent = useMemo(() => {
@@ -78,18 +83,60 @@ function StageContentArea({
     // I will use explicit styles based on color or standard mapped classes.
 
     // Thinking entry: 优先显示当前 councilor 的 thinking，如果没有则显示预设 thinking
+    // Stage3: Use chairman thinking
     const thinkingEntry = useMemo(() => {
-        if (isFinal) return null;
+        if (isFinal) {
+            return thinkingByCouncilor?.[chairmanId || 'chairman'] || null;
+        }
         const councilorThinking = thinkingByCouncilor?.[activeTab];
         if (councilorThinking && councilorThinking.steps && councilorThinking.steps.length > 0) {
             return councilorThinking;
         }
         // 回退到预设 thinking
         return thinkingByCouncilor?.['__preload__'] || null;
-    }, [isFinal, thinkingByCouncilor, activeTab]);
+    }, [isFinal, thinkingByCouncilor, activeTab, chairmanId]);
     const hasThinkingSteps = !!(thinkingEntry && thinkingEntry.steps && thinkingEntry.steps.length > 0);
-    const isThinkingExpanded = thinkingExpanded?.[activeTab] !== false;
+
+    // 简化折叠逻辑：
+    // - 只要用户曾切换过 Tab（离开过当前 Tab），返回时就折叠
+    // - 使用 state 追踪已访问过的 tabs，而不是 ref 比较（ref 在渲染时可能还没更新）
+    const [visitedTabs, setVisitedTabs] = useState(new Set());
+
+    // Effect: 记录访问过的 tabs
+    useEffect(() => {
+        if (activeTab) {
+            setVisitedTabs(prev => new Set(prev).add(activeTab));
+        }
+    }, [activeTab]);
+
+    // 折叠条件：该 Tab 之前访问过，且 thinking 已完成
+    const thinkingKey = isFinal ? (chairmanId || 'chairman') : activeTab;
+    const isThinkingDone = thinkingEntry?.status === 'done' ||
+        (isFinal && stage3Result?.content) ||
+        (!isFinal && stage1Results.find(r => r.councilor_id === activeTab));
+
+    // 简单逻辑：只要访问过其他 Tab（size > 1），返回时就折叠
+    // 用户点击展开只在当前会话有效，切换 Tab 再回来就折叠
+    const wasVisitedBefore = visitedTabs.has(activeTab) && visitedTabs.size > 1;
+    const shouldAutoFold = wasVisitedBefore && isThinkingDone;
+
+    // 使用 thinkingExpanded 状态（由 onToggleThinking 控制）
+    // 但如果应该自动折叠且用户没有在当前渲染周期内点击过，则折叠
+    const isThinkingExpanded = thinkingExpanded?.[thinkingKey] ?? !shouldAutoFold;
+
     const hasAnswerStarted = !isFinal && Boolean(stage1AnswerStream?.[activeTab]);
+
+    // Effect: 追踪 Tab 切换，标记是否曾离开 final tab (legacy, kept for compatibility)
+    useEffect(() => {
+        const prevTab = prevActiveTabRef.current;
+
+        // 如果之前在 final，现在离开了
+        if (prevTab === 'final' && activeTab !== 'final') {
+            setHasLeftFinalTab(true);
+        }
+
+        prevActiveTabRef.current = activeTab;
+    }, [activeTab]);
 
     useEffect(() => {
         const container = scrollRef.current;
@@ -212,7 +259,7 @@ function StageContentArea({
                             <div className="mb-6 border border-zinc-800 bg-zinc-950/60">
                                 <button
                                     type="button"
-                                    onClick={() => onToggleThinking && onToggleThinking(activeTab)}
+                                    onClick={() => onToggleThinking && onToggleThinking(isFinal ? (chairmanId || 'chairman') : activeTab)}
                                     className="w-full flex items-center justify-between px-4 py-3 text-xs font-mono uppercase tracking-widest text-zinc-400 hover:text-zinc-200"
                                 >
                                     <span className="flex items-center gap-2">
@@ -312,8 +359,9 @@ function StageContentArea({
 
             {/* Beacon */}
             <ConsensusBeacon
-                consensusUnlocked={consensusUnlocked}
+                stage3Complete={stage3Result?.content != null}
                 hasViewedConsensus={hasViewedConsensus}
+                activeTab={activeTab}
                 onClick={() => {
                     onTabSelect('final');
                     onManualConsensusView && onManualConsensusView();
