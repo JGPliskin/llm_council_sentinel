@@ -30,6 +30,9 @@ export function useParliamentEngine() {
     const [evaluationComments, setEvaluationComments] = useState({}); // Stage 2 评价映射 { [target_id]: comments[] }
     const [synthesisSteps, setSynthesisSteps] = useState([]); // Stage 3 日志
 
+    // Stage2 思考状态 (按评审员和目标分组)
+    const [stage2ThinkingByJudge, setStage2ThinkingByJudge] = useState({}); // { [judgeId]: { status, stepsByTarget: { [targetId]: steps[] } } }
+
     // === UI 状态 ===
     const [activeTab, setActiveTab] = useState(null);
     const [consensusUnlocked, setConsensusUnlocked] = useState(false);
@@ -185,6 +188,7 @@ export function useParliamentEngine() {
         setStage3AnswerStream('');
         setEvaluationComments({});
         setSynthesisSteps([]);
+        setStage2ThinkingByJudge({}); // 历史加载时不需要 thinking 状态
         setStage1Results([]);
         setStage2Results(null);
         setStage3Result(null);
@@ -320,6 +324,7 @@ export function useParliamentEngine() {
             setStage3AnswerStream('');
             setEvaluationComments({});
             setSynthesisSteps([]);
+            setStage2ThinkingByJudge({});
             setAgentProgress({});
             setStageProgress(0);
             setStage1Results([]);
@@ -503,6 +508,63 @@ export function useParliamentEngine() {
             setThinkingExpanded(prev => (
                 prev[cid] === undefined ? { ...prev, [cid]: true } : prev
             ));
+        } else if (event.stage === 'stage2') {
+            // Stage2 thinking 处理
+            const judgeId = event.councilor_id;
+            const targetAnonId = event.target_anon_id;
+            if (!judgeId) return;
+
+            // 通过 anon_map 映射到真实 councilor_id
+            const anonMap = stage2AnonMapRef.current;
+            let targetId = null;
+            if (targetAnonId && anonMap) {
+                targetId = anonMap[targetAnonId];
+            }
+
+            // 如果没有 targetId，将此 thinking 标记为 global（或忽略）
+            if (!targetId) {
+                console.warn('[handleThinking] Stage2 thinking 缺少有效的 target_anon_id:', event);
+                return;
+            }
+
+            const newBulletId = bulletId || `${judgeId}-stage2-${Date.now()}-${Math.random()}`;
+            const title = event.title || event.delta || '';
+            const detail = event.detail || null;
+            const op = event.op || 'append';
+            const t = typeof event.t === 'number' ? event.t : null;
+
+            setStage2ThinkingByJudge(prev => {
+                const judgeEntry = prev[judgeId] || { status: 'thinking', stepsByTarget: {} };
+                const targetSteps = judgeEntry.stepsByTarget[targetId] || [];
+                const newSteps = [...targetSteps];
+
+                if (op === 'update') {
+                    const index = newSteps.findIndex(s => s.bullet_id === newBulletId);
+                    if (index >= 0) {
+                        newSteps[index] = {
+                            ...newSteps[index],
+                            title: title || newSteps[index].title,
+                            detail: detail !== null ? detail : newSteps[index].detail,
+                            t: t ?? newSteps[index].t
+                        };
+                    } else {
+                        newSteps.push({ bullet_id: newBulletId, title, detail, t });
+                    }
+                } else {
+                    newSteps.push({ bullet_id: newBulletId, title, detail, t });
+                }
+
+                return {
+                    ...prev,
+                    [judgeId]: {
+                        status: 'thinking',
+                        stepsByTarget: {
+                            ...judgeEntry.stepsByTarget,
+                            [targetId]: newSteps
+                        }
+                    }
+                };
+            });
         } else if (event.stage === 'stage3') {
             const step = {
                 id: Date.now() + Math.random(),
@@ -524,6 +586,7 @@ export function useParliamentEngine() {
         setStage2Results([]);
         setEvaluationComments({});
         setAggregateRankings([]);
+        setStage2ThinkingByJudge({}); // 重置 Stage2 thinking 状态
         stage2AnonMapRef.current = event?.anon_map || null;
 
         if (event.skipped) {
@@ -549,6 +612,21 @@ export function useParliamentEngine() {
         const anonMap = stage2AnonMapRef.current;
         if (anonMap) {
             applyStage2ReviewComments(item, anonMap);
+        }
+
+        // 标记该 judge 的 thinking 状态为 'done'
+        const judgeId = item.judge_councilor_id || item.councilor_id;
+        if (judgeId) {
+            setStage2ThinkingByJudge(prev => {
+                if (!prev[judgeId]) return prev;
+                return {
+                    ...prev,
+                    [judgeId]: {
+                        ...prev[judgeId],
+                        status: 'done'
+                    }
+                };
+            });
         }
     }, [applyStage2ReviewComments]);
 
@@ -683,7 +761,8 @@ export function useParliamentEngine() {
         setStage1AnswerStream({});
         setStage3AnswerStream('');
         setEvaluationComments({});
-        setSynthesisSteps([]);
+        setSynthesisSteps({});
+        setStage2ThinkingByJudge({});
         setConsensusUnlocked(false);
         setHasViewedConsensus(false);
         setAggregateRankings([]);
@@ -722,6 +801,8 @@ export function useParliamentEngine() {
         consensusUnlocked,
         hasViewedConsensus,
         aggregateRankings,
+        stage2ThinkingByJudge, // Stage2 thinking state
+        stage2AnonMap: stage2AnonMapRef.current, // Stage2 anon map
 
         // 操作
         startSession,

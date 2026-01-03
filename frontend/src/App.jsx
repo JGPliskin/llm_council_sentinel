@@ -251,6 +251,8 @@ function AppContent() {
               activeTab={engine.activeTab}
               evaluationComments={engine.evaluationComments}
               synthesisSteps={engine.synthesisSteps}
+              stage2ThinkingByJudge={engine.stage2ThinkingByJudge}
+              stage2AnonMap={engine.stage2AnonMap}
               onClose={() => setIsPanelOpen(false)}
             />
           </div>
