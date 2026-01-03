@@ -257,7 +257,10 @@ meta → stage1_start → [eta_update]* → [thinking]* → [stage1_item]* → s
 }
 ```
 
-`target_anon_id` 仅 Stage2 有意义；若缺失，前端可视为 global 并忽略或标注。
+**说明**：
+- `stage` 可为 `stage1`, `stage2`, `stage3`。
+- `target_anon_id` 仅 Stage2 有意义；若缺失，前端可视为 global 并忽略或标注。
+- `title` 和 `detail` 字段用于流式结构化思考展示。Stage 3 时，这些字段来自 Chairman 的 `emit_thinking` tool calls。
 
 #### 6.2.3 `stage1_answer_delta`
 

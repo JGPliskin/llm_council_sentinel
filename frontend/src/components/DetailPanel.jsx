@@ -10,12 +10,12 @@ const REVIEW_DISPLAY_DELAY_MS = 1500;
  * 获取当前应展示的详情内容
  */
 function getDetailContent(stage, activeTab, evaluationComments, synthesisSteps, stage2ThinkingByJudge) {
-    // Consensus Tab → 显示主席思考过程
+    // Consensus Tab → 显示分组的 Stage 2 评审
     if (activeTab === 'final') {
         return {
-            type: 'thinking',
-            title: 'Chairman Synthesis',
-            data: synthesisSteps,
+            type: 'consensus_reviews',
+            title: 'Peer Reviews',
+            // data: evaluationComments, (access directly in component)
         };
     }
 
@@ -122,6 +122,8 @@ export function DetailPanel({
     synthesisSteps,
     stage2ThinkingByJudge,
     stage2AnonMap,
+    aggregateRankings = [],
+    stage2Skipped = false,
     onClose
 }) {
     // 用于触发重新渲染的时间戳
@@ -266,6 +268,90 @@ export function DetailPanel({
                         })}
                         {data.length === 0 && (
                             <div className="text-zinc-600 text-xs font-mono">Waiting for peer reviews...</div>
+                        )}
+                    </div>
+                )}
+
+                {type === 'consensus_reviews' && (
+                    <div className="space-y-8">
+                        {stage2Skipped ? (
+                            <div className="flex flex-col items-center justify-center p-8 text-zinc-500 border border-zinc-800 border-dashed bg-zinc-950/30 rounded">
+                                <span className="text-sm font-mono mb-2">STAGE 2 SKIPPED</span>
+                                <span className="text-xs text-zinc-600 text-center">Insufficient candidates or expedited process.</span>
+                            </div>
+                        ) : (
+                            // Iterate based on ranking order
+                            (aggregateRankings.length > 0 ? aggregateRankings : Object.keys(evaluationComments).map(id => ({ councilor_id: id }))).map(item => {
+                                const targetId = item.councilor_id;
+                                const reviews = evaluationComments?.[targetId] || [];
+                                if (reviews.length === 0) return null;
+
+                                const targetConfig = getCouncilorUIConfig(targetId);
+
+                                // Sort reviews: Score high to low, null last
+                                const sortedReviews = [...reviews].sort((a, b) => {
+                                    const sA = a.score ?? -1;
+                                    const sB = b.score ?? -1;
+                                    if (sA === -1 && sB === -1) return 0;
+                                    if (sA === -1) return 1;
+                                    if (sB === -1) return -1;
+                                    return sA - sB; // Ascending (1, 2, 3...)
+                                });
+
+                                return (
+                                    <div key={targetId} className="space-y-3">
+                                        {/* Group Header */}
+                                        <div className="flex items-center gap-2 pb-2 border-b border-zinc-800">
+                                            <div className="w-1.5 h-1.5 rounded-full" style={{ background: `var(--accent-${targetConfig.color})` }}></div>
+                                            <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                                                To: {targetId}
+                                            </span>
+                                            {item.rank && (
+                                                <span className="ml-auto text-[10px] font-mono bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-400">
+                                                    #{item.rank}
+                                                </span>
+                                            )}
+                                        </div>
+
+                                        {/* Reviews */}
+                                        <div className="space-y-3">
+                                            {sortedReviews.map((review, idx) => {
+                                                const fromConfig = getCouncilorUIConfig(review.fromId);
+                                                const isSelf = review.fromId === targetId;
+
+                                                return (
+                                                    <div
+                                                        key={idx}
+                                                        className={`
+                                                            border p-3 rounded text-sm transition-all
+                                                            ${isSelf
+                                                                ? 'bg-zinc-900/20 border-zinc-800/50 text-zinc-500'
+                                                                : 'bg-zinc-950/50 border-zinc-800 text-zinc-300'}
+                                                        `}
+                                                    >
+                                                        <div className="flex items-center justify-between mb-2">
+                                                            <div className="flex items-center gap-2">
+                                                                <div className="w-1.5 h-1.5 rounded-full" style={{ background: `var(--accent-${fromConfig.color})` }}></div>
+                                                                <span className={`text-[10px] font-bold uppercase ${isSelf ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                                                                    {review.fromId} {isSelf && '(SELF)'}
+                                                                </span>
+                                                            </div>
+                                                            {review.score && (
+                                                                <span className="text-[10px] font-mono font-bold text-zinc-500">
+                                                                    R#{review.score}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        <div className={`leading-relaxed ${isSelf ? 'italic opacity-80' : ''}`}>
+                                                            {review.comment}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                );
+                            })
                         )}
                     </div>
                 )}

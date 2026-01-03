@@ -180,7 +180,8 @@
   "thinking": {
     "stage1": {"immanuel_kant": {"model": "...", "status": "done", "steps": [ ... ]}},
     "stage2": {"donald_trump": {"model": "...", "status": "thinking", "steps": [ ... ]}},
-    "stage3": {}
+    "stage3": {"chairman": {"model": "...", "status": "done", "steps": [ ... ]}}
+  }
   }
 }
 ```

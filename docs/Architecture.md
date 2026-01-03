@@ -147,6 +147,10 @@ sequenceDiagram
     BE-->>FE: SSE stage2_item / stage2_complete
 
     C->>OR: Stage3 综合
+    OR-->>C: thinking
+    C-->>BE: thinking
+    BE-->>FE: SSE thinking (stage3)
+
     OR-->>C: stage3 content delta
     C-->>BE: stage3_answer_delta
     BE-->>FE: SSE stage3_answer_delta

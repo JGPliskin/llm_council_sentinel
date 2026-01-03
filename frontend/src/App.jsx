@@ -171,6 +171,7 @@ function AppContent() {
             </div>
           ) : (
             <StageContentArea
+              chairmanId={engine.chairmanId}
               activeTab={engine.activeTab}
               onTabSelect={engine.setActiveTab}
               stage={engine.stage}
@@ -253,6 +254,8 @@ function AppContent() {
               synthesisSteps={engine.synthesisSteps}
               stage2ThinkingByJudge={engine.stage2ThinkingByJudge}
               stage2AnonMap={engine.stage2AnonMap}
+              aggregateRankings={engine.aggregateRankings}
+              stage2Skipped={engine.stage2Skipped}
               onClose={() => setIsPanelOpen(false)}
             />
           </div>
@@ -266,9 +269,11 @@ function AppContent() {
         aggregateRankings={engine.aggregateRankings}
         resolvedCouncilors={engine.resolvedCouncilors}
         consensusUnlocked={engine.consensusUnlocked}
+        stage3Complete={engine.stage3Complete}
         hasViewedConsensus={engine.hasViewedConsensus}
         onConsensusClick={engine.viewConsensus}
         stage2Skipped={engine.stage2Skipped}
+        activeTab={engine.activeTab}
         // IDLE props
         selectedAgentIds={selectedAgentIds}
         allCouncilors={allCouncilors}

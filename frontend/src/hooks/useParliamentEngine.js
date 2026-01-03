@@ -14,6 +14,7 @@ export function useParliamentEngine() {
     // === 数据状态 ===
     const [conversation, setConversation] = useState(null);
     const [resolvedCouncilors, setResolvedCouncilors] = useState([]);
+    const [chairmanId, setChairmanId] = useState(null); // Added chairmanId state
     const [stage1Results, setStage1Results] = useState([]);
     const [stage2Results, setStage2Results] = useState(null); // Array of review items
     const [stage3Result, setStage3Result] = useState(null);
@@ -36,14 +37,22 @@ export function useParliamentEngine() {
     const [stage2ThinkingByJudge, setStage2ThinkingByJudge] = useState({}); // { [judgeId]: { status, stepsByTarget: { [targetId]: steps[] } } }
 
     // === UI 状态 ===
-    const [activeTab, setActiveTab] = useState(null);
+    const [activeTab, setActiveTabRaw] = useState(null);
     const [consensusUnlocked, setConsensusUnlocked] = useState(false);
+    const [stage3Complete, setStage3Complete] = useState(false); // Stage 3 完成状态，用于控制 beacon 显示
     const [hasViewedConsensus, setHasViewedConsensus] = useState(false);
     const [aggregateRankings, setAggregateRankings] = useState([]);
 
     // === 定时器引用 (用于进度平滑) ===
     const progressTimers = useRef({});
     const stage2AnonMapRef = useRef(null);
+
+    // Tab 切换 wrapper：切换时清除 thinkingExpanded 状态，实现自动折叠
+    const setActiveTab = useCallback((newTab) => {
+        setActiveTabRaw(newTab);
+        // 切换 Tab 时清除所有 thinking 展开状态，让它们默认折叠
+        setThinkingExpanded({});
+    }, []);
 
     /**
       * 计算汇总排名
@@ -137,22 +146,32 @@ export function useParliamentEngine() {
     }, []);
 
     const restoreThinking = useCallback((thinkingMeta) => {
-        if (!thinkingMeta || !thinkingMeta.stage1) return {};
+        if (!thinkingMeta) return {};
         const restored = {};
-        Object.entries(thinkingMeta.stage1).forEach(([cid, entry]) => {
-            const steps = Array.isArray(entry?.steps) ? entry.steps.map(step => ({
-                bullet_id: step.bullet_id || step.id || step.title,
-                title: step.title || "",
-                detail: step.detail || null,
-                t: step.t
-            })) : [];
-            if (steps.length > 0) {
-                restored[cid] = {
-                    status: entry.status || "done",
-                    steps
-                };
-            }
-        });
+
+        // Helper to process a stage's thinking map
+        const processStage = (stageMap) => {
+            if (!stageMap) return;
+            Object.entries(stageMap).forEach(([cid, entry]) => {
+                const steps = Array.isArray(entry?.steps) ? entry.steps.map(step => ({
+                    bullet_id: step.bullet_id || step.id || step.title,
+                    title: step.title || "",
+                    detail: step.detail || null,
+                    t: step.t
+                })) : [];
+                if (steps.length > 0) {
+                    restored[cid] = {
+                        status: entry.status || "done",
+                        steps
+                    };
+                }
+            });
+        };
+
+        // Restore Stage 1 and Stage 3
+        processStage(thinkingMeta.stage1);
+        processStage(thinkingMeta.stage3);
+
         return restored;
     }, []);
 
@@ -298,10 +317,20 @@ export function useParliamentEngine() {
         }
 
         // Set default tab (Use the resolved local variable)
+        // Set default tab (Use the resolved local variable)
         if (resolved.length > 0) {
             setActiveTab(resolved[0].id);
         } else {
             console.warn("[loadSession] No councilors resolved, activeTab not set");
+        }
+
+        // Set Chairman ID
+        if (conv.active_chairman) {
+            setChairmanId(conv.active_chairman);
+        } else if (conv.metadata?.chairman?.id) {
+            setChairmanId(conv.metadata.chairman.id);
+        } else if (lastMsg?.stage3?.councilor_id) {
+            setChairmanId(lastMsg.stage3.councilor_id);
         }
 
         setIsLoading(false);
@@ -396,6 +425,9 @@ export function useParliamentEngine() {
         // 设置默认 Tab
         if (event.resolved_councilors?.length > 0) {
             setActiveTab(event.resolved_councilors[0].id);
+        }
+        if (event.chairman) {
+            setChairmanId(event.chairman.id);
         }
     }, []);
 
@@ -571,14 +603,48 @@ export function useParliamentEngine() {
                 };
             });
         } else if (event.stage === 'stage3') {
-            const step = {
-                id: Date.now() + Math.random(),
-                agentId: event.councilor_id,
-                text: event.title || event.delta || '',
-                time: `${event.t?.toFixed ? event.t.toFixed(1) : '0.0'}s`,
-                status: 'complete'
-            };
-            setSynthesisSteps(prev => [...prev, step]);
+            // Stage 3 now uses the same structured thinking as Stage 1
+            const cid = event.councilor_id; // Usually Chairman
+            if (!cid) return;
+
+            const newBulletId = bulletId || `${cid}-${Date.now()}-${Math.random()}`;
+            const title = event.title || event.delta || '';
+            const detail = event.detail || null;
+            const op = event.op || 'append';
+            const t = typeof event.t === 'number' ? event.t : null;
+
+            setThinkingByCouncilor(prev => {
+                const existing = prev[cid] || { status: 'thinking', steps: [] };
+                const steps = [...existing.steps];
+                if (op === 'update') {
+                    const index = steps.findIndex(s => s.bullet_id === newBulletId);
+                    if (index >= 0) {
+                        steps[index] = {
+                            ...steps[index],
+                            title: title || steps[index].title,
+                            detail: detail !== null ? detail : steps[index].detail,
+                            t: t ?? steps[index].t
+                        };
+                    } else {
+                        steps.push({ bullet_id: newBulletId, title, detail, t });
+                    }
+                } else {
+                    steps.push({ bullet_id: newBulletId, title, detail, t });
+                }
+                return {
+                    ...prev,
+                    [cid]: { status: 'thinking', steps }
+                };
+            });
+
+            // Also auto-expand for Stage 3
+            setThinkingExpanded(prev => (
+                prev[cid] === undefined ? { ...prev, [cid]: true } : prev
+            ));
+
+            // Legacy mapping for backward compatibility if needed, but we should rely on thinkingByCouncilor now
+            // Cannot easily map to old synthesisSteps format which was flat text. 
+            // We'll deprecate synthesisSteps usage in UI.
         }
     }, []);
 
@@ -662,17 +728,35 @@ export function useParliamentEngine() {
             const rankings = calculateAggregateRankings(data.reviews, anonMap);
             setAggregateRankings(rankings);
         }
+        // 注意：Consensus Tab 解锁移动到 handleStage3Complete 中
+        // Stage 2 完成后用户可以预览 Stage 3 的进度，但 beacon 提示只在 Stage 3 完成后显示
     }, [buildEvaluationComments, calculateAggregateRankings]);
 
     const handleStage3Start = useCallback(() => {
         setStage('stage3');
         setStage3AnswerStream('');
+        // Stage 3 开始时解锁 Consensus Tab，让用户可以查看 Chairman 思考过程
+        setConsensusUnlocked(true);
     }, []);
 
     const handleStage3Complete = useCallback((data) => {
         setStage3Result(data);
         setConsensusUnlocked(true);
-    }, []);
+        setStage3Complete(true); // 标记 Stage 3 完成，触发 beacon 显示
+
+        // 标记 Chairman thinking 状态为 done
+        const chairId = data?.councilor_id || chairmanId || 'chairman';
+        setThinkingByCouncilor(prev => {
+            if (!prev[chairId]) return prev;
+            return {
+                ...prev,
+                [chairId]: {
+                    ...prev[chairId],
+                    status: 'done'
+                }
+            };
+        });
+    }, [chairmanId]);
 
     const handleEtaUpdate = useCallback((event) => {
         const cid = event.councilor_id;
@@ -810,10 +894,17 @@ export function useParliamentEngine() {
 
     const toggleThinkingExpanded = useCallback((cid) => {
         if (!cid) return;
-        setThinkingExpanded(prev => ({
-            ...prev,
-            [cid]: !(prev[cid] ?? true)
-        }));
+        setThinkingExpanded(prev => {
+            // 如果当前是 undefined（自动折叠状态），第一次点击应该展开（设为 true）
+            // 如果当前是 true，点击后折叠（设为 false）
+            // 如果当前是 false，点击后展开（设为 true）
+            const current = prev[cid];
+            const newValue = current === undefined ? true : !current;
+            return {
+                ...prev,
+                [cid]: newValue
+            };
+        });
     }, []);
 
     const reset = useCallback(() => {
@@ -835,6 +926,7 @@ export function useParliamentEngine() {
         setStage2ThinkingByJudge({});
         setStage2Skipped(false);
         setConsensusUnlocked(false);
+        setStage3Complete(false); // 重置 stage3Complete
         setHasViewedConsensus(false);
         setAggregateRankings([]);
         stage2AnonMapRef.current = null;
@@ -856,6 +948,7 @@ export function useParliamentEngine() {
         isLoading,
         conversation,
         resolvedCouncilors,
+        chairmanId, // Export chairmanId
         stage1Results,
         stage2Results,
         stage3Result,
@@ -873,6 +966,7 @@ export function useParliamentEngine() {
         activeTab,
         setActiveTab, // Added setter
         consensusUnlocked,
+        stage3Complete, // Stage 3 完成状态，用于控制 beacon 显示
         hasViewedConsensus,
         aggregateRankings,
         stage2ThinkingByJudge, // Stage2 thinking state

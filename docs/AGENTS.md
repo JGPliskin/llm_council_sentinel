@@ -119,10 +119,12 @@ LLM Council 是一个三阶段异步协作系统：
 }
 ```
 
-### 4.2 Stage2 思考要求（行为约束）
+### 4.2 Thinking 要求（行为约束）
 
-Stage2 评审提示词要求：
+Stage1 & Stage3 (Councilor/Chairman) 提示词要求：
+- 使用 `emit_thinking` 记录对问题的分析或共识形成过程（Stage3）
 
+Stage2 (Judge) 提示词要求：
 - **必须多次调用** `emit_thinking`
 - **必须中文**输出 `title` 与 `detail`
 - **必须提供** `target_anon_id`
@@ -261,7 +263,15 @@ meta → stage1_start → [eta_update]* → [thinking]* → [stage1_item]* → s
       ]
     }
   },
-  "stage3": {}
+  "stage3": {
+    "chairman": {
+      "model": "xiaomi/mimo-v2-flash:free",
+      "status": "done",
+      "steps": [
+        {"bullet_id": "chairman-stage3-1", "title": "...", "detail": "...", "t": 12.5}
+      ]
+    }
+  }
 }
 ```
 

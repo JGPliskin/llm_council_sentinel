@@ -9,9 +9,11 @@ function TacticalHUD({
     aggregateRankings,
     resolvedCouncilors,
     consensusUnlocked,
+    stage3Complete = false, // Stage 3 完成状态，控制 beacon 显示
     hasViewedConsensus,
     onConsensusClick,
     stage2Skipped = false,
+    activeTab = null,
     // New props for IDLE stage
     selectedAgentIds = [],
     allCouncilors = [],
@@ -170,8 +172,8 @@ function TacticalHUD({
             <div className="relative flex-1 w-full flex items-center justify-center p-4 overflow-hidden">
 
                 {/* STAGE 3 CONSENSUS BEACON (The "Click to view" overlay) */}
-                {/* Note: This overlay now only appears if the user has NOT viewed consensus yet. */}
-                {consensusUnlocked && !hasViewedConsensus && (
+                {/* Note: Only show when Stage 3 is COMPLETE, user not on final tab, and hasn't viewed. */}
+                {stage3Complete && !hasViewedConsensus && activeTab !== 'final' && (
                     <div
                         onClick={onConsensusClick}
                         // 外部容器样式：黑色半透明背景 + 模糊效果
