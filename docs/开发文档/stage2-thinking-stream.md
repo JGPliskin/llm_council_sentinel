@@ -1,263 +1,296 @@
-# Stage2 Thinking Stream + Review Replace Plan
+# Stage2 Thinking Stream & Review Replace 规范说明 (v0.4)
 
-- Version: v0.3
-- Scope: Stage2 DetailPanel thinking stream + review replace, Stage1/Stage3 thinking-to-content cross-fade, Stage2 thinking targeted to activeTab via `target_anon_id`
-- Decision summary: reuse `thinking` event, Stage2 thinking uses title + detail (two-line display, Chinese), review replaces thinking with transition, realtime only, Stage1/Stage3 use the same cross-fade style, Stage2 thinking includes target mapping for activeTab filtering
+- Version: v0.4
+- Status: 已验收（Stage2 功能验收 OK，仅更新文档）
+- Scope: Stage2 DetailPanel Thinking 流展示 + Review 覆盖；Stage1/Stage3 Thinking->内容 cross-fade 过渡；Stage2 `target_anon_id` 过滤；自评允许
+- Source of truth: `backend/council.py`, `backend/main.py`, `frontend/src/hooks/useParliamentEngine.js`, `frontend/src/components/DetailPanel.jsx`
 
-## Table of Contents
+---
 
-1. Background and Goals
-2. User Scenarios and Requirements
-3. Current State Review
-4. Proposed Solution (High Level)
-5. Detailed Technical Plan
-6. Flow Diagram
+## 目录
+
+1. 背景与目标
+2. 术语与 ID 定义
+3. 需求与决策汇总
+4. 现状快照（与代码一致）
+5. 详细技术规范
+6. 流程图（Mermaid + ASCII）
 7. ASCII UI Mock
-8. Files to Change and Key Edits
-9. Edge Cases and Error Handling
-10. Recommendations and Tradeoffs
-11. Open Items (if any)
+8. 动画与视觉规范
+9. Edge Cases
+10. 涉及文件与关键逻辑
+11. 验收清单
+12. 未决事项
 
-## 1. Background and Goals
+---
 
-Stage2 currently renders peer reviews in the DetailPanel and does not display Stage2 thinking. We want to show a live thinking stream per judge during Stage2, and then replace that stream with the final review content in the same visual region when the review arrives.
+## 1. 背景与目标
 
-## 2. User Scenarios and Requirements
+Stage2 是匿名互评阶段。目标是在 **DetailPanel 的同一区域** 实时展示评审员的思考进度（title + detail 两行），并在评审结果到达后用动画 **直接替换** thinking 区域，保持界面简洁。
 
-### 2.1 User Scenario
+关键目标：
 
-| Scenario | Description | Expected UX |
+- **不新增新区域**：Thinking 与 Review 共用 DetailPanel 的内容区
+- **只显示最新一步**：保留 steps 数据，但 UI 展示最新 title + detail
+- **只显示 activeTab 相关**：通过 `target_anon_id` 精确过滤
+- **自评允许**：评审员可以评价自己的匿名答案，UI 不做特殊处理
+- **不做历史回放**：Stage2 Thinking 只在实时阶段出现
+
+---
+
+## 2. 术语与 ID 定义
+
+| 名称 | 说明 | 示例 |
 |---|---|---|
-| Live Stage2 evaluation | User selects 3 councilors, Stage2 starts | Each judge shows a live thinking stream (title + detail) that updates line-by-line, auto-scrolls, and keeps only the latest entry visible |
-| Review arrives | Stage2 judge finishes | The review content replaces the thinking stream in the same area with a smooth transition |
-| Active tab switch | User switches activeTab | Thinking stream remains unchanged (not reset), review content remains correct for each judge |
+| `judgeId` | 评审员 ID（SSE `thinking` 事件里的 `councilor_id`） | `donald_trump` |
+| `target_anon_id` | Stage2 匿名候选 ID | `anon_2` |
+| `targetId` | 真实 councilor_id，由 `anon_map` 映射得到 | `immanuel_kant` |
+| `activeTab` | 当前用户选中的被评议对象 ID；共识页为 `final` | `immanuel_kant` |
 
-### 2.2 Requirements (Confirmed)
+**注意**：`judgeId` 与 `targetId` 可能相同（自评允许）。
 
-| Requirement | Decision |
-|---|---|
-| Event type | Reuse `thinking` events (no new `thinking_delta`) |
-| Stage2 thinking layout | Same as Stage1: title main line, detail second line |
-| Stage2 thinking language | Require Chinese output in prompt |
-| Stage2 thinking targeting | Add `target_anon_id` so UI can filter by activeTab |
-| Thinking frequency | Keep current 2-3 steps (no extra enforcement) |
-| History | Realtime only (no history view) |
-| Thinking to review | Review replaces thinking in the same region with animation |
-| Active tab change | Thinking stays as-is |
-| Stage1/Stage3 thinking transition | Use the same cross-fade + slight upward slide (180-240ms) with background-aware blending |
+---
 
-## 3. Current State Review
+## 3. 需求与决策汇总
 
-### 3.1 Backend
-
-| Item | Current Behavior |
-|---|---|
-| SSE event | Emits `thinking` with fields: `stage`, `title`, `detail`, `op`, `bullet_id` (no target binding yet) |
-| Stage2 thinking | Stage2 judges can emit `emit_thinking` tool calls |
-| Persistence | Thinking stored in `metadata.thinking` (stage1/2/3), but UI only consumes stage1/3 |
-
-### 3.2 Frontend
-
-| Component | Current Behavior |
-|---|---|
-| `useParliamentEngine` | Handles Stage1 and Stage3 thinking only |
-| `DetailPanel` | Shows peer reviews OR chairman synthesis, no Stage2 thinking |
-| Stage2 reviews | Displayed as cards in DetailPanel (by activeTab) |
-
-## 4. Proposed Solution (High Level)
-
-Reuse existing `thinking` SSE events for Stage2, but extend payload to include `target_anon_id` so each thinking step can be mapped to the current activeTab. Add a Stage2 thinking stream model in the frontend state. In DetailPanel, each judge card shows a live thinking block (two-line title+detail) for the current activeTab until its review arrives. When review arrives, the card transitions to final review content.
-
-Apply the same cross-fade transition style to Stage1 and Stage3 thinking-to-content handoffs to keep the UI consistent, while ensuring the overlay blends with each background.
-
-## 5. Detailed Technical Plan
-
-### 5.1 Data and Event Flow
-
-```
-SSE: thinking (stage2 with target_anon_id)
-  -> useParliamentEngine.handleThinking
-     -> map target_anon_id via anon_map to targetId
-     -> update stage2ThinkingByJudge[judgeId].stepsByTarget[targetId][]
-        -> DetailPanel renders latest step for activeTab (title + detail)
-
-SSE: stage2_item
-  -> set stage2Results + evaluationComments
-     -> DetailPanel replaces thinking with review content for that judge
-```
-
-### 5.2 Frontend State Design
-
-Option recommended: separate map for Stage2 with target-aware steps
-
-| State | Type | Purpose |
+| 需求项 | 决策与约束 | 备注 |
 |---|---|---|
-| `stage2ThinkingByJudge` | `{ [judgeId]: { status: 'idle'|'thinking'|'done'|'failed', error?: string, stepsByTarget: { [targetId]: steps[] } } }` | Store Stage2 thinking steps per judge and per target |
-| `stage2LastStep` (optional) | `{ [judgeId]: { [targetId]: step } }` | Quick access for UI rendering |
+| 事件类型 | 复用 `thinking` 事件 | 不新增 `thinking_delta` |
+| 显示格式 | 标题为主行、detail 为第二行 | 与 Stage1 保持一致 |
+| 语言 | Stage2 thinking 必须中文 | prompt 强制 |
+| 过滤维度 | 使用 `target_anon_id` -> `activeTab` | 思考只展示与 activeTab 相关 |
+| Thinking 频率 | 2-3 步 | prompt 要求多次调用 |
+| 历史回放 | 不支持 | 仅实时显示 |
+| Thinking->Review | Review 直接覆盖 thinking | 有动画过渡 |
+| activeTab 切换 | 不重置 thinking 数据，仅切换显示 | 保留已收到步骤 |
+| Stage1/3 过渡 | 同样 cross-fade + 轻微上移 | 180-240ms |
+| 自评 | 允许 | 不隐藏自身评审卡片 |
 
-Notes:
-- Steps array supports append/update based on `bullet_id` + `op`.
-- UI only shows the latest step for activeTab; list retained for auto-scroll semantics.
+---
 
-### 5.3 UI Behavior
+## 4. 现状快照（与代码一致）
 
-1) Before review
-- Show two-line thinking block (title + detail) in each judge card for the current activeTab.
-- Auto-scroll to the latest step if multiple steps are appended.
+### 4.1 后端行为
 
-2) On review arrival
-- Replace thinking block with the final review text.
-- Use a short cross-fade + slight upward slide for continuity.
+- Stage2 prompt 在 `backend/council.py::_collect_single_ranking_bounded` 内写死：
+  - 必须多次调用 `emit_thinking`
+  - `title` / `detail` 必须中文
+  - 必须包含 `target_anon_id`
+- SSE `thinking` 事件在 `backend/main.py` 归一化后透传，包含 `target_anon_id`
 
-3) Active tab switch
-- Do not reset thinking state. Display remains consistent.
+### 4.2 前端行为
 
-### 5.4 Animation Transition
+- `useParliamentEngine.handleThinking`：
+  - 读取 `event.target_anon_id`
+  - 使用 `stage2_start.anon_map` 映射到 `targetId`
+  - 若映射失败直接忽略（打印 warn）
+  - 更新 `stage2ThinkingByJudge[judgeId].stepsByTarget[targetId][]`
+- `DetailPanel`（Stage2 模式）：
+  - **只要任意 judge 仍为 `thinking`，就显示 thinking 面板**
+  - thinking 面板按 judge 列表渲染卡片，但只显示当前 `activeTab` 对应的最新 thinking
+  - **不会出现“部分 Review + 部分 Thinking 的混合状态”**
+- `loadSession`：Stage2 thinking 不被恢复，历史对话只展示 Review
 
-Recommended transition (simple, readable):
+---
 
-| Element | Transition | Duration |
-|---|---|---|
-| Thinking -> Review | cross-fade + slight upward slide | 180-240ms |
-| Stage1 thinking -> answer | cross-fade + slight upward slide | 180-240ms |
-| Stage3 thinking -> chairman content | cross-fade + slight upward slide | 180-240ms |
+## 5. 详细技术规范
 
-CSS idea (non-code spec):
-- thinking block fade out while review fades in
-- optional small translateY (4-8px) to signal handoff
-- blend on top of existing background (avoid harsh edges on dark panels)
+### 5.1 Thinking 事件处理（Stage2）
 
-### 5.5 Stage2 Thinking Content (Title + Detail)
+伪逻辑（与实际代码一致）：
 
-Current Stage2 prompt does not explicitly require `detail`, Chinese output, or target binding. Update the Stage2 prompt so:
-
-- It requires `detail` (1-2 lines)
-- It explicitly requests Chinese output
-- It requires `target_anon_id` to indicate which anon candidate the thinking step refers to
-- If no detail, UI shows title only (second line hidden)
-
-This improves visual consistency, language alignment, and activeTab filtering for the Stage2 stream.
-
-### 5.6 Stage2 Thinking Targeting (target_anon_id)
-
-Add `target_anon_id` to the Stage2 thinking payload so each step can be tied to a specific candidate.
-
-Example payload (tool call arguments):
-
-```
-{
-  "title": "评估逻辑一致性",
-  "detail": "关注假设的可验证性与风险控制",
-  "target_anon_id": "anon_2",
-  "op": "append"
-}
+```text
+on thinking(event) if event.stage == "stage2":
+  judgeId = event.councilor_id
+  targetAnon = event.target_anon_id
+  targetId = anon_map[targetAnon]
+  if !targetId: ignore
+  steps = stage2ThinkingByJudge[judgeId].stepsByTarget[targetId]
+  if op == "update" and bullet_id exists: update that step
+  else: append new step
+  set status = "thinking"
 ```
 
-Frontend mapping:
-- Use `stage2_start.anon_map` to map `anon_2` -> councilor_id
-- Show only steps whose mapped target matches `activeTab`
-- If `target_anon_id` is missing, treat the step as `global` and hide it by default (or show with a GLOBAL label if needed for debugging)
+### 5.2 Stage2 Review 处理
 
-### 5.7 Stage2 Prompt Update Example
-
-Add explicit instructions in Stage2 prompt:
-
-```
-在调用 emit_thinking 时，必须指定 target_anon_id，表示你当前正在评估哪个候选方案（如 anon_1、anon_2）。
-title 与 detail 均需使用中文，detail 为 1-2 行说明。
+```text
+on stage2_item(item):
+  append/update stage2Results
+  update evaluationComments (per_candidate_comments)
+  set stage2ThinkingByJudge[judgeId].status = "done"
 ```
 
-If tooling schema is updated, include `target_anon_id` in the tool parameters (Stage2 only).
+**说明**：当前 `status` 实际只使用 `thinking` / `done` 两种；`failed` 未在代码中设置。
 
-### 5.8 Judge Identity in SSE Payload
-
-SSE `thinking` events already include `councilor_id` and `model`. Use `councilor_id` as `judgeId` in the frontend.
-
-## 6. Flow Diagram
+### 5.3 DetailPanel 状态机（Stage2）
 
 ```
-Stage2 Thinking Data Flow
-
-  Stage2 LLM (TRUMP)
-      |
-      | emit_thinking({ title, detail, target_anon_id: "anon_2" })
-      v
-  Backend (council.py/main.py)
-      | SSE: { type: "thinking", stage: "stage2",
-      |        councilor_id: "trump", target_anon_id: "anon_2", ... }
-      v
-  Frontend (useParliamentEngine)
-      | map anon_2 -> kant via anon_map
-      | stage2ThinkingByJudge["trump"].stepsByTarget["kant"].push(step)
-      v
-  DetailPanel
-      | if (activeTab === "kant") show latest step for "kant"
-      | stage2_item -> replace thinking with review
+[THINKING MODE] --(all judges done)--> [REVIEW MODE]
+[REVIEW MODE]  --(stage2_start)-----> [THINKING MODE]
 ```
+
+- **进入 Stage2**：`stage2_start` -> 清空 thinking -> THINKING MODE
+- **保持 THINKING MODE**：只要存在 `status === 'thinking'`
+- **切换到 REVIEW MODE**：当所有 judge 状态不为 `thinking`
+
+### 5.4 activeTab 切换规则
+
+- `activeTab` 是 **被评议对象 ID**（`immanuel_kant` 等），不是评审员 ID
+- 切换时不清空 data，仅改变过滤目标
+- 若某 judge 对当前 activeTab 没有 steps：
+  - `status === 'thinking'` -> 显示卡片并提示 “Initializing analysis...”
+  - `status !== 'thinking'` -> 卡片隐藏
+
+### 5.5 Thinking 与 Review 共用区域
+
+- **同一块区域**（DetailPanel 内容区）
+- Review 到来后直接替换 thinking，避免“回看思考过程”干扰
+
+### 5.6 历史回放策略
+
+- Stage2 thinking 仅在实时流中展示
+- 历史会话加载时 `stage2ThinkingByJudge` 为空，不恢复历史 thinking
+
+---
+
+## 6. 流程图（Mermaid + ASCII）
+
+### 6.1 时序图
+
+```mermaid
+sequenceDiagram
+  participant FE as Frontend
+  participant BE as Backend
+  participant J1 as Judge A
+  participant J2 as Judge B
+  participant J3 as Judge C
+
+  BE->>J1: Stage2 评审请求
+  BE->>J2: Stage2 评审请求
+  BE->>J3: Stage2 评审请求
+
+  J1-->>FE: thinking (target_anon_id=anon_1)
+  J2-->>FE: thinking (target_anon_id=anon_1)
+  J1-->>FE: stage2_item (done)
+  J3-->>FE: thinking (target_anon_id=anon_1)
+  J2-->>FE: stage2_item (done)
+  J3-->>FE: stage2_item (done)
+
+  Note over FE: 只要有人 still thinking -> Thinking 模式
+  Note over FE: 全部 done -> Review 模式
+```
+
+### 6.2 数据流（ASCII）
+
+```
+Stage2 LLM (Judge) -> Backend -> Frontend
+
+emit_thinking({target_anon_id})
+  -> on_thinking -> SSE thinking (stage2)
+    -> handleThinking()
+       - anon_id -> targetId
+       - append/update steps
+       - set status = thinking
+
+stage2_item (JSON ranking)
+  -> applyStage2ReviewComments
+  -> set judge status = done
+  -> all done -> Review Mode
+```
+
+---
 
 ## 7. ASCII UI Mock
 
+### 7.1 Thinking Mode（activeTab = KANT）
+
 ```
-DetailPanel (Stage2) - activeTab = KANT
++------------------------------------------------------------------+
+| DetailPanel (Stage2) - Judge Analysis                            |
++------------------------------------------------------------------+
+| [TRUMP]  STATUS: THINKING                                        |
+| title: 评估 anon_2 的可行性                                      |
+| detail: 关注成本与时间权衡                                      |
++------------------------------------------------------------------+
+| [KOJIMA] STATUS: DONE                                            |
+| title: 对比 anon_2 与 anon_1                                     |
+| detail: 分析创新性与可验证性差异                                 |
++------------------------------------------------------------------+
+| [KANT]   STATUS: THINKING (自评允许，正常显示)                   |
+| title: 评估 anon_2 的逻辑一致性                                   |
+| detail: 检查关键假设是否可验证                                   |
++------------------------------------------------------------------+
 
-┌──────────────────────────────────────────────────────────────────────────┐
-│ 评审员          │ 状态      │ 内容                                        │
-├──────────────────────────────────────────────────────────────────────────┤
-│ [TRUMP]        │ ⏳ Thinking│ 标题: 评估 KANT 论证的可行性...              │
-│               │           │ 详情: 关注成本与时间权衡                     │
-├──────────────────────────────────────────────────────────────────────────┤
-│ [KOJIMA]       │ ⏳ Thinking│ 标题: 检验 KANT 叙事连贯性...                │
-│               │           │ 详情: 匹配用户目标与语气                     │
-├──────────────────────────────────────────────────────────────────────────┤
-│ [KANT]         │ ⏳ Thinking│ 标题: 自评 KANT 方案的稳健性...             │
-│               │           │ 详情: 校验假设与可执行性                     │
-└──────────────────────────────────────────────────────────────────────────┘
-
-(later: review replaces thinking block for TRUMP/KOJIMA)
+说明：只要有人 still thinking，就保持 Thinking 模式，不显示 Review。
 ```
 
-## 8. Files to Change and Key Edits
+### 7.2 Review Mode（全部完成后）
 
-| File | Change | Key Points |
-|---|---|---|
-| `frontend/src/hooks/useParliamentEngine.js` | Add Stage2 thinking handling | Capture `thinking` when `event.stage === 'stage2'`, append/update steps per judge ID |
-| `frontend/src/components/DetailPanel.jsx` | Render thinking block before review | Each judge card shows latest thinking step, then replaces with review on arrival |
-| `frontend/src/components/StageContentArea.jsx` | Add Stage1 cross-fade | Apply cross-fade transition for thinking-to-answer handoff |
-| `frontend/src/App.jsx` | Pass new props | Provide `stage2ThinkingByJudge` to DetailPanel |
-| `backend/council.py` | Enrich Stage2 thinking detail/language/target | Require `detail` lines, Chinese output, and `target_anon_id` in Stage2 thinking instructions |
-| `backend/main.py` | Pass through target field | Extend thinking normalization to include `target_anon_id` for stage2 |
-
-No changes required in SSE or event types (reuse `thinking`).
-
-## 9. Edge Cases and Error Handling
-
-| Case | Handling |
-|---|---|
-| Stage2 skipped (insufficient candidates) | No thinking expected; show existing skip message or empty state |
-| Judge failure | Keep thinking (last known) or show fallback status text |
-| Missing detail | Render title only; hide detail row |
-| Missing target_anon_id | Treat as global and hide by default (optionally show with GLOBAL label) |
-| Self review display | Self-review is allowed; display it like any other judge |
-| enable_thinking = false | Skip thinking UI, show reviews only |
-
-## 10. Recommendations and Tradeoffs
-
-### Recommendation on replacing thinking with review
-
-I agree with replacing thinking once the review arrives. For Stage2, users typically care about the final evaluation more than the intermediate thought stream. This keeps the panel clean and reduces noise. The only cost is losing transparency for debugging or trust-building.
-
-If you ever want to re-enable visibility for debugging later, we can keep the data internally but still replace it in UI.
-
-### Tradeoffs
-
-| Option | Pros | Cons |
-|---|---|---|
-| Replace thinking with review | Cleaner UI, less noise | Less transparency after completion |
-| Keep thinking visible | Auditability | Cluttered panel, harder to scan reviews |
-
-## 11. Open Items (if any)
-
-- None. All decisions confirmed.
+```
++------------------------------------------------------------------+
+| DetailPanel (Stage2) - Peer Reviews                              |
++------------------------------------------------------------------+
+| [TRUMP]  RANK #1  KANT 的答案逻辑严密，但缺乏灵活性...             |
++------------------------------------------------------------------+
+| [KOJIMA] RANK #2  叙事连贯，但技术可验证性仍需补充...             |
++------------------------------------------------------------------+
+| [KANT]   RANK #3  自评：整体结构合理，但风险评估略简...           |
++------------------------------------------------------------------+
+```
 
 ---
-End of document.
+
+## 8. 动画与视觉规范
+
+- **动画形式**：cross-fade + 轻微上移（4-8px）
+- **时长**：180-240ms
+- **应用范围**：
+  - Stage2 thinking -> review
+  - Stage1 thinking -> answer
+  - Stage3 thinking -> chairman response
+- **背景适配**：必要时保持 `bg-zinc-950/60` 以防文字对比不足
+
+---
+
+## 9. Edge Cases
+
+| 场景 | 行为 | 备注 |
+|---|---|---|
+| Stage2 skipped | 不出现 thinking，直接进入空态或 Review | `skipped_reason=insufficient_candidates` |
+| target_anon_id 缺失 | 前端忽略该 thinking，打印 warning | 无 GLOBAL fallback |
+| thinking 先于 stage2_start | 因无 anon_map 直接忽略 | 需依赖正确事件顺序 |
+| enable_thinking = false | 不进入 thinking 模式 | Review 到达后正常展示 |
+| judge 失败/超时 | `stage2_item` 返回 error，status 仍置 done | 不影响其它 judge |
+| 自评 | 允许，judge 卡片正常显示 | 无 N/A/隐藏 |
+| 历史加载 | stage2ThinkingByJudge 为空 | 仅实时展示 |
+
+---
+
+## 10. 涉及文件与关键逻辑
+
+| 文件 | 关键点 |
+|---|---|
+| `backend/council.py` | Stage2 prompt 强制中文 + `target_anon_id` + 多次 emit_thinking |
+| `backend/main.py` | 归一化 `thinking` 并透传 `target_anon_id` |
+| `frontend/src/hooks/useParliamentEngine.js` | Stage2 thinking 分组 `stepsByTarget` + status 管理 |
+| `frontend/src/components/DetailPanel.jsx` | Stage2 Thinking/Review 切换逻辑 + activeTab 过滤 |
+| `frontend/src/index.css` | Thinking->Review/Answer 动画规范配合 |
+
+---
+
+## 11. 验收清单
+
+- [ ] Stage2 thinking 事件为 `thinking`，无新增 event type
+- [ ] thinking payload 含 `target_anon_id`，且前端只显示 activeTab 相关步骤
+- [ ] title 主行 + detail 第二行（中文）
+- [ ] 思考未结束时 DetailPanel 仅显示 Thinking，不混合 Review
+- [ ] 全部 done 后 Review 覆盖 thinking（cross-fade 180-240ms）
+- [ ] activeTab 切换不清空数据，仅改变展示
+- [ ] 自评允许并可正常显示
+- [ ] 历史会话不回放 Stage2 thinking
+
+---
+
+## 12. 未决事项
+
+- 无。
