@@ -151,7 +151,8 @@
   "model": "xiaomi/mimo-v2-flash:free",
   "response": "...",
   "attempted_models": ["xiaomi/mimo-v2-flash:free"],
-  "fallback_used": false
+  "fallback_used": false,
+  "fallback_reason": null
 }
 ```
 

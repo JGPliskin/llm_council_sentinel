@@ -8,6 +8,19 @@ from typing import List, Dict, Any, Optional, Callable
 from config import OPENROUTER_API_KEY, OPENROUTER_API_URL
 
 
+def _parse_error_body(response: httpx.Response) -> Dict[str, Any]:
+    """
+    解析 HTTP 错误响应体，尝试提取 JSON 格式的错误信息。
+    
+    Returns:
+        解析后的 JSON dict，如果解析失败则返回包含原始文本的 dict。
+    """
+    try:
+        return response.json()
+    except (json.JSONDecodeError, ValueError):
+        return {"raw_text": response.text}
+
+
 async def stream_model(
     model: str,
     messages: List[Dict[str, str]],
@@ -262,11 +275,25 @@ async def stream_model(
                 'ttft_ms': ttft_ms
             }
 
+    except httpx.HTTPStatusError as e:
+        # HTTP 错误 (4xx, 5xx)
+        error_payload = _parse_error_body(e.response)
+        print(f"HTTP error streaming model {model}: {e.response.status_code} - {error_payload}")
+        return {
+            'error': True,
+            'status_code': e.response.status_code,
+            'headers': dict(e.response.headers),
+            'error_payload': error_payload,
+            'content': str(e),
+            'model': model
+        }
     except Exception as e:
+        # 其他错误 (网络超时、连接失败等)
         print(f"Error streaming model {model}: {e}")
         return {
-            'content': f"Error: {str(e)}",
             'error': True,
+            'status_code': None,
+            'content': str(e),
             'model': model
         }
 

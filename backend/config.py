@@ -31,8 +31,19 @@ DEFAULT_STAGE2_TIMEOUT = 180.0
 
 # Stage-level deadlines (seconds). None = Disabled by default.
 # Can be enabled if desired (e.g. 180.0, 240.0)
-STAGE1_DEADLINE = None
-STAGE2_DEADLINE = None
+STAGE1_DEADLINE = 180.0
+STAGE2_DEADLINE = 180.0
+STAGE3_DEADLINE = 180.0
+
+# ----------------------------
+# 400 错误分类（Fallback Retry）
+# ----------------------------
+# 请求错误 code（不回退）
+REQUEST_ERROR_CODES = {"context_length_exceeded", "invalid_request", "invalid_api_key"}
+# 请求错误关键词（不回退）
+REQUEST_ERROR_KEYWORDS = ["context", "token limit", "invalid request", "invalid json", "tool", "function", "bad request"]
+# 模型错误关键词（可回退）
+MODEL_ERROR_KEYWORDS = ["not found", "unavailable", "permission", "unauthorized", "disabled", "provider"]
 
 # ----------------------------
 # Global Model Pool & Routing
