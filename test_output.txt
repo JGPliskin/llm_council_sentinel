@@ -5,24 +5,71 @@ rootdir: F:\OneDrive\PY\ZYZ\project\llm_council_sentinel
 configfile: pytest.ini
 plugins: anyio-4.12.0, asyncio-1.0.0
 asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
-collecting ... collected 0 items / 1 error
+collecting ... collected 10 items
 
-=================================== ERRORS ====================================
-______________ ERROR collecting backend/tests/test_fast_lane.py _______________
-ImportError while importing test module 'F:\OneDrive\PY\ZYZ\project\llm_council_sentinel\backend\tests\test_fast_lane.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-D:\ProgramData\Miniconda\Lib\importlib\__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend\tests\test_fast_lane.py:13: in <module>
-    from council import select_best_model, _request_stage1_bounded
-backend\council.py:31: in <module>
-    from logger import log_request_timing
-backend\logger.py:8: in <module>
-    import pytz
-E   ModuleNotFoundError: No module named 'pytz'
+tests/test_400_classification.py::test_classify_400_not_400 PASSED       [ 10%]
+tests/test_400_classification.py::test_classify_400_context_length_code PASSED [ 20%]
+tests/test_400_classification.py::test_classify_400_invalid_request_keyword PASSED [ 30%]
+tests/test_400_classification.py::test_classify_400_model_unavailable PASSED [ 40%]
+tests/test_400_classification.py::test_classify_400_provider_error PASSED [ 50%]
+tests/test_400_classification.py::test_classify_400_unknown PASSED       [ 60%]
+tests/test_400_classification.py::test_classify_400_no_response PASSED   [ 70%]
+tests/test_fallback_routing.py::test_select_best_model_basic FAILED      [ 80%]
+tests/test_fallback_routing.py::test_request_stage1_fallback PASSED      [ 90%]
+tests/test_fallback_routing.py::test_request_stage1_streams_answer_delta PASSED [100%]
+
+================================== FAILURES ===================================
+________________________ test_select_best_model_basic _________________________
+
+mock_health_reset = <health.HealthManager object at 0x000001A9E538BC10>
+
+    def test_select_best_model_basic(mock_health_reset):
+        async def run():
+            # Setup
+            candidates = ["model_A", "model_B", "model_C"]
+    
+            # All unknown -> None (strict)
+            assert select_best_model(candidates, set()) is None
+    
+            # A healthy
+            mock_health_reset.update_status("model_A", True)
+    
+    
+            assert select_best_model(candidates, set()) == "model_A"
+    
+            # A excluded
+            assert select_best_model(candidates, {"model_A"}) is None
+    
+            # B healthy
+            mock_health_reset.update_status("model_B", True)
+            assert select_best_model(candidates, {"model_A"}) == "model_B"
+    
+>       asyncio.run(run())
+
+tests\test_fallback_routing.py:48: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+D:\ProgramData\Miniconda\Lib\asyncio\runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+D:\ProgramData\Miniconda\Lib\asyncio\runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+D:\ProgramData\Miniconda\Lib\asyncio\base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    async def run():
+        # Setup
+        candidates = ["model_A", "model_B", "model_C"]
+    
+        # All unknown -> None (strict)
+>       assert select_best_model(candidates, set()) is None
+E       AssertionError: assert 'model_A' is None
+E        +  where 'model_A' = select_best_model(['model_A', 'model_B', 'model_C'], set())
+E        +    where set() = set()
+
+tests\test_fallback_routing.py:33: AssertionError
 =========================== short test summary info ===========================
-ERROR backend/tests/test_fast_lane.py
-!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
-============================== 1 error in 0.89s ===============================
+FAILED tests/test_fallback_routing.py::test_select_best_model_basic - Asserti...
+========================= 1 failed, 9 passed in 0.66s =========================

@@ -173,7 +173,8 @@
     ]
   },
   "attempted_models": ["xiaomi/mimo-v2-flash:free"],
-  "fallback_used": false
+  "fallback_used": false,
+  "fallback_reason": null
 }
 ```
 
@@ -195,6 +196,7 @@
 | `judge_card.actionables` | array | 可执行建议 |
 | `attempted_models` | array | 尝试过的模型列表 |
 | `fallback_used` | boolean | 是否使用了备选模型 |
+| `fallback_reason` | string | 回退原因（如 `model_error`/`request_error`/`json_invalid`），无回退为 null |
 
 ---
 
@@ -217,7 +219,10 @@
         "anon_2": 6,
         "anon_3": 7
       },
-      "rationale": "anon_1 的论证最为严密..."
+      "rationale": "anon_1 的论证最为严密...",
+      "raw_response": "{...}",
+      "fallback_used": false,
+      "fallback_reason": null
     }
   ],
   "anon_map": {
@@ -249,6 +254,9 @@
 | `ranking` | array | 按优劣排序的匿名 ID 列表 |
 | `scores` | object | 匿名 ID 到分数的映射 |
 | `rationale` | string | 评审理由 |
+| `raw_response` | string | 模型原始输出（用于排错） |
+| `fallback_used` | boolean | 是否使用了备选模型 |
+| `fallback_reason` | string | 回退原因（无回退为 null） |
 
 ---
 
@@ -262,7 +270,8 @@ Chairman 的综合结果。
   "model": "xiaomi/mimo-v2-flash:free",
   "response": "## 综合观点\n\n经过多方讨论...",
   "attempted_models": ["xiaomi/mimo-v2-flash:free"],
-  "fallback_used": false
+  "fallback_used": false,
+  "fallback_reason": null
 }
 ```
 
@@ -275,6 +284,7 @@ Chairman 的综合结果。
 | `response` | string | Markdown 格式的综合回答 |
 | `attempted_models` | array | 尝试过的模型列表 |
 | `fallback_used` | boolean | 是否使用了备选模型 |
+| `fallback_reason` | string | 回退原因（无回退为 null） |
 
 ---
 
@@ -631,7 +641,8 @@ erDiagram
             "actionables": ["建立监管框架"]
           },
           "attempted_models": ["xiaomi/mimo-v2-flash:free"],
-          "fallback_used": false
+          "fallback_used": false,
+          "fallback_reason": null
         },
         {
           "councilor_id": "donald_trump",
@@ -648,7 +659,8 @@ erDiagram
             "actionables": ["减少监管阻碍"]
           },
           "attempted_models": ["xiaomi/mimo-v2-flash:free"],
-          "fallback_used": false
+          "fallback_used": false,
+          "fallback_reason": null
         }
       ],
       "stage2": {
@@ -674,7 +686,8 @@ erDiagram
         "model": "xiaomi/mimo-v2-flash:free",
         "response": "## 综合观点\n\n经过多方讨论，各位顾问在AI发展问题上...",
         "attempted_models": ["xiaomi/mimo-v2-flash:free"],
-        "fallback_used": false
+        "fallback_used": false,
+        "fallback_reason": null
       },
       "metadata": {
         "anon_to_councilor": {
@@ -718,4 +731,4 @@ erDiagram
 
 ---
 
-*文档版本: 1.0.0 | 最后更新: 2026-01-01*
+*文档版本: 1.0.0 | 最后更新: 2026-01-03*

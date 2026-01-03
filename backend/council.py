@@ -20,12 +20,14 @@ from config import (
     DEFAULT_STAGE2_TIMEOUT,
     STAGE1_DEADLINE,
     STAGE2_DEADLINE,
-    STAGE1_DEADLINE,
-    STAGE2_DEADLINE,
+    STAGE3_DEADLINE,
     COUNCILOR_MAP,
     GLOBAL_MODEL_MAP,
     SPEED_ROUTE_SWITCH_ABS_MS,
     SPEED_ROUTE_SWITCH_REL_PCT,
+    REQUEST_ERROR_CODES,
+    REQUEST_ERROR_KEYWORDS,
+    MODEL_ERROR_KEYWORDS,
 )
 from health import health_manager
 from logger import log_request_timing
@@ -209,6 +211,71 @@ def get_retry_after(response_dict: Optional[Dict[str, Any]]) -> Optional[float]:
         except (ValueError, TypeError):
             pass
     return None
+
+
+def classify_400_error(response_dict: Optional[Dict[str, Any]]) -> Tuple[str, bool, bool]:
+    """
+    分类 400 错误，决定是否应该回退和更新健康状态。
+    
+    分类优先级：
+    1. 先检查 error_payload.error.code
+    2. 再进行关键词匹配 (error.message)
+    
+    Returns:
+        (error_class, should_retry, update_health)
+        - error_class: "request_error" | "model_error" | "unknown_400" | "other"
+        - should_retry: 是否允许回退到其他模型
+        - update_health: 是否更新健康状态
+    """
+    if not response_dict:
+        return ("other", True, True)
+    
+    status_code = response_dict.get("status_code")
+    
+    # 非 400 错误，按原逻辑处理
+    if status_code != 400:
+        return ("other", True, True)
+    
+    # Step 1: 检查 error code
+    error_payload = response_dict.get("error_payload")
+    error_obj: Dict[str, Any] = {}
+    message = ""
+    raw_text = ""
+    if isinstance(error_payload, dict):
+        raw_error = error_payload.get("error")
+        if isinstance(raw_error, dict):
+            error_obj = raw_error
+        message = str(error_obj.get("message", "")).lower()
+        raw_text = str(error_payload.get("raw_text", "")).lower() if error_payload.get("raw_text") else ""
+
+    code = str(error_obj.get("code", "")).lower()
+    
+    if code in REQUEST_ERROR_CODES:
+        return ("request_error", False, False)
+    
+    # Step 2: 关键词匹配
+    # 优先使用 error.message，其次使用 raw_text
+    text_to_match = message or raw_text
+
+    if not text_to_match:
+        # 仅在无 payload 时回退到 content（可能是 httpx 异常字符串）
+        content = str(response_dict.get("content", "")).lower()
+        if content.startswith("400 ") and "client error" in content and "for url" in content:
+            content = ""
+        text_to_match = content
+    
+    # 检查请求错误关键词
+    for kw in REQUEST_ERROR_KEYWORDS:
+        if kw in text_to_match:
+            return ("request_error", False, False)
+    
+    # 检查模型错误关键词
+    for kw in MODEL_ERROR_KEYWORDS:
+        if kw in text_to_match:
+            return ("model_error", True, True)
+    
+    # 其他 400：保守回退
+    return ("unknown_400", True, True)
 
 
 
@@ -413,18 +480,37 @@ async def _request_stage1_bounded(
 
     candidates = get_candidates(councilor)
     excluded_models = set()
-    attempted_models = [] # Track for metadata/history
+    attempted_models = []  # 跟踪尝试过的模型
+    fallback_reason = None  # 回退原因
 
     last_error = None
+    last_error_class = None
     
-    # 固定模型分配模式：直接使用分配的模型，失败不切换
+    # 软回退模式标记：固定模型失败后进入回退流程
+    in_fallback_mode = False
+    original_fixed_model = fixed_model
+    
+    # 固定模型分配模式：先检查健康状态
     if fixed_model:
-        selected_model = fixed_model
-        t_model_select = 0  # 无需选择
-        
         # 检查固定模型是否在候选池内
         if fixed_model not in candidates:
-            print(f"[FixedModel] 警告: 固定模型 {fixed_model} 不在候选池 {candidates} 中，但仍将使用", flush=True)
+            print(f"[SoftFallback] 警告: 固定模型 {fixed_model} 不在候选池 {candidates} 中，仍将尝试", flush=True)
+        
+        # 检查健康状态
+        status = health_manager.get_status(fixed_model)
+        health_status = status.get("health_status")
+        
+        if health_status in ("healthy", "unknown"):
+            selected_model = fixed_model
+            t_model_select = 0  # 无需选择
+        else:
+            # 固定模型不健康，直接进入回退流程
+            print(f"[SoftFallback] 固定模型 {fixed_model} 健康状态为 {health_status}，跳过并进入回退", flush=True)
+            fallback_reason = f"fixed_model_unhealthy:{health_status}"
+            in_fallback_mode = True
+            fixed_model = None  # 清除固定模型标记，进入动态选择
+            excluded_models.add(original_fixed_model)  # 排除不健康的固定模型
+            selected_model = None
     else:
         selected_model = None
     
@@ -432,8 +518,12 @@ async def _request_stage1_bounded(
     while True:
         # A. Select Model
         if not fixed_model:
-            # 动态模型选择 (旧逻辑)
-            auto_route = councilor.get("auto_route_by_speed", True)
+            # 动态模型选择
+            # 回退模式下强制使用速度排序，忽略 councilor 配置
+            if in_fallback_mode:
+                auto_route = True  # 回退时强制速度排序
+            else:
+                auto_route = councilor.get("auto_route_by_speed", True)
             
             # 记录模型选择开始时间（仅第一次）
             t_select_start = time.time() if t_model_select is None else None
@@ -565,6 +655,7 @@ async def _request_stage1_bounded(
                         )
                     )
 
+            fallback_count = max(0, len(attempted_models) - 1)
             log_request_timing(
                 stage="stage1",
                 councilor_id=councilor["id"],
@@ -576,7 +667,10 @@ async def _request_stage1_bounded(
                     "ttft_ms": ttft_ms,
                     "generation_ms": max(0, generation_ms)
                 },
-                status="ok"
+                status="ok",
+                fallback_count=fallback_count,
+                fallback_reason=fallback_reason,
+                attempted_models=attempted_models
             )
 
             return {
@@ -586,24 +680,40 @@ async def _request_stage1_bounded(
                 "status": "ok",
                 "answer_markdown": cleaned_answer,
                 "attempted_models": attempted_models,
-                "fallback_used": (selected_model != candidates[0]),
+                "fallback_used": in_fallback_mode or (selected_model != candidates[0]),
+                "fallback_reason": fallback_reason,
                 "extracted_thinking_count": len(extracted_thinking)
             }
 
 
         # Network Failure
         err_msg = response.get('content') if response else 'No response'
-        last_error = f"Network Error ({selected_model}): {err_msg}"
         status_code = response.get('status_code') if response else None
-
-        health_manager.update_status(selected_model, False, err_msg, status_code, source="runtime")
         
-        # 固定模型模式：失败不切换，直接退出
-        if fixed_model:
-            print(f"[FixedModel] 固定模型 {fixed_model} 调用失败，不切换: {err_msg}", flush=True)
+        # 400 错误分类
+        error_class, should_retry, update_health = classify_400_error(response)
+        last_error_class = error_class
+        
+        if update_health:
+            health_manager.update_status(selected_model, False, err_msg, status_code, source="runtime")
+        
+        last_error = f"{error_class}({selected_model}): {err_msg}"
+        
+        # 请求错误：不回退，直接返回失败
+        if not should_retry:
+            print(f"[SoftFallback] 请求错误，不回退: {error_class} - {err_msg}", flush=True)
             break
         
-        # 动态模式：继续尝试其他模型
+        # 可回退的错误：进入回退流程
+        if not fallback_reason:
+            fallback_reason = error_class
+        
+        # 固定模型模式：失败后进入回退流程（软回退）
+        if fixed_model:
+            print(f"[SoftFallback] 固定模型 {fixed_model} 调用失败，进入回退流程: {err_msg}", flush=True)
+            in_fallback_mode = True
+            fixed_model = None  # 清除固定模型标记
+        
         excluded_models.add(selected_model)
         continue
             
@@ -613,6 +723,7 @@ async def _request_stage1_bounded(
     model_select_ms = int(t_model_select * 1000) if t_model_select else 0  # t_model_select 已经是耗时（秒）
     total_ms = int((t_end - t_start) * 1000)
     
+    fallback_count = max(0, len(attempted_models) - 1)
     log_request_timing(
         stage="stage1",
         councilor_id=councilor["id"],
@@ -625,13 +736,17 @@ async def _request_stage1_bounded(
             "generation_ms": 0
         },
         status="failed",
-        error=str(last_error or "All candidates failed")
+        error=str(last_error or "All candidates failed"),
+        fallback_count=fallback_count,
+        fallback_reason=fallback_reason,
+        attempted_models=attempted_models,
+        error_class=last_error_class
     )
     
     return {
         "councilor_id": councilor["id"],
         "councilor_name": councilor.get("name"),
-        "model": councilor["model"], # Default requested
+        "model": councilor["model"],  # Default requested
         "status": "failed",
         "error": {
             "code": "EXECUTION_ERROR",
@@ -639,7 +754,9 @@ async def _request_stage1_bounded(
             "retryable": True
         },
         "answer_markdown": "",
-        "attempted_models": attempted_models
+        "attempted_models": attempted_models,
+        "fallback_used": in_fallback_mode,
+        "fallback_reason": fallback_reason
     }
 
 
@@ -677,24 +794,26 @@ async def stage1_collect_responses(
     
     # Wait with Deadline
     if STAGE1_DEADLINE:
-        done, pending = await asyncio.wait(tasks, timeout=STAGE1_DEADLINE)
-        
-        # Cancel pending tasks
-        for t in pending:
-            t.cancel()
-        
-        # Safe await for cleanup
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-            
-        # Replace pending results with Failure Objects
-        # We need to map tasks back to councilors. 
-        # Since `tasks` is ordered list, we can check `tick.done()`.
+        # Stream results as they complete while honoring the stage deadline.
+        task_map = {task: councilors[i] for i, task in enumerate(tasks)}
+        pending = set(tasks)
+        start_time = time.time()
         results = []
-        for i, task in enumerate(tasks):
-            if task in done:
-                # Task finished (could be success or normal failure)
-                # handle exceptions if any
+
+        while pending:
+            remaining = STAGE1_DEADLINE - (time.time() - start_time)
+            if remaining <= 0:
+                break
+
+            done, pending = await asyncio.wait(
+                pending, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+            )
+
+            if not done:
+                break
+
+            for task in done:
+                councilor = task_map.get(task)
                 try:
                     res = task.result()
                     results.append(res)
@@ -709,9 +828,8 @@ async def stage1_collect_responses(
                         else:
                             on_answer_done(res["councilor_id"])
                 except Exception as e:
-                    # Should verify if this happens; _request_stage1_bounded handles most.
                     err_res = {
-                        "councilor_id": councilors[i]["id"],
+                        "councilor_id": councilor["id"] if councilor else None,
                         "status": "failed",
                         "error": {"code": "UNEXPECTED_ERROR", "message": str(e)}
                     }
@@ -726,25 +844,32 @@ async def stage1_collect_responses(
                             await on_answer_done(err_res["councilor_id"])
                         else:
                             on_answer_done(err_res["councilor_id"])
-            else:
-                # Task was pending and cancelled
-                results.append({
-                    "councilor_id": councilors[i]["id"],
-                    "councilor_name": councilors[i].get("name"),
-                    "model": councilors[i]["model"],
-                    "status": "failed",
-                    "error": {
-                        "code": "STAGE_DEADLINE", 
-                        "message": "Stage deadline exceeded."
-                    },
-                     "answer_markdown": "",
-                })
-                if on_answer_done:
-                    cid = councilors[i]["id"]
-                    if asyncio.iscoroutinefunction(on_answer_done):
-                        await on_answer_done(cid)
-                    else:
-                        on_answer_done(cid)
+
+        # Cancel and mark any remaining tasks as deadline failures
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        for task in pending:
+            councilor = task_map.get(task)
+            results.append({
+                "councilor_id": councilor["id"] if councilor else None,
+                "councilor_name": councilor.get("name") if councilor else None,
+                "model": councilor["model"] if councilor else None,
+                "status": "failed",
+                "error": {
+                    "code": "STAGE_DEADLINE",
+                    "message": "Stage deadline exceeded."
+                },
+                "answer_markdown": "",
+            })
+            if on_answer_done and councilor:
+                cid = councilor["id"]
+                if asyncio.iscoroutinefunction(on_answer_done):
+                    await on_answer_done(cid)
+                else:
+                    on_answer_done(cid)
         return results
         
     else:
@@ -995,6 +1120,7 @@ async def _collect_single_ranking_bounded(
     # Limits
     stage_limits = councilor_obj.get("stage_limits", {}).get("stage2", {})
     max_tokens = stage_limits.get("max_output_tokens", 360)
+    t_start = time.time()
 
     if enable_thinking:
         rubric_text += (
@@ -1012,24 +1138,48 @@ async def _collect_single_ranking_bounded(
     candidate_models = get_candidates(councilor_obj)
     excluded_models: set = set()                                                   
     attempted_models: List[str] = []
+    fallback_reason = None  # 回退原因
     last_error = None
+    last_error_class = None
+    abort_request_error = False
     
-    # 固定模型模式
-    fixed_mode = fixed_model is not None
-    if fixed_mode:
-        selected_model = fixed_model
+    # 软回退模式标记
+    in_fallback_mode = False
+    original_fixed_model = fixed_model
+    
+    # 固定模型模式：先检查健康状态
+    if fixed_model:
+        status = health_manager.get_status(fixed_model)
+        health_status = status.get("health_status")
+        
+        if health_status in ("healthy", "unknown"):
+            selected_model = fixed_model
+        else:
+            # 固定模型不健康，直接进入回退流程
+            print(f"[SoftFallback/Stage2] 固定模型 {fixed_model} 健康状态为 {health_status}，跳过并进入回退", flush=True)
+            fallback_reason = f"fixed_model_unhealthy:{health_status}"
+            in_fallback_mode = True
+            fixed_model = None
+            excluded_models.add(original_fixed_model)
+            selected_model = None
     else:
         selected_model = None
     
-    while True: # Outer Loop: Candidates
-        if not fixed_mode:
-            selected_model = select_best_model(candidate_models, excluded_models)
+    while True:  # Outer Loop: Candidates
+        if not fixed_model:
+            # 回退模式下强制使用速度排序
+            selected_model = select_best_model(
+                candidate_models, 
+                excluded_models, 
+                councilor_id=councilor_id,
+                auto_route_by_speed=True  # 回退时强制速度排序
+            )
         if not selected_model:
             break
             
         model_sem = await model_concurrency_manager.get_semaphore(selected_model)
         
-        current_messages = messages # Start fresh for this model (though logically same)
+        current_messages = messages
         
         # Inner Loop: Logic Retry
         for logic_attempt in range(2):
@@ -1091,24 +1241,64 @@ async def _collect_single_ranking_bounded(
                     should_retry_json = True
                 else:
                     attempt_res.update(parsed)
-                    attempt_res["fallback_used"] = (selected_model != candidates[0])
+                    attempt_res["fallback_used"] = in_fallback_mode or (selected_model != candidate_models[0])
+                    attempt_res["fallback_reason"] = fallback_reason
                     parsed_result = attempt_res
                     success = True
             else:
                 # Network Fail
                 err_msg = response.get('content') if response else 'No response'
-                last_error = f"Network Error ({selected_model}): {err_msg}"
-                status_code = response.get('status_code') if response else None 
-                health_manager.update_status(selected_model, False, err_msg, status_code, source="runtime")
+                status_code = response.get('status_code') if response else None
                 
-                # 固定模型模式：失败不切换
-                if fixed_mode:
+                # 400 错误分类
+                error_class, should_retry, update_health = classify_400_error(response)
+                last_error_class = error_class
+                
+                if update_health:
+                    health_manager.update_status(selected_model, False, err_msg, status_code, source="runtime")
+                
+                last_error = f"{error_class}({selected_model}): {err_msg}"
+                
+                # 请求错误：不回退
+                if not should_retry:
+                    print(f"[SoftFallback/Stage2] 请求错误，不回退: {error_class} - {err_msg}", flush=True)
+                    abort_request_error = True
                     break
-                    
+                
+                if not fallback_reason:
+                    fallback_reason = error_class
+                
+                # 固定模型模式：失败后进入回退流程
+                if fixed_model:
+                    print(f"[SoftFallback/Stage2] 固定模型 {fixed_model} 调用失败，进入回退流程: {err_msg}", flush=True)
+                    in_fallback_mode = True
+                    fixed_model = None
+                
                 excluded_models.add(selected_model)
-                break # Break inner, next candidate
+                break  # Break inner, next candidate
                 
             if success:
+                t_end = time.time()
+                ttft_ms = response.get("ttft_ms") if response else None
+                total_ms = int((t_end - t_start) * 1000)
+                generation_ms = total_ms - (ttft_ms or 0)
+                fallback_count = max(0, len(attempted_models) - 1)
+                log_request_timing(
+                    stage="stage2",
+                    councilor_id=councilor_id,
+                    councilor_name=councilor_name or "",
+                    model=attempt_res.get("model", selected_model),
+                    timing={
+                        "total_ms": total_ms,
+                        "model_select_ms": 0,
+                        "ttft_ms": ttft_ms,
+                        "generation_ms": max(0, generation_ms),
+                    },
+                    status="ok",
+                    fallback_count=fallback_count,
+                    fallback_reason=fallback_reason,
+                    attempted_models=attempted_models
+                )
                 return parsed_result
                 
             if should_retry_json:
@@ -1128,14 +1318,46 @@ async def _collect_single_ranking_bounded(
                    current_messages = messages + [retry_msg]
                 else:
                    # 2nd fail
-                   if not fixed_mode:
-                       excluded_models.add(selected_model)
+                   excluded_models.add(selected_model)
+                   last_error_class = "json_invalid"
+                   if not fallback_reason:
+                       fallback_reason = "json_invalid"
+                   if fixed_model:
+                       in_fallback_mode = True
+                       fixed_model = None
                    break
 
-        if fixed_mode:
+            if abort_request_error:
+                break
+
+        # 固定模型模式且不在回退模式，则退出
+        if fixed_model and not in_fallback_mode:
+            break
+        if abort_request_error:
             break
             
     # Fail
+    t_end = time.time()
+    total_ms = int((t_end - t_start) * 1000)
+    fallback_count = max(0, len(attempted_models) - 1)
+    log_request_timing(
+        stage="stage2",
+        councilor_id=councilor_id,
+        councilor_name=councilor_name or "",
+        model=default_model,
+        timing={
+            "total_ms": total_ms,
+            "model_select_ms": 0,
+            "ttft_ms": None,
+            "generation_ms": 0
+        },
+        status="failed",
+        error=str(last_error or "All candidates failed"),
+        fallback_count=fallback_count,
+        fallback_reason=fallback_reason,
+        attempted_models=attempted_models,
+        error_class=last_error_class
+    )
     return {
         "judge_councilor_id": councilor_id,
         "model": default_model,
@@ -1144,7 +1366,9 @@ async def _collect_single_ranking_bounded(
             "message": str(last_error or "All candidates failed"),
             "retryable": True
         },
-        "attempted_models": attempted_models
+        "attempted_models": attempted_models,
+        "fallback_used": in_fallback_mode,
+        "fallback_reason": fallback_reason
     }
 
 
@@ -1227,14 +1451,25 @@ async def stage2_collect_rankings(
     completed_results = []
     
     if STAGE2_DEADLINE:
-        done, pending = await asyncio.wait(raw_tasks, timeout=STAGE2_DEADLINE)
-        for p in pending:
-            p.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-            
-        for councilor, task in tasks:
-            if task in done:
+        # Stream results as they complete while honoring the stage deadline.
+        task_map = {task: councilor for councilor, task in tasks}
+        pending = set(raw_tasks)
+        start_time = time.time()
+
+        while pending:
+            remaining = STAGE2_DEADLINE - (time.time() - start_time)
+            if remaining <= 0:
+                break
+
+            done, pending = await asyncio.wait(
+                pending, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+            )
+
+            if not done:
+                break
+
+            for task in done:
+                councilor = task_map.get(task)
                 try:
                     res = task.result()
                     completed_results.append(res)
@@ -1245,25 +1480,33 @@ async def stage2_collect_rankings(
                             on_result(res)
                 except Exception as e:
                     err = {
-                        "judge_councilor_id": councilor["id"],
-                        "model": councilor["model"],
-                        "error": str(e) # Simplified error structure for Stage2 raw list
+                        "judge_councilor_id": councilor["id"] if councilor else None,
+                        "model": councilor["model"] if councilor else None,
+                        "error": str(e)
                     }
                     completed_results.append(err)
                     if on_result:
                         if asyncio.iscoroutinefunction(on_result):
-                             await on_result(err)
+                            await on_result(err)
                         else:
-                             on_result(err)
-            else:
-                 completed_results.append({
-                     "judge_councilor_id": councilor["id"],
-                     "model": councilor["model"],
-                     "error": {
-                         "code": "STAGE_DEADLINE",
-                         "message": "Stage 2 deadline exceeded"
-                     }
-                 })
+                            on_result(err)
+
+        # Cancel and mark any remaining tasks as deadline failures
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        for task in pending:
+            councilor = task_map.get(task)
+            completed_results.append({
+                "judge_councilor_id": councilor["id"] if councilor else None,
+                "model": councilor["model"] if councilor else None,
+                "error": {
+                    "code": "STAGE_DEADLINE",
+                    "message": "Stage 2 deadline exceeded"
+                }
+            })
     else:
         # Callback logic for loose mode
         if on_result:
@@ -1331,6 +1574,10 @@ async def stage3_synthesize_final(
     stage_limits = chairman.get("stage_limits", {}).get("stage3", {})
     timeout = stage_limits.get("timeout", 90.0)
     max_tokens = stage_limits.get("max_output_tokens", 900)
+    t_start = time.time()
+    
+    # 3. Stage Deadline
+    stage_deadline = time.time() + STAGE3_DEADLINE if STAGE3_DEADLINE else None
 
     # Filter Valid Stage 1 inputs
     valid_stage1 = [r for r in stage1_results if r.get("status") == "ok"]
@@ -1420,37 +1667,59 @@ async def stage3_synthesize_final(
     candidates = get_candidates(chairman)
     excluded_models = set()
     attempted_models = []
-    
+    fallback_reason = None
     last_error = None
+    last_error_class = None
     
-    # 固定模型模式
-    fixed_mode = fixed_model is not None
-    if fixed_mode:
-        selected_model = fixed_model
+    # 软回退相关
+    in_fallback_mode = False
+    original_fixed_model = fixed_model
+    consecutive_non_request_errors = 0
+    
+    # 固定模型分配模式：先检查健康状态
+    if fixed_model:
+        if fixed_model not in candidates:
+             print(f"[SoftFallback/Stage3] 警告: 固定主席模型 {fixed_model} 不在候选池中，仍将尝试", flush=True)
+             
+        status = health_manager.get_status(fixed_model)
+        health_status = status.get("health_status")
+        
+        if health_status in ("healthy", "unknown"):
+            selected_model = fixed_model
+        else:
+            print(f"[SoftFallback/Stage3] 固定主席模型 {fixed_model} 健康状态为 {health_status}，跳过并进入回退", flush=True)
+            fallback_reason = f"fixed_model_unhealthy:{health_status}"
+            in_fallback_mode = True
+            fixed_model = None
+            excluded_models.add(original_fixed_model)
+            selected_model = None
     else:
         selected_model = None
 
     while True: # Outer Loop: Candidates
-        if not fixed_mode:
-            selected_model = select_best_model(candidates, excluded_models)
+        # 3. Check Stage Deadline
+        if stage_deadline and time.time() > stage_deadline:
+             last_error = "Stage 3 Deadline Exceeded"
+             break
+             
+        if not fixed_model:
+            # 回退模式下强制使用速度排序
+            selected_model = select_best_model(
+                candidates, 
+                excluded_models, 
+                councilor_id=chairman.get("id"),
+                auto_route_by_speed=True if in_fallback_mode else True # Stage3 default usually auto-route
+            )
         if not selected_model:
             break
             
         model_sem = await model_concurrency_manager.get_semaphore(selected_model)
         
-        # Inner Loop: Retry (Simple retries for Stage 3, usually logic errors are rare here as it's freeform text, 
-        # but network errors are common. JSON not strict here.)
-        # Actually Stage 3 output is text, no JSON guard.
-        # So we just try once or retry network?
-        # Let's do 2 attempts for network robustness.
-        
+        # Inner Loop: Retry (Simple retries for Stage 3)
         for attempt in range(2):
             response = None
             try:
                 # Double Locking
-                # No stage limit semaphore passed to stage3? 
-                # stage3_synthesize_final is usually run alone.
-                # But we should respect model concurrency.
                 async with model_sem:
                     # Check Capabilities
                     model_cfg = GLOBAL_MODEL_MAP.get(selected_model, {})
@@ -1498,23 +1767,106 @@ async def stage3_synthesize_final(
                 attempted_models.append(selected_model)
 
             if response and not response.get('error'):
+                 # Success
                  health_manager.update_status(selected_model, True, source="runtime")
                  
                  actual_model = response.get("model", selected_model)
+                 t_end = time.time()
+                 ttft_ms = response.get("ttft_ms")
+                 total_ms = int((t_end - t_start) * 1000)
+                 generation_ms = total_ms - (ttft_ms or 0)
+                 fallback_count = max(0, len(attempted_models) - 1)
+                 log_request_timing(
+                     stage="stage3",
+                     councilor_id=chairman.get("id"),
+                     councilor_name=chairman.get("name", ""),
+                     model=actual_model,
+                     timing={
+                         "total_ms": total_ms,
+                         "model_select_ms": 0,
+                         "ttft_ms": ttft_ms,
+                         "generation_ms": max(0, generation_ms)
+                     },
+                     status="ok",
+                     fallback_count=fallback_count,
+                     fallback_reason=fallback_reason,
+                     attempted_models=attempted_models
+                 )
                  return {
                     "status": "ok",
                     "model": actual_model, 
                     "response": response.get("content", ""),
                     "attempted_models": attempted_models,
-                    "fallback_used": (selected_model != candidates[0])
+                    "fallback_used": in_fallback_mode or (selected_model != candidates[0]),
+                    "fallback_reason": fallback_reason
                  }
             else:
-                 error_msg = response.get("content") if response else "No response from chairman"
-                 last_error = f"{selected_model}: {error_msg}"
+                 # Failure
+                 err_msg = response.get("content") if response else "No response from chairman"
                  status_code = response.get('status_code') if response else None
-                 health_manager.update_status(selected_model, False, last_error, status_code, source="runtime")
                  
-                 # Network Retry Logic
+                 # 400 Classification
+                 error_class, should_retry, update_health = classify_400_error(response)
+                 last_error_class = error_class
+                 
+                 if update_health:
+                     health_manager.update_status(selected_model, False, err_msg, status_code, source="runtime")
+                     
+                 last_error = f"{error_class}({selected_model}): {err_msg}"
+                 
+                 # Request Error -> Stop
+                 if not should_retry:
+                     print(f"[SoftFallback/Stage3] 请求错误，不回退: {error_class} - {err_msg}", flush=True)
+                     t_end = time.time()
+                     total_ms = int((t_end - t_start) * 1000)
+                     fallback_count = max(0, len(attempted_models) - 1)
+                     log_request_timing(
+                         stage="stage3",
+                         councilor_id=chairman.get("id"),
+                         councilor_name=chairman.get("name", ""),
+                         model=selected_model,
+                         timing={
+                             "total_ms": total_ms,
+                             "model_select_ms": 0,
+                             "ttft_ms": None,
+                             "generation_ms": 0
+                         },
+                         status="failed",
+                         error=err_msg,
+                         fallback_count=fallback_count,
+                         fallback_reason=fallback_reason,
+                         attempted_models=attempted_models,
+                         error_class=error_class
+                     )
+                     return {
+                        "status": "failed",
+                        "model": selected_model,
+                        "response": f"Stage3 无法执行: {err_msg}",
+                        "error": {"code": "REQUEST_ERROR", "message": err_msg},
+                        "attempted_models": attempted_models,
+                        "fallback_used": in_fallback_mode or (selected_model != candidates[0]),
+                        "fallback_reason": fallback_reason
+                     }
+
+                 # Count consecutive non-request errors
+                 if error_class != "request_error":
+                     consecutive_non_request_errors += 1
+                     if consecutive_non_request_errors >= 2:
+                         print(f"[Stage3] Warning: 连续 {consecutive_non_request_errors} 次非请求错误，可能上游输入有问题", flush=True)
+
+                 if not fallback_reason:
+                    fallback_reason = error_class
+
+                 # Fixed model fails -> enter fallback
+                 if fixed_model:
+                     print(f"[SoftFallback/Stage3] 固定主席模型 {fixed_model} 调用失败，进入回退流程: {err_msg}", flush=True)
+                     in_fallback_mode = True
+                     fixed_model = None
+                     # Break inner to allow re-selection
+                     excluded_models.add(selected_model)
+                     break 
+                 
+                 # Logic Retry for network/other errors
                  if attempt == 0 and is_retryable_error(response):
                      retry_after = get_retry_after(response)
                      delay = retry_after if retry_after else 1.0
@@ -1522,19 +1874,43 @@ async def stage3_synthesize_final(
                      continue # Retry inner
                  else:
                      # 2nd fail or fatal
-                     if not fixed_mode:
-                         excluded_models.add(selected_model)
+                     excluded_models.add(selected_model)
                      break # Break inner
          
-        if fixed_mode:
+        # If fixed model was just cleared above, loop continues to pick next model
+        # If still fixed model (shouldn't reach here if broke above), safeguards:
+        if fixed_model and not in_fallback_mode:
             break
                      
+    t_end = time.time()
+    total_ms = int((t_end - t_start) * 1000)
+    fallback_count = max(0, len(attempted_models) - 1)
+    log_request_timing(
+        stage="stage3",
+        councilor_id=chairman.get("id"),
+        councilor_name=chairman.get("name", ""),
+        model=chairman.get("model", ""),
+        timing={
+            "total_ms": total_ms,
+            "model_select_ms": 0,
+            "ttft_ms": None,
+            "generation_ms": 0
+        },
+        status="failed",
+        error=str(last_error or "All candidates failed"),
+        fallback_count=fallback_count,
+        fallback_reason=fallback_reason,
+        attempted_models=attempted_models,
+        error_class=last_error_class
+    )
     return {
         "status": "failed",
         "model": chairman["model"],
         "response": f"最终总结生成失败: {str(last_error)}",
         "error": {"code": "CHAIRMAN_FAILED", "message": str(last_error)},
-        "attempted_models": attempted_models
+        "attempted_models": attempted_models,
+        "fallback_used": in_fallback_mode or (len(attempted_models) > 1),
+        "fallback_reason": fallback_reason
     }
 
 

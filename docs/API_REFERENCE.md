@@ -360,7 +360,8 @@ X-Admin-Token: your-secret-token
         "actionables": ["..."]
       },
       "attempted_models": ["xiaomi/mimo-v2-flash:free"],
-      "fallback_used": false
+      "fallback_used": false,
+      "fallback_reason": null
     }
   ],
   "stage2": {
@@ -372,7 +373,10 @@ X-Admin-Token: your-secret-token
         "model": "xiaomi/mimo-v2-flash:free",
         "ranking": ["anon_1", "anon_2"],
         "scores": {"anon_1": 8, "anon_2": 6},
-        "rationale": "..."
+        "rationale": "...",
+        "raw_response": "...",
+        "fallback_used": false,
+        "fallback_reason": null
       }
     ],
     "anon_map": {"anon_1": "immanuel_kant", "anon_2": "donald_trump"}
@@ -382,7 +386,8 @@ X-Admin-Token: your-secret-token
     "model": "xiaomi/mimo-v2-flash:free",
     "response": "## 综合观点\n...",
     "attempted_models": ["xiaomi/mimo-v2-flash:free"],
-    "fallback_used": false
+    "fallback_used": false,
+    "fallback_reason": null
   },
   "metadata": {
     "anon_to_councilor": {...},
@@ -528,10 +533,14 @@ X-Admin-Token: your-secret-token
     "answer_summary": "...",
     "judge_card": {...},
     "attempted_models": ["xiaomi/mimo-v2-flash:free"],
-    "fallback_used": false
+    "fallback_used": false,
+    "fallback_reason": null
   }
 }
 ```
+
+**字段补充**：
+- `fallback_reason`: 回退原因（如 `model_error` / `request_error` / `json_invalid`），无回退为 `null`。
 
 ---
 
@@ -573,6 +582,10 @@ X-Admin-Token: your-secret-token
 }
 ```
 
+**说明**：
+- Stage1/Stage2 启用 deadline 时，仍会在每个 Councilor 完成时即时发出 `stage1_item` / `stage2_item`。
+- deadline 仅用于取消未完成任务并返回失败占位，不影响已完成的流式事件。
+
 ---
 
 #### 6.2.8 `stage2_start` - Stage2 开始
@@ -607,10 +620,17 @@ X-Admin-Token: your-secret-token
     "model": "xiaomi/mimo-v2-flash:free",
     "ranking": ["anon_1", "anon_2"],
     "scores": {"anon_1": 8, "anon_2": 6},
-    "rationale": "..."
+    "rationale": "...",
+    "raw_response": "...",
+    "fallback_used": false,
+    "fallback_reason": null
   }
 }
 ```
+
+**字段补充**：
+- `raw_response`: 评审模型原始输出（用于排错）。
+- `fallback_reason`: 回退原因（无回退为 `null`）。
 
 ---
 
@@ -666,10 +686,14 @@ X-Admin-Token: your-secret-token
     "model": "xiaomi/mimo-v2-flash:free",
     "response": "## 综合观点\n...",
     "attempted_models": ["xiaomi/mimo-v2-flash:free"],
-    "fallback_used": false
+    "fallback_used": false,
+    "fallback_reason": null
   }
 }
 ```
+
+**字段补充**：
+- `fallback_reason`: 回退原因（无回退为 `null`）。
 
 ---
 
@@ -820,4 +844,4 @@ async def send_message_stream(conversation_id: str, content: str):
 
 ---
 
-*文档版本: 1.0.0 | 最后更新: 2026-01-01*
+*文档版本: 1.0.0 | 最后更新: 2026-01-03*

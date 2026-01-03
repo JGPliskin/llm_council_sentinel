@@ -37,7 +37,8 @@ def log_request_timing(
     timing: dict,
     status: str = "ok",
     error: str = None,
-    routing: dict = None
+    routing: dict = None,
+    **kwargs  # 支持额外字段: fallback_count, fallback_reason, attempted_models, error_class
 ):
     """
     输出 JSON 格式的请求计时日志
@@ -54,11 +55,8 @@ def log_request_timing(
             - generation_ms: 生成耗时
         status: 状态 (ok, failed)
         error: 错误信息 (可选)
-        routing: 选路决策信息 (可选)，包含：
-            - mode: 'auto_speed' | 'config_order'
-            - candidates_ttft: {model_id: ttft_ms | null}
-            - selected: 选中的模型
-            - reason: 选路原因
+        routing: 选路决策信息 (可选)
+        kwargs: 其他可选字段 (fallback_count, fallback_reason, attempted_models, error_class)
     """
     now = datetime.now(TZ_SHANGHAI)
     
@@ -77,5 +75,10 @@ def log_request_timing(
     
     if routing:
         data["routing"] = routing
+        
+    # 添加额外字段
+    for key in ["fallback_count", "fallback_reason", "attempted_models", "error_class"]:
+        if key in kwargs and kwargs[key] is not None:
+             data[key] = kwargs[key]
     
     request_logger.info(json.dumps(data, ensure_ascii=False))

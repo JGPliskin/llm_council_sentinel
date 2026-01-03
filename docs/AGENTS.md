@@ -23,7 +23,7 @@ LLM Council 是一个三阶段异步协作系统：
 - 对话持久化（JSON 文件）
 - 流式 SSE 输出（前端实时渲染）
 - 可选 Thinking 工具调用（前端在内容区/详情面板展示）
-- 固定模型分配（创建时分配并固定整个对话生命周期）
+- 固定模型分配 + 软回退（固定模型优先；失败或不健康时可回退到候选池）
 
 ### 2.3 Active Councilors (Configuration)
 
@@ -31,10 +31,10 @@ The specific personas loaded in the current system (defined in `backend/config.p
 
 | ID | Name | Role | Model | Persona / Style |
 | :--- | :--- | :--- | :--- | :--- |
-| **`immanuel_kant`** | 康德 | Councilor | `openai/gpt-oss-20b:free` | **Moral Philosopher**: Prioritizes universal ethics, categorial imperatives, and logical consistency. Judge style: Analytical, focus on long-term robustness. |
-| **`donald_trump`** | 特朗普 | Councilor | `openai/gpt-oss-20b:free` | **Pragmatist/Populist**: Focuses on "America First" style realism, direct benefits, strength, and deal-making. Judge style: Executive execution, risk isolation. |
-| **`hideo_kojima`** | 小岛秀夫 | Councilor | `openai/gpt-oss-20b:free` | **Auteur/Visionary**: Emphasizes narrative, connectivity, complex systems, and artistic integrity. Judge style: Academic rigor, source verification. |
-| **`chairman`** | 共识主席 | **Chairman** | `amazon/nova-2-lite-v1:free` | **Synthesizer**: Neutral moderator. Detects consensus, highlights unresolvable conflicts, and provides the final actionable verdict. |
+| **`immanuel_kant`** | 康德 | Councilor | `xiaomi/mimo-v2-flash:free` | **Moral Philosopher**: Prioritizes universal ethics, categorial imperatives, and logical consistency. Judge style: Analytical, focus on long-term robustness. |
+| **`donald_trump`** | 特朗普 | Councilor | `xiaomi/mimo-v2-flash:free` | **Pragmatist/Populist**: Focuses on "America First" style realism, direct benefits, strength, and deal-making. Judge style: Executive execution, risk isolation. |
+| **`hideo_kojima`** | 小岛秀夫 | Councilor | `xiaomi/mimo-v2-flash:free` | **Auteur/Visionary**: Emphasizes narrative, connectivity, complex systems, and artistic integrity. Judge style: Academic rigor, source verification. |
+| **`chairman`** | 共识主席 | **Chairman** | `xiaomi/mimo-v2-flash:free` | **Synthesizer**: Neutral moderator. Detects consensus, highlights unresolvable conflicts, and provides the final actionable verdict. |
 
 ---
 
@@ -47,7 +47,7 @@ The specific personas loaded in the current system (defined in `backend/config.p
 | `main.py` | FastAPI 入口 | API 路由、流式 SSE、对话存储、rate limit、输入校验、健康刷新调度 |
 | `council.py` | 三阶段编排 | Stage1/2/3 执行、并发控制、重试策略、匿名映射、thinking 注入 |
 | `model_assigner.py` | 固定分配 | 模型分配、种子复现、主席模型选择 |
-| `openrouter.py` | LLM 客户端 | 请求 OpenRouter API、解析流式 tool_calls、回调 thinking |
+| `openrouter.py` | LLM 客户端 | 请求 OpenRouter API、解析流式 tool_calls、回调 thinking、错误时返回 `status_code/headers/error_payload` |
 | `storage.py` | 存储层 | JSON 持久化、对话列表、单/批量删除、schema 迁移 |
 | `validation.py` / `health.py` | 健康系统 | 健康探测、状态缓存、冷却与失败阈值 |
 | `persona_loader.py` | Persona 载入 | 启动预加载 persona，避免每次 I/O |
@@ -255,7 +255,8 @@ flowchart TB
     "actionables": ["..."]
   },
   "attempted_models": ["..."],
-  "fallback_used": true
+  "fallback_used": true,
+  "fallback_reason": "model_error"
 }
 ```
 
@@ -271,7 +272,10 @@ flowchart TB
       "model": "...",
       "ranking": ["anon_1", "anon_2"],
       "scores": {"anon_1": 8, "anon_2": 6},
-      "rationale": "..."
+      "rationale": "...",
+      "raw_response": "...",
+      "fallback_used": false,
+      "fallback_reason": null
     }
   ],
   "anon_map": {"anon_1": "c1", "anon_2": "c2"},
@@ -286,7 +290,8 @@ flowchart TB
   "model": "...",
   "response": "<markdown>",
   "attempted_models": ["..."],
-  "fallback_used": false
+  "fallback_used": false,
+  "fallback_reason": null
 }
 ```
 
@@ -379,6 +384,7 @@ sequenceDiagram
 - Stage1/2/3 均可触发 thinking 工具调用（`enable_thinking` 控制）。
 - Stage2 跳过条件：Stage1 有效候选 < 2。
 - Stage3 始终执行（除非 Stage1 全失败）。
+- Stage1/Stage2 即使启用 deadline，也会在每个 Councilor 完成时实时发出 `stage*_item`。
 
 ---
 
@@ -399,8 +405,9 @@ sequenceDiagram
 | `DEFAULT_STAGE1_TIMEOUT` | 120.0s | Stage1 单次请求超时 |
 | `DEFAULT_STAGE2_TIMEOUT` | 180.0s | Stage2 单次请求超时 |
 | Stage3 Timeout | 90.0s | Chairman 综合请求超时 |
-| `STAGE1_DEADLINE` | None | Stage1 整体截止时间（禁用） |
-| `STAGE2_DEADLINE` | None | Stage2 整体截止时间（禁用） |
+| `STAGE1_DEADLINE` | 180.0s | Stage1 整体截止时间（超时会取消未完成任务） |
+| `STAGE2_DEADLINE` | 180.0s | Stage2 整体截止时间（超时会取消未完成任务） |
+| `STAGE3_DEADLINE` | 180.0s | Stage3 软截止时间（仅在候选切换点检查） |
 
 ---
 
@@ -459,9 +466,16 @@ Councilor 定义中包含 `model` (首选) 和 `model_candidates` (备选列表)
 2. `auto_route_by_speed=true` 时按 TTFT 速度排序并使用双阈值防抖切换；为 `false` 时按 `model_candidates` 顺序。
 3. 失败后从候选中剔除，尝试下一个模型。
 
-**固定模式（有 `model_assignments`）**：
-- Stage1/Stage2/Stage3 直接使用分配的模型。
-- 调用失败不自动切换，直接返回错误。
+**固定分配 + 软回退（有 `model_assignments`）**：
+1. 优先使用分配模型；若健康状态为 `cooldown/unhealthy`，直接跳过进入回退。
+2. 调用失败时进入回退链路（不更新 `model_assignments`）。
+3. 回退阶段强制使用速度排序（忽略 `auto_route_by_speed=false`）。
+4. 若错误被分类为“请求错误”，**不回退**，直接返回失败。
+
+**400 错误分类**：
+- 优先使用 `error_payload.error.code` 判定请求错误（不回退）。
+- 其次使用 `error_payload.error.message` 关键词匹配。
+- 若无 payload 再使用 `content` 兜底。
 
 ---
 
@@ -551,5 +565,5 @@ docker-compose up -d
 
 ---
 
-*Last updated: 2026-01-01*
+*Last updated: 2026-01-03*
 
