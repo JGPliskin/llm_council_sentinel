@@ -639,7 +639,8 @@ export function useParliamentEngine() {
                     ...prev,
                     [judgeId]: {
                         ...prev[judgeId],
-                        status: 'done'
+                        status: 'done',
+                        doneAt: Date.now() // 记录完成时间，用于延迟显示 review
                     }
                 };
             });

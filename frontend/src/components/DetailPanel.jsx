@@ -1,7 +1,10 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { X } from 'lucide-react';
 import { getCouncilorUIConfig } from '@/config/councilors';
+
+// 延迟显示 review 的时间（毫秒）
+const REVIEW_DISPLAY_DELAY_MS = 1500;
 
 /**
  * 获取当前应展示的详情内容
@@ -16,28 +19,14 @@ function getDetailContent(stage, activeTab, evaluationComments, synthesisSteps, 
         };
     }
 
-    // Stage 2 → 显示 thinking 和 evaluation
+    // Stage 2 → 始终使用 stage2_mixed 类型，支持混合显示
     if (stage === 'stage2') {
-        // 检查是否有任何 judge 仍在 thinking 状态
-        const hasThinkingJudge = stage2ThinkingByJudge &&
-            Object.values(stage2ThinkingByJudge).some(j => j.status === 'thinking');
-
-        // 如果有 judge 还在 thinking，显示 thinking 面板
-        if (hasThinkingJudge) {
-            return {
-                type: 'stage2_thinking',
-                title: 'Judge Analysis',
-                data: stage2ThinkingByJudge,
-                targetId: activeTab, // 当前选中的议员 ID
-            };
-        }
-
-        // 否则显示已完成的评价
-        const comments = evaluationComments[activeTab] || [];
         return {
-            type: 'evaluation',
-            title: 'Peer Reviews',
-            data: comments,
+            type: 'stage2_mixed',
+            title: 'Judge Analysis',
+            thinkingData: stage2ThinkingByJudge,
+            reviewData: evaluationComments,
+            targetId: activeTab, // 当前选中的议员 ID
         };
     }
 
@@ -54,6 +43,78 @@ function getDetailContent(stage, activeTab, evaluationComments, synthesisSteps, 
     return { type: 'empty', title: '', data: [] };
 }
 
+/**
+ * 单个 Judge 卡片组件
+ * 根据状态和时间决定显示 thinking 还是 review
+ */
+function JudgeCard({ judgeId, judgeData, targetId, reviewComments, now }) {
+    const uiConfig = getCouncilorUIConfig(judgeId);
+    const status = judgeData.status;
+    const doneAt = judgeData.doneAt;
+
+    // 获取针对当前 targetId 的思考步骤
+    const targetSteps = judgeData.stepsByTarget?.[targetId] || [];
+    const latestStep = targetSteps[targetSteps.length - 1];
+
+    // 获取该 judge 对当前 target 的 review
+    const reviewFromJudge = reviewComments?.find(r => r.fromId === judgeId);
+
+    // 判断是否应该显示 review（完成后延迟 1.5 秒）
+    const shouldShowReview = status === 'done' && doneAt && (now - doneAt >= REVIEW_DISPLAY_DELAY_MS) && reviewFromJudge;
+
+    // 如果这个 judge 没有针对当前 target 的 thinking 且不该显示 review，跳过
+    if (targetSteps.length === 0 && status !== 'thinking' && !shouldShowReview) {
+        return null;
+    }
+
+    return (
+        <div className="bg-zinc-950/50 border border-zinc-800 p-3 rounded transition-all duration-500">
+            {/* Judge Header */}
+            <div className="flex items-center gap-2 mb-2 pb-2 border-b border-zinc-800/50">
+                <div className="w-2 h-2 rounded-full" style={{ background: `var(--accent-${uiConfig.color})` }}></div>
+                <span className="text-xs font-bold text-zinc-300">{judgeId.toUpperCase()}</span>
+                {status === 'thinking' && (
+                    <span className="text-xs text-orange-500 animate-pulse ml-auto">ANALYZING...</span>
+                )}
+                {status === 'done' && !shouldShowReview && (
+                    <span className="text-xs text-green-500 ml-auto">✓ COMPLETE</span>
+                )}
+                {shouldShowReview && reviewFromJudge?.score && (
+                    <div className="text-xs font-mono font-bold text-zinc-400 ml-auto">
+                        RANK #{reviewFromJudge.score}
+                    </div>
+                )}
+            </div>
+
+            {/* 内容区域：thinking 或 review */}
+            <div className="transition-opacity duration-500">
+                {shouldShowReview ? (
+                    // 显示 review 内容
+                    <div className="text-sm text-zinc-400 leading-relaxed animate-fadeIn">
+                        {reviewFromJudge.comment}
+                    </div>
+                ) : latestStep ? (
+                    // 显示 thinking 内容
+                    <div className="space-y-1">
+                        <div className="text-sm font-medium text-zinc-300">
+                            {latestStep.title}
+                        </div>
+                        {latestStep.detail && (
+                            <div className="text-xs text-zinc-400 leading-relaxed opacity-80">
+                                {latestStep.detail}
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <div className="text-xs text-zinc-600 font-mono animate-pulse">
+                        Initializing analysis...
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
 export function DetailPanel({
     stage,
     activeTab,
@@ -63,7 +124,33 @@ export function DetailPanel({
     stage2AnonMap,
     onClose
 }) {
-    const { type, title, data, targetId } = getDetailContent(
+    // 用于触发重新渲染的时间戳
+    const [now, setNow] = useState(Date.now());
+
+    // 监听 stage2ThinkingByJudge 变化，检查是否有 judge 刚完成
+    useEffect(() => {
+        if (stage !== 'stage2' || !stage2ThinkingByJudge) return;
+
+        // 检查是否有 judge 处于"刚完成但还未显示 review"的状态
+        const needsUpdate = Object.values(stage2ThinkingByJudge).some(judgeData => {
+            if (judgeData.status === 'done' && judgeData.doneAt) {
+                const elapsed = Date.now() - judgeData.doneAt;
+                return elapsed < REVIEW_DISPLAY_DELAY_MS;
+            }
+            return false;
+        });
+
+        if (needsUpdate) {
+            // 设置定时器在延迟后触发重新渲染
+            const timer = setTimeout(() => {
+                setNow(Date.now());
+            }, REVIEW_DISPLAY_DELAY_MS);
+
+            return () => clearTimeout(timer);
+        }
+    }, [stage, stage2ThinkingByJudge]);
+
+    const content = getDetailContent(
         stage,
         activeTab,
         evaluationComments,
@@ -71,12 +158,29 @@ export function DetailPanel({
         stage2ThinkingByJudge
     );
 
+    const { type, title, data, thinkingData, reviewData, targetId } = content;
+
+    // 当前 target 的 review 列表
+    const currentReviews = reviewData?.[activeTab] || [];
+
+    // 检查是否所有 judge 都已完成且过了延迟时间（用于切换标题）
+    const allReviewsReady = thinkingData && Object.values(thinkingData).every(j => {
+        if (j.status !== 'done') return false;
+        if (!j.doneAt) return true;
+        return (now - j.doneAt) >= REVIEW_DISPLAY_DELAY_MS;
+    }) && Object.keys(thinkingData).length > 0;
+
+    // 动态标题
+    const displayTitle = type === 'stage2_mixed'
+        ? (allReviewsReady ? 'Peer Reviews' : 'Judge Analysis')
+        : title;
+
     return (
         <div className="h-full flex flex-col bg-zinc-900/90 border-l border-zinc-800 backdrop-blur-md">
             {/* Header */}
             <div className="flex items-center justify-between p-4 border-b border-zinc-800 bg-zinc-950/50">
-                <h2 className="text-sm font-bold tracking-widest uppercase text-zinc-400">
-                    {title || "SYSTEM LOG"}
+                <h2 className={`text-sm font-bold tracking-widest uppercase text-zinc-400 ${stage === 'stage2' ? 'animate-breathe' : ''}`}>
+                    {displayTitle || "SYSTEM LOG"}
                 </h2>
                 {/* Close Button */}
                 <button
@@ -115,57 +219,19 @@ export function DetailPanel({
                     </div>
                 )}
 
-                {type === 'stage2_thinking' && (
+                {type === 'stage2_mixed' && (
                     <div className="space-y-4">
-                        {Object.entries(data).map(([judgeId, judgeData]) => {
-                            // 获取针对当前 targetId 的思考步骤
-                            const targetSteps = judgeData.stepsByTarget?.[targetId] || [];
-                            const status = judgeData.status;
-
-                            // 如果这个 judge 没有针对当前 target 的 thinking，跳过
-                            if (targetSteps.length === 0 && status !== 'thinking') {
-                                return null;
-                            }
-
-                            const uiConfig = getCouncilorUIConfig(judgeId);
-                            // 获取最新的一条 thinking
-                            const latestStep = targetSteps[targetSteps.length - 1];
-
-                            return (
-                                <div key={judgeId} className="bg-zinc-950/50 border border-zinc-800 p-3 rounded">
-                                    {/* Judge Header */}
-                                    <div className="flex items-center gap-2 mb-2 pb-2 border-b border-zinc-800/50">
-                                        <div className="w-2 h-2 rounded-full" style={{ background: `var(--accent-${uiConfig.color})` }}></div>
-                                        <span className="text-xs font-bold text-zinc-300">{judgeId.toUpperCase()}</span>
-                                        {status === 'thinking' && (
-                                            <span className="text-xs text-orange-500 animate-pulse ml-auto">ANALYZING...</span>
-                                        )}
-                                        {status === 'done' && (
-                                            <span className="text-xs text-green-500 ml-auto">✓ COMPLETE</span>
-                                        )}
-                                    </div>
-
-                                    {/* Latest Thinking Step */}
-                                    {latestStep ? (
-                                        <div className="space-y-1">
-                                            <div className="text-sm font-medium text-zinc-300">
-                                                {latestStep.title}
-                                            </div>
-                                            {latestStep.detail && (
-                                                <div className="text-xs text-zinc-400 leading-relaxed opacity-80">
-                                                    {latestStep.detail}
-                                                </div>
-                                            )}
-                                        </div>
-                                    ) : (
-                                        <div className="text-xs text-zinc-600 font-mono animate-pulse">
-                                            Initializing analysis...
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })}
-                        {Object.keys(data).length === 0 && (
+                        {thinkingData && Object.entries(thinkingData).map(([judgeId, judgeData]) => (
+                            <JudgeCard
+                                key={judgeId}
+                                judgeId={judgeId}
+                                judgeData={judgeData}
+                                targetId={targetId}
+                                reviewComments={currentReviews}
+                                now={now}
+                            />
+                        ))}
+                        {(!thinkingData || Object.keys(thinkingData).length === 0) && (
                             <div className="text-zinc-600 text-xs font-mono animate-pulse">Waiting for judges...</div>
                         )}
                     </div>
