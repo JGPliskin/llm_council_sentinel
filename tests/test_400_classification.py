@@ -71,3 +71,13 @@ def test_classify_400_no_response():
     """Empty response -> other"""
     result = classify_400_error(None)
     assert result == ("other", True, True)
+
+def test_classify_provider_rate_limited():
+    """Provider rate limit should be retryable and not update health."""
+    response = {
+        "status_code": 429,
+        "error_code": "provider_rate_limited",
+        "content": "NIM API keys exhausted"
+    }
+    result = classify_400_error(response)
+    assert result == ("provider_rate_limited", True, False)

@@ -13,6 +13,13 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 # OpenRouter API endpoint
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+# ----------------------------
+# NIM Configuration
+# ----------------------------
+NIM_API_KEYS = [k.strip() for k in (os.getenv("NIM_API_KEYS") or "").split(",") if k.strip()]
+NIM_RPM_PER_KEY = int(os.getenv("NIM_RPM_PER_KEY", "40"))
+NIM_API_BASE = os.getenv("NIM_API_BASE", "https://integrate.api.nvidia.com/v1")
+
 # Data directory for conversation storage
 DATA_DIR = "data/conversations"
 
@@ -83,6 +90,119 @@ GLOBAL_MODEL_POOL = [
         "concurrency_limit": 3,
         "category": "reasoning",
         "capabilities": {"thinking": True, "mode": "tool"},
+    },
+    # NIM models
+    {
+        "id": "deepseek-ai/deepseek-v3.1",
+        "name": "DeepSeek V3.1 (NIM)",
+        "provider": "nim",
+        "concurrency_limit": 3,
+        "category": "reasoning",
+        "capabilities": {"thinking": True, "mode": "native"},
+    },
+    {
+        "id": "deepseek-ai/deepseek-v3.1-terminus",
+        "name": "DeepSeek V3.1 Terminus (NIM)",
+        "provider": "nim",
+        "concurrency_limit": 3,
+        "category": "reasoning",
+        "capabilities": {"thinking": True, "mode": "native"},
+    },
+    {
+        "id": "deepseek-ai/deepseek-r1",
+        "name": "DeepSeek R1 (NIM)",
+        "provider": "nim",
+        "concurrency_limit": 3,
+        "category": "reasoning",
+        "capabilities": {"thinking": True, "mode": "native"},
+    },
+    {
+        "id": "meta/llama-3.3-70b-instruct",
+        "name": "Llama 3.3 70B Instruct (NIM)",
+        "provider": "nim",
+        "concurrency_limit": 3,
+        "category": "general",
+        "capabilities": {"thinking": False, "mode": "native"},
+    },
+    {
+        "id": "nvidia/llama-3.3-nemotron-super-49b-v1",
+        "name": "Nemotron Super 49B (NIM)",
+        "provider": "nim",
+        "concurrency_limit": 3,
+        "category": "reasoning",
+        "capabilities": {"thinking": True, "mode": "native"},
+    },
+    {
+        "id": "nvidia/cosmos-reason2-8b",
+        "name": "Cosmos Reason2 8B (NIM)",
+        "provider": "nim",
+        "concurrency_limit": 3,
+        "category": "reasoning",
+        "capabilities": {"thinking": True, "mode": "native"},
+    },
+    {
+        "id": "mistralai/mixtral-8x22b-instruct-v0.1",
+        "name": "Mixtral 8x22B Instruct (NIM)",
+        "provider": "nim",
+        "concurrency_limit": 3,
+        "category": "general",
+        "capabilities": {"thinking": False, "mode": "native"},
+    },
+    {
+        "id": "google/gemma-3-27b-it",
+        "name": "Gemma 3 27B IT (NIM)",
+        "provider": "nim",
+        "concurrency_limit": 3,
+        "category": "general",
+        "capabilities": {"thinking": False, "mode": "native"},
+    },
+    {
+        "id": "openai/gpt-oss-120b",
+        "name": "GPT OSS 120B (NIM)",
+        "provider": "nim",
+        "concurrency_limit": 3,
+        "category": "general",
+        "capabilities": {"thinking": False, "mode": "native"},
+    },
+    {
+        "id": "moonshotai/kimi-k2-instruct-0905",
+        "name": "Kimi K2 Instruct 0905 (NIM)",
+        "provider": "nim",
+        "concurrency_limit": 3,
+        "category": "general",
+        "capabilities": {"thinking": False, "mode": "native"},
+    },
+    {
+        "id": "qwen/qwen2.5-coder-32b-instruct",
+        "name": "Qwen2.5 Coder 32B (NIM)",
+        "provider": "nim",
+        "concurrency_limit": 3,
+        "category": "coding",
+        "capabilities": {"thinking": False, "mode": "native"},
+    },
+    {
+        "id": "nvidia/nemotron-3-nano-30b-a3b",
+        "name": "Nemotron 3 Nano 30B (NIM)",
+        "provider": "nim",
+        "concurrency_limit": 3,
+        "category": "reasoning",
+        "capabilities": {"thinking": True, "mode": "native"},
+    },
+    {
+        "id": "minimaxai/minimax-m2.1",
+        "name": "Minimax M2.1 (NIM)",
+        "provider": "nim",
+        "concurrency_limit": 3,
+        "category": "general",
+        "capabilities": {"thinking": False, "mode": "native"},
+    },
+    {
+        "id": "z-ai/glm4.7",
+        "name": "GLM4.7 (NIM)",
+        "provider": "nim",
+        "concurrency_limit": 3,
+        "category": "general",
+        "capabilities": {"thinking": False, "mode": "native"},
     },
 ]
 

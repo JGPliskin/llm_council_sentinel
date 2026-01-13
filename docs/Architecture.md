@@ -18,6 +18,7 @@ LLM Council Sentinel 是一个多 LLM 协作决策系统，通过三阶段流程
 - **Thinking 工具**：支持 Stage1/2/3 思考流
 - **固定模型分配**：对话创建时分配模型并固定（schema_version=3）
 - **健康管理**：模型状态缓存、冷却、自动探测
+- **多供应商路由**：OpenRouter / NIM 统一路由，按模型配置选择供应商
 
 ---
 
@@ -57,6 +58,25 @@ Data Storage: `data/conversations/*.json`
 
 ---
 
+## 2.1 Provider 路由层（新增）
+
+```mermaid
+flowchart TD
+    Council[council.py] --> Router[llm_client.py]
+    Router -->|provider=openrouter| OR[openrouter.py]
+    Router -->|provider=nim| NIM[nim.py]
+    NIM --> KM[NIMKeyManager]
+    OR --> ORAPI[OpenRouter API]
+    NIM --> NIMAPI[NIM API]
+```
+
+**路由规则（固定优先级）**：
+1. `GLOBAL_MODEL_POOL[].provider`
+2. `model_id` 以 `nim:` 前缀（兼容/测试）
+3. 默认 OpenRouter
+
+**NIM 限流**：每个 Key 独立 Token Bucket，耗尽时返回 `provider_rate_limited`，不更新健康状态。
+
 ## 3. 模块职责
 
 ### 3.1 后端模块
@@ -65,6 +85,8 @@ Data Storage: `data/conversations/*.json`
 |---|---|---|
 | `main.py` | FastAPI 入口 | API 路由、SSE、限流、持久化、健康刷新 |
 | `council.py` | 编排引擎 | Stage1/2/3 并发执行、匿名映射、Thinking 注入 |
+| `llm_client.py` | 路由层 | 统一入口、provider 路由、响应标准化 |
+| `nim.py` | NIM 客户端 | 多 Key 轮替、Token Bucket、NIM SSE 解析 |
 | `openrouter.py` | LLM 客户端 | 流式解析、Tool Calls、Thinking 回调 |
 | `runtime_stats.py` | 运行时统计 | TTFT/Generation/Total EMA（按 model+stage） |
 | `concurrency_tracker.py` | 并发追踪 | per-model queued/inflight 统计，用于 ETA |
@@ -114,13 +136,18 @@ sequenceDiagram
     participant FE as Frontend
     participant BE as Backend
     participant C as Council
+    participant R as LLM Router
     participant OR as OpenRouter
+    participant NIM as NIM
 
     U->>FE: 输入问题
     FE->>BE: POST /message/stream
     BE->>C: Stage1 并发
-    C->>OR: LLM 调用
+    C->>R: LLM 调用
+    R->>OR: OpenRouter 请求（provider=openrouter）
+    R->>NIM: NIM 请求（provider=nim）
     OR-->>C: thinking/tool_calls
+    NIM-->>C: reasoning_content/content
     C-->>BE: thinking
     BE-->>FE: SSE thinking
 
@@ -134,8 +161,11 @@ sequenceDiagram
     C-->>BE: stage1_item / stage1_complete
     BE-->>FE: SSE stage1_item / stage1_complete
 
-    C->>OR: Stage2 评审
+    C->>R: Stage2 评审
+    R->>OR: OpenRouter 请求（provider=openrouter）
+    R->>NIM: NIM 请求（provider=nim）
     OR-->>C: thinking (target_anon_id)
+    NIM-->>C: reasoning_content/content
     C-->>BE: thinking
     BE-->>FE: SSE thinking (stage2)
 
@@ -146,8 +176,11 @@ sequenceDiagram
     C-->>BE: stage2_item / stage2_complete
     BE-->>FE: SSE stage2_item / stage2_complete
 
-    C->>OR: Stage3 综合
+    C->>R: Stage3 综合
+    R->>OR: OpenRouter 请求（provider=openrouter）
+    R->>NIM: NIM 请求（provider=nim）
     OR-->>C: thinking
+    NIM-->>C: reasoning_content/content
     C-->>BE: thinking
     BE-->>FE: SSE thinking (stage3)
 
@@ -159,6 +192,10 @@ sequenceDiagram
     BE-->>FE: SSE stage3_complete
     BE-->>FE: complete
 ```
+
+说明：
+- 当 provider 选择 NIM 时，`NIM-->>C` 的响应路径生效；OpenRouter 亦然。
+- `reasoning_content` 仅在 NIM / native thinking 模式下出现。
 
 ---
 
@@ -177,4 +214,4 @@ sequenceDiagram
 
 ---
 
-*Last updated: 2026-01-03*
+*Last updated: 2026-01-14*

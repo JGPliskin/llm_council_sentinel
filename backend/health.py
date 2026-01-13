@@ -181,6 +181,8 @@ class HealthManager:
             record.error = None
             record.source = source
         else:
+            if error_msg == "provider_rate_limited":
+                return
             record.last_checked = now # Check happened, even if failed
             record.source = source
             record.error = error_msg

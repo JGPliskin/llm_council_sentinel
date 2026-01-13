@@ -5,7 +5,7 @@ from typing import List, Optional, Dict, Any, Tuple
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from openrouter import query_model
+from llm_client import query_model
 from config import COUNCIL_SIZE, PROBE_TIMEOUT_SECONDS, GLOBAL_MODEL_POOL
 from health import health_manager
 
@@ -27,8 +27,7 @@ async def check_model_health_probe(model_id: str) -> Tuple[bool, Optional[str], 
     ttft_ms = None
     
     try:
-        # We assume openrouter.query_model returns dict with 'error', 'status_code' etc.
-        # based on our previous observation of openrouter.py
+        # We assume llm_client.query_model returns dict with 'error', 'status_code' etc.
         response = await query_model(
             model_id, 
             messages, 
@@ -43,6 +42,8 @@ async def check_model_health_probe(model_id: str) -> Tuple[bool, Optional[str], 
              return False, "No response", 500
              
         if response.get('error'):
+             if response.get("error_code") == "provider_rate_limited":
+                 return False, "provider_rate_limited", response.get("status_code")
              return False, response.get('content', 'Unknown error'), response.get('status_code')
         
         # 成功时更新 TTFT 统计

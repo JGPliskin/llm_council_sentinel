@@ -32,6 +32,12 @@
 
 ---
 
+### 1.4 供应商与模型标识
+
+- `model` 字段均为实际模型 ID，可能来自 OpenRouter 或 NIM。
+- 当模型由 `GLOBAL_MODEL_POOL.provider` 指定为 `nim` 时，无需 `nim:` 前缀；若外部传入 `nim:` 前缀，会被剥离并标准化。
+- API 响应中不直接返回 `provider` 字段，如需区分请对照 `GLOBAL_MODEL_POOL` 配置。
+
 ## 2. API 概览
 
 | 方法 | 路径 | 描述 | 认证 |
@@ -378,4 +384,4 @@ meta → stage1_start → [eta_update]* → [thinking]* → [stage1_item]* → s
 
 ---
 
-*Last updated: 2026-01-03*
+*Last updated: 2026-01-14*

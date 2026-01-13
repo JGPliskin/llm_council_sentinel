@@ -11,7 +11,7 @@ import time
 # Ensure backend directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from openrouter import query_model, stream_model
+from llm_client import query_model, stream_model
 from persona_loader import fetch_persona
 from config import (
     DEFAULT_CONCURRENCY_STAGE1,
@@ -168,6 +168,16 @@ def extract_thinking_from_content(content: str) -> Tuple[List[Dict[str, Any]], s
     return thinking_list, cleaned_content
 
 
+def resolve_thinking_mode(caps: Dict[str, Any]) -> Tuple[bool, bool]:
+    """Resolve thinking mode into (use_tools, use_native)."""
+    if not caps or not caps.get("thinking", False):
+        return False, False
+    mode = caps.get("mode", "tool")
+    if mode == "native":
+        return False, True
+    return True, False
+
+
 
 
 
@@ -175,6 +185,9 @@ def is_retryable_error(response_dict: Optional[Dict[str, Any]]) -> bool:
     """Check if the response indicates a retryable failure (Network/RateLimit)."""
     if not response_dict:
         return True  # No response usually implies timeout/network error
+
+    if response_dict.get("error_code") == "provider_rate_limited":
+        return False
     
     # Check for explicit 'error' flag from openrouter.py
     if response_dict.get("error"):
@@ -236,6 +249,9 @@ def classify_400_error(response_dict: Optional[Dict[str, Any]]) -> Tuple[str, bo
     """
     if not response_dict:
         return ("other", True, True)
+
+    if response_dict.get("error_code") == "provider_rate_limited":
+        return ("provider_rate_limited", True, False)
     
     status_code = response_dict.get("status_code")
     
@@ -645,8 +661,10 @@ async def _request_stage1_bounded(
                     model_cfg = GLOBAL_MODEL_MAP.get(selected_model, {})
                     caps = model_cfg.get("capabilities", {})
 
-                    can_think = caps.get("thinking", False)
-                    use_tools = enable_thinking and can_think and on_thinking
+                    use_tools, use_native = resolve_thinking_mode(caps)
+                    use_tools = enable_thinking and on_thinking and use_tools
+                    use_native = enable_thinking and on_thinking and use_native
+                    use_stream = use_tools or use_native or on_answer_delta
 
                     async def _think_cb(payload: Any):
                         if not on_thinking:
@@ -665,15 +683,23 @@ async def _request_stage1_bounded(
                             else:
                                 on_answer_delta(councilor["id"], delta)
 
-                    response = await stream_model(
-                        selected_model,
-                        model_messages,
-                        on_thinking=_think_cb if use_tools else None,
-                        on_content=_content_cb,
-                        timeout=timeout,
-                        max_output_tokens=max_tokens,
-                        tools=THINKING_TOOL_DEF if use_tools else None
-                    )
+                    if use_stream:
+                        response = await stream_model(
+                            selected_model,
+                            model_messages,
+                            on_thinking=_think_cb if (use_tools or use_native) else None,
+                            on_content=_content_cb,
+                            timeout=timeout,
+                            max_output_tokens=max_tokens,
+                            tools=THINKING_TOOL_DEF if use_tools else None,
+                        )
+                    else:
+                        response = await query_model(
+                            selected_model,
+                            model_messages,
+                            timeout=timeout,
+                            max_output_tokens=max_tokens,
+                        )
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -1304,9 +1330,11 @@ async def _collect_single_ranking_bounded(
                             # Check Capabilities
                             model_cfg = GLOBAL_MODEL_MAP.get(selected_model, {})
                             caps = model_cfg.get("capabilities", {})
-                            can_think = caps.get("thinking", False)
+                            use_tools, use_native = resolve_thinking_mode(caps)
+                            use_tools = enable_thinking and on_thinking and use_tools
+                            use_native = enable_thinking and on_thinking and use_native
 
-                            if can_think and on_thinking:
+                            if use_tools or use_native:
                                 async def _think_cb(payload: Any):
                                     if on_thinking:
                                         if isinstance(payload, dict):
@@ -1318,10 +1346,10 @@ async def _collect_single_ranking_bounded(
                                 response = await stream_model(
                                     selected_model,
                                     current_messages,
-                                    on_thinking=_think_cb,
+                                    on_thinking=_think_cb if (use_tools or use_native) else None,
                                     timeout=timeout,
                                     max_output_tokens=max_tokens,
-                                    tools=THINKING_TOOL_DEF
+                                    tools=THINKING_TOOL_DEF if use_tools else None
                                 )
                             else:
                                 response = await query_model(selected_model, current_messages, timeout=timeout, max_output_tokens=max_tokens)
@@ -1850,10 +1878,10 @@ async def stage3_synthesize_final(
                     # Check Capabilities
                     model_cfg = GLOBAL_MODEL_MAP.get(selected_model, {})
                     caps = model_cfg.get("capabilities", {})
-                    can_think = caps.get("thinking", False)
-
-                    use_tools = enable_thinking and can_think and on_thinking
-                    use_stream = use_tools or on_answer_delta
+                    use_tools, use_native = resolve_thinking_mode(caps)
+                    use_tools = enable_thinking and on_thinking and use_tools
+                    use_native = enable_thinking and on_thinking and use_native
+                    use_stream = use_tools or use_native or on_answer_delta
 
                     async def _content_cb(delta: str):
                         if not on_answer_delta:
@@ -1865,7 +1893,7 @@ async def stage3_synthesize_final(
 
                     if use_stream:
                         async def _think_cb(payload: Any):
-                            if not use_tools or not on_thinking:
+                            if not on_thinking:
                                 return
                             if isinstance(payload, dict):
                                 thinking_payload = payload
@@ -1876,7 +1904,7 @@ async def stage3_synthesize_final(
                         response = await stream_model(
                             selected_model,
                             messages,
-                            on_thinking=_think_cb if use_tools else None,
+                            on_thinking=_think_cb if (use_tools or use_native) else None,
                             on_content=_content_cb if on_answer_delta else None,
                             timeout=timeout,
                             max_output_tokens=max_tokens,

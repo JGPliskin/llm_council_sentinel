@@ -11,6 +11,8 @@
 - **Stage3 共识综合**：主席模型输出最终结论
 - **SSE 流式输出**：Thinking 与答案增量实时推送
 - **固定模型分配**：对话创建时分配并固定模型（schema_version=3）
+- **多供应商路由**：OpenRouter / NIM 统一路由，按模型配置自动选择供应商
+- **NIM Key 轮替限流**：多 Key 轮替，单 Key RPM 受控
 
 ---
 
@@ -50,7 +52,15 @@ cd ..
 
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-...
+NIM_API_KEYS=nvapi-xxxxx,nvapi-yyyyy
+NIM_RPM_PER_KEY=40
+NIM_API_BASE=https://integrate.api.nvidia.com/v1
 ```
+
+说明：
+- `NIM_API_KEYS` 为必填（逗号分隔），替代单 Key 的 `NIM_API_KEY`。
+- `NIM_RPM_PER_KEY` 默认 40，可按实际配额调整。
+- `NIM_API_BASE` 可选，默认 `https://integrate.api.nvidia.com/v1`。
 
 ---
 
@@ -91,6 +101,10 @@ docker-compose up -d
 - `COUNCILORS`: Stage1/Stage2 评审员
 - `CHAIRMAN`: Stage3 主席
 
+补充说明：
+- `GLOBAL_MODEL_POOL` 中新增 `provider` 字段（`openrouter` / `nim`），缺省即 OpenRouter。
+- NIM 模型无需 `nim:` 前缀；仅在临时输入时使用 `nim:` 作为兼容路由。
+
 ---
 
 ## 6. 文档索引
@@ -100,7 +114,7 @@ docker-compose up -d
 - `docs/DATA_SCHEMA.md` - 数据模型
 - `docs/配置说明.md` - 配置参数
 - `docs/UI_STYLE_GUIDE.md` - UI 样式规范
-- `docs/开发文档/stage2-thinking-stream.md` - Stage2 Thinking 方案
+- `docs/开发文档/NIM_API_Integration_Design.md` - NIM 集成设计
 
 ---
 
@@ -110,4 +124,4 @@ docker-compose up -d
 
 ---
 
-*Last updated: 2026-01-03*
+*Last updated: 2026-01-14*
