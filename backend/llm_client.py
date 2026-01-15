@@ -1,5 +1,6 @@
 """Provider routing layer for LLM requests."""
 
+import asyncio
 from typing import List, Dict, Any, Optional, Callable, Tuple
 
 from config import GLOBAL_MODEL_MAP
@@ -42,10 +43,31 @@ async def stream_model(
 ) -> Optional[Dict[str, Any]]:
     provider, resolved_model = _resolve_provider(model)
     if provider == "nim":
+        # Adapter to convert NIM raw stream to Application Thinking Events
+        async def _nim_adapter(payload: Dict[str, Any]):
+            if not on_thinking:
+                return
+
+            if isinstance(payload, dict) and payload.get("type") == "reasoning_delta":
+                event = {
+                    "title": "Thinking Process",
+                    "detail": payload.get("delta", ""),
+                    "op": "append",
+                }
+            elif isinstance(payload, dict):
+                event = payload
+            else:
+                event = {"title": str(payload)}
+
+            if asyncio.iscoroutinefunction(on_thinking):
+                await on_thinking(event)
+            else:
+                on_thinking(event)
+
         response = await nim.stream_model(
             model=resolved_model,
             messages=messages,
-            on_thinking=on_thinking,
+            on_thinking=_nim_adapter if on_thinking else None,
             on_content=on_content,
             timeout=timeout,
             max_output_tokens=max_output_tokens,

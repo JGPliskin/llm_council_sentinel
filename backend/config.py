@@ -220,6 +220,9 @@ COUNCILORS = [
             "nvidia/nemotron-3-nano-30b-a3b:free",
             "nvidia/nemotron-nano-12b-v2-vl:free",
             "tngtech/tng-r1t-chimera:free",
+            "deepseek-ai/deepseek-r1",
+            "deepseek-ai/deepseek-v3.1",
+            "nvidia/llama-3.3-nemotron-super-49b-v1",
         ],
         "avatar": "🧠",
         "persona_path": "backend/personas/immanuel_kant.md",
@@ -244,6 +247,9 @@ COUNCILORS = [
             "nvidia/nemotron-3-nano-30b-a3b:free",
             "nvidia/nemotron-nano-12b-v2-vl:free",
             "tngtech/tng-r1t-chimera:free",
+            "deepseek-ai/deepseek-r1",
+            "deepseek-ai/deepseek-v3.1",
+            "nvidia/llama-3.3-nemotron-super-49b-v1",
         ],
         "avatar": "🧱",
         "persona_path": "backend/personas/donald_trump.md",
@@ -268,6 +274,9 @@ COUNCILORS = [
             "nvidia/nemotron-3-nano-30b-a3b:free",
             "nvidia/nemotron-nano-12b-v2-vl:free",
             "tngtech/tng-r1t-chimera:free",
+            "deepseek-ai/deepseek-r1",
+            "deepseek-ai/deepseek-v3.1",
+            "nvidia/llama-3.3-nemotron-super-49b-v1",
         ],
         "avatar": "🎮",
         "persona_path": "backend/personas/hideo_kojima.md",
@@ -294,6 +303,9 @@ CHAIRMAN = {
         "nvidia/nemotron-3-nano-30b-a3b:free",
         "nvidia/nemotron-nano-12b-v2-vl:free",
         "tngtech/tng-r1t-chimera:free",
+        "deepseek-ai/deepseek-r1",
+        "deepseek-ai/deepseek-v3.1",
+        "nvidia/llama-3.3-nemotron-super-49b-v1",
     ],
     "avatar": "🪶",
     "persona_path": "backend/personas/chairman.md",
@@ -355,4 +367,3 @@ DEFAULT_ETA_CONFIG = {
     "default_queue_wait_ms": 1000,   # 默认队列等待时间 (ms)
     "warmup_sample_count": 3,        # EMA 启动所需最小样本数
 }
-

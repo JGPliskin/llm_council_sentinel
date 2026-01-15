@@ -3,6 +3,7 @@
 import asyncio
 import json
 import time
+import re
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Callable
 
@@ -110,6 +111,35 @@ def _build_error_response(
     }
 
 
+def _detect_target_anon_id(text: str) -> Optional[str]:
+    matches = re.findall(r"\banon_\d+\b", text or "")
+    if not matches:
+        return None
+    return matches[-1]
+
+
+def _extract_segments(buffer: str, max_len: int = 160) -> tuple[List[str], str]:
+    if not buffer:
+        return [], ""
+    parts = re.split(r"(?<=[\u3002\uFF01\uFF1F\uFF1B.!?;\n])", buffer)
+    if len(parts) <= 1:
+        if len(buffer) > max_len:
+            return [buffer[:max_len].strip()], buffer[max_len:].lstrip()
+        return [], buffer
+    complete = [p.strip() for p in parts[:-1] if p.strip()]
+    remainder = parts[-1].strip()
+    return complete, remainder
+
+
+def _format_title(segment: str, index: int) -> str:
+    title = re.sub(r"^[\-\*\d\.\)\s]+", "", segment.replace("\n", " ").strip())
+    if not title:
+        return f"Step {index}"
+    if len(title) > 24:
+        return f"{title[:24]}..."
+    return title
+
+
 async def _request_once(
     client: httpx.AsyncClient,
     api_key: str,
@@ -174,7 +204,10 @@ async def _request_once(
     response_model = model
     content_buffer: List[str] = []
     reasoning_buffer: List[str] = []
-    bullet_id = f"nim_reasoning_{int(request_start * 1000)}"
+    bullet_prefix = f"nim_reasoning_{int(request_start * 1000)}"
+    bullet_index = 0
+    thinking_pending = ""
+    current_target_anon: Optional[str] = None
 
     async with client.stream(
         "POST", NIM_API_URL, headers=headers, json=payload, timeout=timeout
@@ -213,17 +246,26 @@ async def _request_once(
                     ttft_ms = int((time.time() - request_start) * 1000)
                     ttft_recorded = True
                 reasoning_buffer.append(reasoning_delta)
+                thinking_pending += reasoning_delta
                 if on_thinking:
-                    payload = {
-                        "bullet_id": bullet_id,
-                        "title": "Reasoning",
-                        "detail": "".join(reasoning_buffer),
-                        "op": "update",
-                    }
-                    if asyncio.iscoroutinefunction(on_thinking):
-                        await on_thinking(payload)
-                    else:
-                        on_thinking(payload)
+                    segments, thinking_pending = _extract_segments(thinking_pending)
+                    for segment in segments:
+                        bullet_index += 1
+                        target = _detect_target_anon_id(segment) or current_target_anon
+                        if target:
+                            current_target_anon = target
+                        payload = {
+                            "bullet_id": f"{bullet_prefix}_{bullet_index}",
+                            "title": _format_title(segment, bullet_index),
+                            "detail": segment,
+                            "op": "append",
+                        }
+                        if target:
+                            payload["target_anon_id"] = target
+                        if asyncio.iscoroutinefunction(on_thinking):
+                            await on_thinking(payload)
+                        else:
+                            on_thinking(payload)
 
             content_delta = delta.get("content")
             if content_delta:
@@ -236,6 +278,23 @@ async def _request_once(
                         await on_content(content_delta)
                     else:
                         on_content(content_delta)
+
+    if on_thinking and thinking_pending.strip():
+        bullet_index += 1
+        segment = thinking_pending.strip()
+        target = _detect_target_anon_id(segment) or current_target_anon
+        payload = {
+            "bullet_id": f"{bullet_prefix}_{bullet_index}",
+            "title": _format_title(segment, bullet_index),
+            "detail": segment,
+            "op": "append",
+        }
+        if target:
+            payload["target_anon_id"] = target
+        if asyncio.iscoroutinefunction(on_thinking):
+            await on_thinking(payload)
+        else:
+            on_thinking(payload)
 
     return {
         "content": "".join(content_buffer),
@@ -363,4 +422,3 @@ async def query_model(
             status_code=429,
             error_code="provider_rate_limited",
         )
-
