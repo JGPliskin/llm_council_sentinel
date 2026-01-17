@@ -2,12 +2,15 @@
 
 import httpx
 import json
-import re
 import time
-import inspect
 import asyncio
+import logging
+import re
+import inspect
 from typing import List, Dict, Any, Optional, Callable
 from config import NIM_API_KEYS, NIM_RPM_PER_KEY, NIM_API_BASE
+
+logger = logging.getLogger("nim")
 
 
 class NIMKeyManager:
@@ -81,6 +84,11 @@ class NIMKeyManager:
                 # Refill bucket
                 self._refill_bucket(bucket)
 
+                # Debug: log token state
+                logger.debug(
+                    f"Key {key[:8]}...: tokens={bucket['tokens']}, cooldown={bucket['cooldown_until']}"
+                )
+
                 # Select key with most available tokens (load balancing)
                 if bucket["tokens"] > 0 and bucket["tokens"] > max_tokens:
                     max_tokens = bucket["tokens"]
@@ -89,16 +97,26 @@ class NIMKeyManager:
             if best_key:
                 # Consume one token
                 self.key_buckets[best_key]["tokens"] -= 1
+                logger.debug(
+                    f"Acquired key {best_key[:8]}..., tokens left: {self.key_buckets[best_key]['tokens']}"
+                )
                 return best_key
 
             # No keys available
+            logger.warning(
+                f"No NIM keys available! All buckets exhausted or in cooldown."
+            )
             return None
 
     async def release_key(self, key: str, success: bool = True) -> None:
         """
         Release key after request completion.
 
-        On failure, marks key as temporarily cooled (1 minute).
+        On success: token is consumed (no action needed - token was already deducted on acquire)
+        On failure: marks key as temporarily cooled (1 minute) and optionally returns token.
+
+        Note: Token consumption happens at acquire_key() time, not release.
+        Refill happens automatically based on elapsed time.
 
         Args:
             key: API key string
