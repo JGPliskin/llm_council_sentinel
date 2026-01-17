@@ -57,7 +57,7 @@ def _strip_prefix(model_id: str, provider: str) -> str:
     if provider == "nim" and model_id.startswith("nim:"):
         return model_id[4:]
     if provider == "openrouter" and model_id.startswith("openrouter:"):
-        return model_id[12:]
+        return model_id[11:]  # "openrouter:" is 11 characters
     return model_id
 
 

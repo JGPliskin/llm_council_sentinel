@@ -138,8 +138,10 @@
 }
 ```
 
-**说明**：
-- 固定分配失败时，`model_assignments` 可能为空，`schema_version` 回退为 2。
+### 3.2.1 ID规范 update
+- OpenRouter 模型推荐使用 `openrouter:` 前缀（如 `openrouter:xiaomi/mimo-v2-flash:free`）
+- NIM 模型推荐使用 `nim:` 前缀（如 `nim:deepseek-ai/deepseek-v3.1`）
+- **兼容性**：若不带前缀，系统尝试根据 `provider` 配置或字符串特征自动推断，但推荐显式带前缀。
 
 ---
 
@@ -378,4 +380,4 @@ meta → stage1_start → [eta_update]* → [thinking]* → [stage1_item]* → s
 
 ---
 
-*Last updated: 2026-01-03*
+*Last updated: 2026-01-18*

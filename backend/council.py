@@ -29,6 +29,7 @@ from config import (
     REQUEST_ERROR_KEYWORDS,
     MODEL_ERROR_KEYWORDS,
     DEFAULT_ETA_CONFIG,
+    SUMMARY_MODEL_CANDIDATES,
 )
 from health import health_manager
 from logger import log_request_timing
@@ -40,7 +41,7 @@ THINKING_TOOL_DEF = [
         "type": "function",
         "function": {
             "name": "emit_thinking",
-            "description": "Emit a thinking step payload for UI display.",
+            "description": "Output thinking steps. Call this MULTIPLE times BEFORE the final answer.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -239,6 +240,12 @@ def classify_400_error(
     """
     if not response_dict:
         return ("other", True, True)
+
+    # Special case: provider_rate_limited (NIM key exhaustion)
+    # Should retry other models but NOT update health status
+    error_code = response_dict.get("error_code")
+    if error_code == "provider_rate_limited":
+        return ("provider_rate_limited", True, False)
 
     status_code = response_dict.get("status_code")
 
@@ -637,6 +644,7 @@ async def _request_stage1_bounded(
             # No healthy models available
             break
 
+        
         model_sem = await model_concurrency_manager.get_semaphore(selected_model)
 
         model_messages = [
@@ -2205,22 +2213,46 @@ async def generate_conversation_title(user_query: str) -> str:
     title_prompt = calculate_conversation_title_prompt(user_query)
     messages = [{"role": "user", "content": title_prompt}]
 
-    try:
-        response = await query_model(
-            "kwaipilot/kat-coder-pro:free", messages, timeout=30.0
+    # Auto-select best healthy model from candidates
+    excluded_models = set()
+    attempted_models = []
+    
+    # Try up to 2 models
+    for _ in range(2):
+        selected_model = select_best_model(
+            SUMMARY_MODEL_CANDIDATES,
+            excluded_models,
+            auto_route_by_speed=True
         )
+        
+        if not selected_model:
+            break
+            
+        try:
+            response = await query_model(
+                selected_model, messages, timeout=30.0
+            )
 
-        if response is None:
-            return "New Conversation"
+            if response is None or response.get("error"):
+                excluded_models.add(selected_model)
+                continue
 
-        title = response.get("content", "New Conversation").strip()
-        title = title.strip("\"'")
-        if len(title) > 50:
-            title = title[:47] + "..."
+            title = response.get("content", "New Conversation").strip()
+            title = title.strip("\"'")
+            if len(title) > 50:
+                title = title[:47] + "..."
 
-        return title
-    except Exception:
-        return "New Conversation"
+            # Success
+            health_manager.update_status(selected_model, True, source="runtime")
+            return title
+            
+        except Exception:
+            health_manager.update_status(selected_model, False, "Summary generation failed", 500, source="runtime")
+            excluded_models.add(selected_model)
+            continue
+
+    # All attempts failed
+    return "New Conversation"
 
 
 async def run_full_council(

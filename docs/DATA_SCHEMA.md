@@ -27,9 +27,9 @@
   "active_councilor_ids": ["immanuel_kant", "donald_trump", "hideo_kojima"],
   "active_chairman": "chairman",
   "model_assignments": {
-    "immanuel_kant": "nvidia/nemotron-3-nano-30b-a3b:free",
-    "donald_trump": "xiaomi/mimo-v2-flash:free",
-    "chairman": "xiaomi/mimo-v2-flash:free"
+    "immanuel_kant": "openrouter:nvidia/nemotron-3-nano-30b-a3b:free",
+    "donald_trump": "nim:deepseek-ai/deepseek-v3.1",
+    "chairman": "openrouter:xiaomi/mimo-v2-flash:free"
   },
   "assignment_seed": "2026-01-03T03:01:00Z-xxxx",
   "assignment_strategy": "healthy_first",
@@ -208,10 +208,10 @@
 |---|---|---|
 | `conversation_id` | UUID v4 | `550e8400-e29b-41d4-a716-446655440000` |
 | `councilor_id` | 小写字母+下划线 | `immanuel_kant` |
-| `model` | OpenRouter 格式 | `xiaomi/mimo-v2-flash:free` |
+| `model` | 推荐带前缀 `provider:` | `nim:deepseek-ai/deepseek-v3.1` / `openrouter:xiaomi/mimo-v2-flash:free` |
 | `anon_id` | `anon_` + 数字 | `anon_1` |
 | `bullet_id` | `{cid}-{stage}-{seq}` | `immanuel_kant-stage1-1` |
 
 ---
 
-*Last updated: 2026-01-03*
+*Last updated: 2026-01-18*

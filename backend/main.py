@@ -854,6 +854,11 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
             active_councilors, needs_migration, ignored_ids = resolve_target_councilors(
                 effective_councilor_ids, conversation
             )
+            
+            # 如果 model_assignments 存在但 active_councilors 为空，从 model_assignments 获取 councilor IDs
+            if model_assignments and not active_councilors:
+                assigned_ids = [k for k in model_assignments.keys() if k != "chairman"]
+                active_councilors = [COUNCILOR_MAP[cid] for cid in assigned_ids if cid in COUNCILOR_MAP]
 
             # schema_version=3 但无分配：首次发送补分配
             if schema_version >= 3 and not model_assignments:

@@ -102,9 +102,19 @@ class NIMKeyManager:
                 )
                 return best_key
 
-            # No keys available
+            # No keys available - provide detailed diagnostics
+            now = time.time()
+            diagnostics = []
+            for key, bucket in self.key_buckets.items():
+                key_short = key[:8] + "..."
+                if bucket["cooldown_until"] and now < bucket["cooldown_until"]:
+                    remaining = int(bucket["cooldown_until"] - now)
+                    diagnostics.append(f"{key_short}: cooldown ({remaining}s remaining)")
+                else:
+                    diagnostics.append(f"{key_short}: tokens={bucket['tokens']:.1f}")
+            
             logger.warning(
-                f"No NIM keys available! All buckets exhausted or in cooldown."
+                f"No NIM keys available! Diagnostics: {'; '.join(diagnostics)}"
             )
             return None
 
@@ -130,6 +140,7 @@ class NIMKeyManager:
                 # Mark key as temporarily cooled on failure
                 bucket = self.key_buckets[key]
                 bucket["cooldown_until"] = time.time() + 60  # 1 min cooldown
+                logger.warning(f"Key {key[:8]}... set to cooldown due to failure (60s)")
 
     async def mark_key_failed(
         self, key: str, status_code: Optional[int] = None
@@ -161,6 +172,7 @@ class NIMKeyManager:
                 cooldown_time = 300
 
             bucket["cooldown_until"] = time.time() + cooldown_time
+            logger.warning(f"Key {key[:8]}... marked failed with status_code={status_code}, cooldown={cooldown_time}s")
 
 
 # Global key manager instance
@@ -191,6 +203,12 @@ def _parse_error_body(response: httpx.Response) -> Dict[str, Any]:
         return response.json()
     except (json.JSONDecodeError, ValueError):
         return {"raw_text": response.text}
+
+def _looks_like_emit_thinking(args_str: str) -> bool:
+    """Check if arguments string looks like it belongs to emit_thinking."""
+    if not args_str:
+        return False
+    return "title" in args_str or "bullet_id" in args_str
 
 
 async def stream_model(
@@ -281,6 +299,13 @@ async def stream_model(
                     "stream": True,
                 }
 
+                if "deepseek" in model:
+                     # Match settings from working test script
+                     payload["temperature"] = payload.get("temperature", 0.6)
+                     payload["top_p"] = payload.get("top_p", 0.7)
+                     if max_output_tokens is None:
+                         payload["max_tokens"] = 4096
+
                 if max_output_tokens is not None:
                     payload["max_tokens"] = max_output_tokens
                 if tools:
@@ -299,7 +324,32 @@ async def stream_model(
                         headers=headers,
                         json=payload,
                     ) as response:
-                        response.raise_for_status()
+                        # Check for HTTP errors before reading stream
+                        if response.status_code >= 400:
+                            # Must read body before accessing content in streaming context
+                            await response.aread()
+                            error_payload = _parse_error_body(response)
+                            status_code = response.status_code
+                            
+                            # Log detailed error info
+                            error_msg = error_payload.get('error', {}).get('message') or error_payload.get('detail') or str(error_payload)
+                            logger.error(f"NIM HTTP {status_code} for model={model}: {error_msg}")
+                            
+                            # Handle rate limit (429) - mark key as failed
+                            if status_code == 429:
+                                await key_manager.mark_key_failed(api_key, status_code=429)
+                            elif status_code in [401, 403]:
+                                await key_manager.mark_key_failed(api_key, status_code=status_code)
+                            
+                            return {
+                                "error": True,
+                                "status_code": status_code,
+                                "headers": dict(response.headers),
+                                "error_payload": error_payload,
+                                "content": f"HTTP {status_code}: {error_msg}",
+                                "model": model,
+                                "provider": "nim",
+                            }
 
                         async for line in response.aiter_lines():
                             if not line.startswith("data: "):
@@ -317,7 +367,10 @@ async def stream_model(
                             if "model" in chunk:
                                 response_model = chunk["model"]
 
-                            choice = chunk.get("choices", [{}])[0]
+                            choices = chunk.get("choices", [])
+                            if not choices:
+                                continue  # Skip chunks with empty choices
+                            choice = choices[0]
                             delta = choice.get("delta", {})
 
                             # Check finish_reason
@@ -374,8 +427,14 @@ async def stream_model(
                                             ]
 
                                     # Try to parse emit_thinking and trigger callback
-                                    if tool_call_buffer[idx]["name"] == "emit_thinking":
-                                        args_str = tool_call_buffer[idx]["arguments"]
+                                    # FIX: Check if name is emit_thinking OR matches heuristic (for DeepSeek)
+                                    current_name = tool_call_buffer[idx]["name"]
+                                    args_str = tool_call_buffer[idx]["arguments"]
+                                    
+                                    is_thinking = (current_name == "emit_thinking") or \
+                                                  (not current_name and _looks_like_emit_thinking(args_str))
+
+                                    if is_thinking:
                                         if args_str.strip():
                                             try:
                                                 args_json = json.loads(args_str)
@@ -471,12 +530,22 @@ async def stream_model(
                     }
 
                     for idx, tc_data in sorted(tool_call_buffer.items()):
+                        # FIX: Ensure name is not None or empty
+                        tool_name = tc_data["name"]
+                        if not tool_name:
+                            # Heuristic: if we parsed emit_thinking arguments successfully, use that name
+                            # Or default to emit_thinking if it looks like one
+                            if _looks_like_emit_thinking(tc_data["arguments"]):
+                                tool_name = "emit_thinking"
+                            else:
+                                tool_name = "emit_thinking" # Default fallback to avoid 500 error
+
                         assistant_msg["tool_calls"].append(
                             {
                                 "id": tc_data["id"],
                                 "type": "function",
                                 "function": {
-                                    "name": tc_data["name"],
+                                    "name": tool_name,
                                     "arguments": tc_data["arguments"],
                                 },
                             }
@@ -568,7 +637,9 @@ async def stream_model(
 
     except Exception as e:
         # Other errors (network timeout, connection failure, etc.)
-        await key_manager.release_key(api_key, success=False)
+        logger.error(f"NIM stream_model exception: {type(e).__name__}: {e}")
+        if api_key:
+            await key_manager.release_key(api_key, success=False)
 
         return {
             "error": True,

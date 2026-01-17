@@ -50,6 +50,7 @@ cd ..
 
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-...
+NIM_API_KEYS=nvapi-...,nvapi-...  # 可配置多个 Key 轮替
 ```
 
 ---
@@ -110,4 +111,4 @@ docker-compose up -d
 
 ---
 
-*Last updated: 2026-01-03*
+*Last updated: 2026-01-18*
