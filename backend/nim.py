@@ -334,6 +334,12 @@ async def stream_model(
                             # Log detailed error info
                             error_msg = error_payload.get('error', {}).get('message') or error_payload.get('detail') or str(error_payload)
                             logger.error(f"NIM HTTP {status_code} for model={model}: {error_msg}")
+                            # Debug: Log full payload on 400 errors to diagnose unexpected end of data
+                            if status_code == 400:
+                                try:
+                                    logger.error(f"Failed Payload (trunc 2000 chars): {json.dumps(payload)[:2000]}")
+                                except Exception:
+                                    pass
                             
                             # Handle rate limit (429) - mark key as failed
                             if status_code == 429:
@@ -539,6 +545,8 @@ async def stream_model(
                                 tool_name = "emit_thinking"
                             else:
                                 tool_name = "emit_thinking" # Default fallback to avoid 500 error
+                            # Persist fallback name so the tool result loop uses it correctly
+                            tc_data["name"] = tool_name
 
                         assistant_msg["tool_calls"].append(
                             {

@@ -6,7 +6,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, field_validator
 from typing import List, Dict, Any, Optional, Tuple
@@ -429,7 +429,7 @@ async def delete_conversation(conversation_id: str, token: str = Depends(verify_
         
     try:
         storage.delete_conversation(conversation_id)
-        return JSONResponse(status_code=204, content=None)
+        return Response(status_code=204)
     except OSError as e:
         # Permission denied or locked (storage logic raises this)
         import errno
