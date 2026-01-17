@@ -1,0 +1,187 @@
+{
+  "id": "e95e1dc6-70e5-47e9-a514-d1a7ddd023fd",
+  "created_at": "2026-01-17T10:09:23.838734",
+  "title": "Client error '401 Unauthorized' for url 'https:...",
+  "messages": [
+    {
+      "role": "user",
+      "content": "\u60f3\u6253\u4eba\u4e86"
+    },
+    {
+      "role": "assistant",
+      "stage1": [
+        {
+          "councilor_id": "immanuel_kant",
+          "councilor_name": "\u5eb7\u5fb7",
+          "model": "nim:openai/gpt-oss-120b",
+          "status": "ok",
+          "answer_markdown": "{\n \"response\": \"\u6211\u80fd\u611f\u53d7\u5230\u4f60\u73b0\u5728\u975e\u5e38\u51b2\u52a8\uff0c\u53ef\u80fd\u662f\u56e0\u4e3a\u53d7\u5230\u4e86\u538b\u6291\u3001\u8bef\u89e3\u6216\u5176\u4ed6\u5f3a\u70c8\u523a\u6fc0\u3002\u5148\u5c1d\u8bd5\u6df1\u547c\u5438\u51e0\u6b21\uff0c\u8ba9\u8eab\u4f53\u7a0d\u5fae\u653e\u677e\uff1b\u5982\u679c\u53ef\u4ee5\uff0c\u79bb\u5f00\u8ba9\u4f60\u4ea7\u751f\u6012\u6c14\u7684\u73af\u5883\uff0c\u627e\u4e00\u4e2a\u5b89\u9759\u7684\u5730\u65b9\u5750\u4e0b\u6765\uff0c\u7ed9\u81ea\u5df1\u51e0\u5206\u949f\u65f6\u95f4\u3002\u53ef\u4ee5\u628a\u5fc3\u4e2d\u7684\u4e0d\u6ee1\u5199\u4e0b\u6765\uff0c\u6216\u7528\u62f3\u51fb\u6c99\u888b\u3001\u8dd1\u6b65\u7b49\u5b89\u5168\u7684\u65b9\u5f0f\u53d1\u6cc4\u4f53\u529b\uff0c\u907f\u514d\u76f4\u63a5\u4f24\u5bb3\u4ed6\u4eba\u6216\u81ea\u5df1\u3002\u5982\u679c\u60c5\u7eea\u6301\u7eed\u5931\u63a7\u6216\u6709\u4f24\u4eba\u5ff5\u5934\uff0c\u5efa\u8bae\u7acb\u5373\u8054\u7cfb\u4eb2\u53cb\u6216\u4e13\u4e1a\u7684\u5fc3\u7406\u70ed\u7ebf\uff08\u5982\u5168\u56fd\u5fc3\u7406\u63f4\u52a9\u70ed\u7ebf\u202f12320\uff09\uff0c\u83b7\u53d6\u5373\u65f6\u5e2e\u52a9\u3002\u8bb0\u4f4f\uff0c\u51b2\u52a8\u662f\u6682\u65f6\u7684\uff0c\u4f60\u6709\u80fd\u529b\u901a\u8fc7\u5b89\u5168\u7684\u65b9\u5f0f\u5ea6\u8fc7\u8fd9\u6bb5\u60c5\u7eea\u9ad8\u5cf0\u3002\"\n}",
+          "attempted_models": [
+            "nim:deepseek-ai/deepseek-v3.1-terminus",
+            "nim:openai/gpt-oss-120b"
+          ],
+          "fallback_used": true,
+          "fallback_reason": "unknown_400",
+          "extracted_thinking_count": 0
+        },
+        {
+          "councilor_id": "hideo_kojima",
+          "councilor_name": "\u5c0f\u5c9b\u79c0\u592b",
+          "model": "nim:openai/gpt-oss-120b",
+          "status": "ok",
+          "answer_markdown": "{\n \"answer\": \"\u6211\u80fd\u7406\u89e3\u4f60\u73b0\u5728\u60c5\u7eea\u975e\u5e38\u6fc0\u52a8\uff0c\u51b2\u52a8\u60f3\u8981\u52a8\u624b\u7684\u611f\u53d7\u5e38\u5e38\u8ba9\u4eba\u611f\u5230\u65e0\u52a9\u3002\u4e0b\u9762\u63d0\u4f9b\u51e0\u79cd\u53ef\u4ee5\u5e2e\u52a9\u4f60\u7f13\u89e3\u8fd9\u79cd\u51b2\u52a8\u7684\u65b9\u5f0f\uff1a\\n\\n1. **\u6682\u505c\u5e76\u6df1\u547c\u5438**\uff1a\u5148\u628a\u6ce8\u610f\u529b\u8f6c\u5411\u547c\u5438\uff0c\u6162\u6162\u5438\u6c14 4 \u79d2\uff0c\u5c4f\u4f4f\u547c\u5438 4 \u79d2\uff0c\u7136\u540e\u7f13\u6162\u547c\u6c14 6 \u79d2\uff0c\u91cd\u590d 5\u201310 \u6b21\uff0c\u5e2e\u52a9\u5927\u8111\u83b7\u5f97\u77ed\u6682\u7684\u51b7\u9759\u65f6\u95f4\u3002\\n2. **\u79bb\u5f00\u89e6\u53d1\u60c5\u5883**\uff1a\u5982\u679c\u53ef\u80fd\uff0c\u6682\u65f6\u79bb\u5f00\u8ba9\u4f60\u60f3\u6253\u4eba\u7684\u73af\u5883\u6216\u4eba\u7269\uff0c\u7ed9\u81ea\u5df1\u4e00\u4e2a\u5b89\u5168\u7684\u7a7a\u95f4\uff0c\u907f\u514d\u7acb\u523b\u5b9e\u65bd\u51b2\u52a8\u884c\u4e3a\u3002\\n3. **\u4f53\u611f\u91ca\u653e**\uff1a\u7528\u62f3\u51fb\u6c99\u888b\u3001\u6795\u5934\u3001\u6216\u5728\u5730\u4e0a\u505a\u4fef\u5367\u6491\u3001\u539f\u5730\u5feb\u8d70\u7b49\u65b9\u5f0f\u91ca\u653e\u4f53\u5185\u7684\u7d27\u5f20\u80fd\u91cf\uff0c\u907f\u514d\u4f24\u53ca\u4ed6\u4eba\u3002\\n4. **\u60c5\u7eea\u6807\u7b7e**\uff1a\u5c1d\u8bd5\u5728\u5fc3\u91cc\u547d\u540d\u5f53\u524d\u7684\u60c5\u7eea\uff0c\u5982\u201c\u6124\u6012\u201d\u201c\u5931\u671b\u201d\u201c\u65e0\u52a9\u201d\uff0c\u628a\u62bd\u8c61\u7684\u51b2\u52a8\u5177\u4f53\u5316\uff0c\u6709\u52a9\u4e8e\u4ece\u60c5\u7eea\u4e2d\u62bd\u79bb\u51fa\u6765\u3002\\n5. **\u5bfb\u6c42\u503e\u8bc9**\uff1a\u627e\u53ef\u4fe1\u4efb\u7684\u670b\u53cb\u3001\u5bb6\u4eba\u6216\u4e13\u4e1a\u4eba\u58eb\uff08\u5fc3\u7406\u54a8\u8be2\u5e08\u3001\u5371\u673a\u70ed\u7ebf\uff09\u8bf4\u51fa\u8ba9\u4f60\u4e0d\u5b89\u7684\u5177\u4f53\u4e8b\u7531\uff0c\u503e\u8bc9\u672c\u8eab\u80fd\u663e\u8457\u964d\u4f4e\u51b2\u52a8\u5f3a\u5ea6\u3002\\n6. **\u5199\u4e0b\u6765**\uff1a\u628a\u60f3\u6253\u4eba\u7684\u51b2\u52a8\u3001\u539f\u56e0\u4ee5\u53ca\u53ef\u80fd\u5e26\u6765\u7684\u540e\u679c\u5199\u5728\u7eb8\u4e0a\uff0c\u9605\u8bfb\u540e\u5f80\u5f80\u4f1a\u770b\u5230\u66f4\u7406\u6027\u7684\u89c6\u89d2\u3002\\n7. **\u8bbe\u5b9a\u5b89\u5168\u8ba1\u5212**\uff1a\u63d0\u524d\u51c6\u5907\u597d\u5728\u51b2\u52a8\u5347\u8d77\u65f6\u53ef\u4ee5\u91c7\u53d6\u7684\u5177\u4f53\u63aa\u65bd\uff0c\u5982\u62e8\u6253\u6c42\u52a9\u70ed\u7ebf\uff08\u5982\u4e2d\u56fd\u768424\u5c0f\u65f6\u5fc3\u7406\u63f4\u52a9\u70ed\u7ebf 400-821-1215\uff09\uff0c\u6216\u643a\u5e26\u63d0\u9192\u5361\u7247\u5199\u4e0a\u201c\u5148\u505c\u4e0b\u6765\u201d\u3002\\n\\n\u5982\u679c\u51b2\u52a8\u9891\u7e41\u4e14\u96be\u4ee5\u81ea\u884c\u63a7\u5236\uff0c\u5f3a\u70c8\u5efa\u8bae\u5c3d\u5feb\u8054\u7cfb\u5fc3\u7406\u5065\u5eb7\u4e13\u4e1a\u4eba\u58eb\u8fdb\u884c\u8bc4\u4f30\u548c\u5e72\u9884\u3002\u8bb0\u4f4f\uff0c\u51b2\u52a8\u662f\u4e00\u79cd\u4fe1\u53f7\uff0c\u8868\u660e\u4f60\u6b63\u9762\u4e34\u9700\u8981\u5e2e\u52a9\u7684\u538b\u529b\u6216\u521b\u4f24\uff0c\u53ca\u65f6\u6c42\u52a9\u53ef\u4ee5\u907f\u514d\u4e8b\u540e\u540e\u6094\u5e76\u7ef4\u62a4\u4f60\u548c\u4ed6\u4eba\u7684\u5b89\u5168\u3002\"\n}",
+          "attempted_models": [
+            "nim:deepseek-ai/deepseek-v3.1",
+            "nim:openai/gpt-oss-120b"
+          ],
+          "fallback_used": true,
+          "fallback_reason": "other",
+          "extracted_thinking_count": 0
+        },
+        {
+          "councilor_id": "donald_trump",
+          "councilor_name": "\u7279\u6717\u666e",
+          "model": "nim:openai/gpt-oss-120b",
+          "status": "ok",
+          "answer_markdown": "{\n \"advice\": \"\u8bf7\u5148\u6df1\u547c\u5438\uff0c\u6570\u5230\u5341\uff0c\u8ba9\u60c5\u7eea\u7a0d\u5fae\u5e73\u590d\u3002\u5982\u679c\u53ef\u4ee5\uff0c\u79bb\u5f00\u8ba9\u4f60\u4ea7\u751f\u51b2\u52a8\u7684\u73af\u5883\uff0c\u627e\u4e00\u4e2a\u5b89\u9759\u7684\u5730\u65b9\u5750\u4e0b\u3002\u53ef\u4ee5\u5c1d\u8bd5\u7528\u5199\u4e0b\u611f\u53d7\u7684\u65b9\u5f0f\u628a\u6012\u6c14\u503e\u8bc9\u51fa\u6765\uff0c\u6216\u662f\u8fdb\u884c\u8f7b\u5ea6\u8fd0\u52a8\u5982\u5feb\u8d70\u6765\u6d88\u8017\u80fd\u91cf\u3002\u82e5\u51b2\u52a8\u4ecd\u7136\u5f3a\u70c8\uff0c\u5efa\u8bae\u7acb\u523b\u8054\u7cfb\u53ef\u4fe1\u8d56\u7684\u670b\u53cb\u6216\u5bb6\u4eba\uff0c\u8ba9\u4ed6\u4eec\u966a\u4f34\u5e76\u503e\u542c\u4f60\u7684\u60c5\u7eea\u3002\u5982\u679c\u89c9\u5f97\u81ea\u5df1\u53ef\u80fd\u5931\u63a7\uff0c\u8bf7\u62e8\u6253\u5f53\u5730\u7684\u5fc3\u7406\u5371\u673a\u5e72\u9884\u70ed\u7ebf\u6216\u7d27\u6025\u6c42\u52a9\u7535\u8bdd\uff0c\u83b7\u5f97\u4e13\u4e1a\u5e2e\u52a9\u3002\u8bb0\u4f4f\uff0c\u51b2\u52a8\u662f\u6682\u65f6\u7684\uff0c\u5bfb\u6c42\u5e2e\u52a9\u53ef\u4ee5\u9632\u6b62\u4f24\u5bb3\u81ea\u5df1\u548c\u4ed6\u4eba\u3002\",\n \"resources\": {\n \"hotline\": \"\u5168\u56fd\u5fc3\u7406\u63f4\u52a9\u70ed\u7ebf\uff1a12320\uff08\u6216\u5f53\u5730\u5bf9\u5e94\u53f7\u7801\uff09\",\n \"online_support\": \"\u53ef\u8bbf\u95ee https://www.mentalhealth.org.cn/",
+          "attempted_models": [
+            "nim:openai/gpt-oss-120b"
+          ],
+          "fallback_used": true,
+          "fallback_reason": null,
+          "extracted_thinking_count": 0
+        }
+      ],
+      "stage2": {
+        "skipped": true,
+        "skipped_reason": "all_judges_failed",
+        "reviews": [],
+        "anon_map": {
+          "anon_1": "immanuel_kant",
+          "anon_2": "hideo_kojima",
+          "anon_3": "donald_trump"
+        },
+        "judge_failures": [
+          {
+            "judge_councilor_id": "hideo_kojima",
+            "model": "openrouter:xiaomi/mimo-v2-flash:free",
+            "error": {
+              "code": "EXECUTION_ERROR",
+              "message": "other(nim:deepseek-ai/deepseek-v3.1): 'gbk' codec can't encode character '\\u202f' in position 397: illegal multibyte sequence",
+              "retryable": true
+            }
+          },
+          {
+            "judge_councilor_id": "immanuel_kant",
+            "model": "openrouter:xiaomi/mimo-v2-flash:free",
+            "error": {
+              "code": "EXECUTION_ERROR",
+              "message": "other(nim:deepseek-ai/deepseek-v3.1): 'gbk' codec can't encode character '\\u202f' in position 397: illegal multibyte sequence",
+              "retryable": true
+            }
+          },
+          {
+            "judge_councilor_id": "donald_trump",
+            "model": "openrouter:xiaomi/mimo-v2-flash:free",
+            "error": {
+              "code": "EXECUTION_ERROR",
+              "message": "other(nim:z-ai/glm4.7): 'gbk' codec can't encode character '\\u202f' in position 397: illegal multibyte sequence",
+              "retryable": true
+            }
+          }
+        ]
+      },
+      "stage3": {
+        "status": "failed",
+        "model": "openrouter:xiaomi/mimo-v2-flash:free",
+        "response": "\u6700\u7ec8\u603b\u7ed3\u751f\u6210\u5931\u8d25: None",
+        "error": {
+          "code": "CHAIRMAN_FAILED",
+          "message": "None"
+        },
+        "attempted_models": [],
+        "fallback_used": true,
+        "fallback_reason": "fixed_model_unhealthy:cooldown"
+      },
+      "metadata": {
+        "anon_to_councilor": {
+          "anon_1": "immanuel_kant",
+          "anon_2": "hideo_kojima",
+          "anon_3": "donald_trump"
+        },
+        "aggregate_rankings": [],
+        "spec_version": "stage2_v1.2",
+        "thinking": {
+          "stage1": {
+            "donald_trump": {
+              "model": "nim:openai/gpt-oss-120b",
+              "status": "done",
+              "steps": [
+                {
+                  "bullet_id": "donald_trump-stage1-1",
+                  "title": "\u8fa8\u522b\u60c5\u7eea\u8bf1\u56e0\u4e0e\u98ce\u9669",
+                  "detail": "\u7528\u6237\u8868\u8fbe\u5f3a\u70c8\u51b2\u52a8\uff0c\u53ef\u80fd\u6765\u81ea\u538b\u529b\u3001\u6124\u6012\u6216\u632b\u8d25\u611f\u3002\u9996\u5148\u786e\u8ba4\u662f\u5426\u5b58\u5728\u5373\u65f6\u5371\u9669\uff0c\u907f\u514d\u51b2\u52a8\u5bfc\u81f4\u4f24\u5bb3\u3002",
+                  "t": 7.91
+                },
+                {
+                  "bullet_id": "donald_trump-stage1-2",
+                  "title": "\u8bc4\u4f30\u51b2\u52a8\u7684\u5177\u4f53\u60c5\u5883",
+                  "detail": "\u4e86\u89e3\u89e6\u53d1\u51b2\u52a8\u7684\u4e8b\u4ef6\u3001\u5bf9\u8c61\u548c\u65f6\u95f4\uff0c\u5224\u65ad\u662f\u5426\u5b58\u5728\u5373\u65f6\u66b4\u529b\u98ce\u9669\uff0c\u5fc5\u8981\u65f6\u5efa\u8bae\u7acb\u5373\u79bb\u5f00\u73b0\u573a\u6216\u5bfb\u6c42\u5e2e\u52a9\u3002",
+                  "t": 11.55
+                },
+                {
+                  "bullet_id": "donald_trump-stage1-3",
+                  "title": "\u63d0\u4f9b\u5b89\u5168\u964d\u6e29\u4e0e\u6c42\u52a9\u6e20\u9053",
+                  "detail": "\u5efa\u8bae\u901a\u8fc7\u6df1\u547c\u5438\u3001\u79bb\u5f00\u73b0\u573a\u3001\u8054\u7cfb\u53ef\u4fe1\u8d56\u7684\u670b\u53cb\u6216\u4e13\u4e1a\u5e2e\u52a9\uff08\u5982\u5fc3\u7406\u70ed\u7ebf\uff09\u6765\u7f13\u89e3\u51b2\u52a8\uff0c\u907f\u514d\u4f24\u5bb3\u81ea\u5df1\u6216\u4ed6\u4eba\u3002",
+                  "t": 16.82
+                }
+              ]
+            },
+            "immanuel_kant": {
+              "model": "nim:openai/gpt-oss-120b",
+              "status": "done",
+              "steps": [
+                {
+                  "bullet_id": "immanuel_kant-stage1-1",
+                  "title": "\u5206\u6790\u7528\u6237\u7684\u60c5\u7eea\u4e0e\u610f\u56fe",
+                  "detail": "\u7528\u6237\u8868\u8fbe\u4e86\u5f3a\u70c8\u7684\u51b2\u52a8\uff0c\u53ef\u80fd\u5904\u4e8e\u6124\u6012\u6216\u538b\u529b\u72b6\u6001\uff0c\u9700\u8981\u5148\u786e\u8ba4\u60c5\u7eea\u6765\u6e90\u5e76\u8bc4\u4f30\u98ce\u9669\u3002",
+                  "t": 9.97
+                }
+              ]
+            },
+            "hideo_kojima": {
+              "model": "nim:openai/gpt-oss-120b",
+              "status": "done",
+              "steps": [
+                {
+                  "bullet_id": "hideo_kojima-stage1-1",
+                  "title": "\u8bc6\u522b\u51b2\u52a8\u80cc\u540e\u7684\u60c5\u7eea\u89e6\u53d1\u70b9",
+                  "detail": "\u5148\u5e2e\u52a9\u7528\u6237\u786e\u8ba4\u662f\u4ec0\u4e48\u60c5\u5883\u6216\u60f3\u6cd5\u5bfc\u81f4\u60f3\u6253\u4eba\uff0c\u4e86\u89e3\u60c5\u7eea\u7684\u6839\u6e90\u6709\u52a9\u4e8e\u540e\u7eed\u5e72\u9884\u3002",
+                  "t": 11.03
+                }
+              ]
+            }
+          },
+          "stage2": {},
+          "stage3": {}
+        }
+      }
+    }
+  ],
+  "active_models": null,
+  "active_councilor_ids": [
+    "immanuel_kant",
+    "donald_trump",
+    "hideo_kojima"
+  ],
+  "active_chairman": "chairman",
+  "schema_version": 3,
+  "model_assignments": {
+    "immanuel_kant": "nim:deepseek-ai/deepseek-v3.1-terminus",
+    "donald_trump": "nim:openai/gpt-oss-120b",
+    "hideo_kojima": "nim:deepseek-ai/deepseek-v3.1",
+    "chairman": "nim:openai/gpt-oss-120b"
+  },
+  "assignment_seed": "2026-01-17T10:09:23Z-51e3",
+  "assignment_strategy": "healthy_first"
+}

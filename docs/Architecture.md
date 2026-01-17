@@ -65,7 +65,10 @@ Data Storage: `data/conversations/*.json`
 |---|---|---|
 | `main.py` | FastAPI 入口 | API 路由、SSE、限流、持久化、健康刷新 |
 | `council.py` | 编排引擎 | Stage1/2/3 并发执行、匿名映射、Thinking 注入 |
-| `openrouter.py` | LLM 客户端 | 流式解析、Tool Calls、Thinking 回调 |
+| `council.py` | 编排引擎 | Stage1/2/3 并发执行、匿名映射、Thinking 注入 |
+| `llm_client.py` | 统一 LLM 客户端 | 路由分发 (NIM vs OpenRouter)、前缀处理 |
+| `nim.py` | NIM 客户端 | Nvidia NIM API 调用、Token Bucket 限流、Tool Call 转换 |
+| `openrouter.py` | OpenRouter 客户端 | Streaming + Tool Calls + Parsing |
 | `runtime_stats.py` | 运行时统计 | TTFT/Generation/Total EMA（按 model+stage） |
 | `concurrency_tracker.py` | 并发追踪 | per-model queued/inflight 统计，用于 ETA |
 | `model_assigner.py` | 固定分配 | 创建对话时分配模型并持久化 |
@@ -111,20 +114,23 @@ Data Storage: `data/conversations/*.json`
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant FE as Frontend
     participant BE as Backend
     participant C as Council
-    participant OR as OpenRouter
+    participant LC as LLMClient
+    participant PROV as Provider (NIM/OR)
 
     U->>FE: 输入问题
     FE->>BE: POST /message/stream
     BE->>C: Stage1 并发
-    C->>OR: LLM 调用
-    OR-->>C: thinking/tool_calls
+    C->>LC: stream_model()
+    LC->>PROV: API 调用 (根据前缀路由)
+    PROV-->>LC: thinking/tool_calls
+    LC-->>C: callback(thinking)
     C-->>BE: thinking
     BE-->>FE: SSE thinking
 
-    OR-->>C: stage1 content delta
+    PROV-->>LC: content delta
+    LC-->>C: callback(content)
     C-->>BE: stage1_answer_delta
     BE-->>FE: SSE stage1_answer_delta
 
@@ -146,13 +152,14 @@ sequenceDiagram
     C-->>BE: stage2_item / stage2_complete
     BE-->>FE: SSE stage2_item / stage2_complete
 
-    C->>OR: Stage3 综合
-    OR-->>C: thinking
+    C->>LC: Stage3 综合
+    PROV-->>LC: thinking
+    LC-->>C: thinking
     C-->>BE: thinking
     BE-->>FE: SSE thinking (stage3)
 
-    OR-->>C: stage3 content delta
-    C-->>BE: stage3_answer_delta
+    PROV-->>LC: stage3 content delta
+    LC-->>C: stage3_answer_delta
     BE-->>FE: SSE stage3_answer_delta
 
     C-->>BE: stage3_complete
@@ -177,4 +184,4 @@ sequenceDiagram
 
 ---
 
-*Last updated: 2026-01-03*
+*Last updated: 2026-01-18*

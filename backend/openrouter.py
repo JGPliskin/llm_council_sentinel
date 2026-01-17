@@ -96,7 +96,19 @@ async def stream_model(
                 finish_reason = None
                 
                 async with client.stream("POST", OPENROUTER_API_URL, headers=headers, json=payload) as response:
-                    response.raise_for_status()
+                    # Check for HTTP errors before reading stream
+                    if response.status_code >= 400:
+                        # Must read body before accessing content in streaming context
+                        await response.aread()
+                        error_payload = _parse_error_body(response)
+                        return {
+                            'error': True,
+                            'status_code': response.status_code,
+                            'headers': dict(response.headers),
+                            'error_payload': error_payload,
+                            'content': f"HTTP {response.status_code}: {error_payload.get('error', {}).get('message', 'Unknown error')}",
+                            'model': model
+                        }
                     
                     async for line in response.aiter_lines():
                         if not line.startswith("data: "):

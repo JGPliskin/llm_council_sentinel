@@ -35,12 +35,12 @@ LLM Council 是一个三阶段异步协作系统：
 
 > 数据来源：`backend/config.py`。注意：对话创建后可能使用 `model_assignments` 进行固定分配，实际运行模型可能与默认模型不同。
 
-| ID | Name | Role | Default Model | Judge Style (Stage2) |
+| ID | Name | Role | Candidate Pool (Priority Order) | Judge Style (Stage2) |
 | :--- | :--- | :--- | :--- | :--- |
-| `immanuel_kant` | 康德 | Councilor | `xiaomi/mimo-v2-flash:free` | 冷静、结构化、强调长期稳健性 |
-| `donald_trump` | 特朗普 | Councilor | `xiaomi/mimo-v2-flash:free` | 可执行性、风险隔离、资源约束 |
-| `hideo_kojima` | 小岛秀夫 | Councilor | `xiaomi/mimo-v2-flash:free` | 学术审慎、可验证性、避免偏误 |
-| `chairman` | 共识主席 | Chairman | `xiaomi/mimo-v2-flash:free` | 中立综合、突出共识与分歧 |
+| `immanuel_kant` | 康德 | Councilor | **[OR]** mimo, nemotron(x3), chimera, glm-4.5, devstral, deepseek-v3.2, grok-4.1 <br> **[NIM]** deepseek-v3.1, gpt-oss, terminus, glm4.7 | 冷静、结构化、强调长期稳健性 |
+| `donald_trump` | 特朗普 | Councilor | **[OR]** mimo, nemotron(x3), chimera, glm-4.5, devstral, deepseek-v3.2, grok-4.1 <br> **[NIM]** deepseek-v3.1, gpt-oss, terminus, glm4.7 | 可执行性、风险隔离、资源约束 |
+| `hideo_kojima` | 小岛秀夫 | Councilor | **[OR]** mimo, nemotron(x3), chimera, glm-4.5, devstral, deepseek-v3.2, grok-4.1 <br> **[NIM]** deepseek-v3.1, gpt-oss, terminus, glm4.7 | 学术审慎、可验证性、避免偏误 |
+| `chairman` | 共识主席 | Chairman | **[OR]** mimo, nemotron(x3), chimera, glm-4.5, devstral, deepseek-v3.2, grok-4.1 <br> **[NIM]** deepseek-v3.1, gpt-oss, terminus, glm4.7 | 中立综合、突出共识与分歧 |
 
 **候选模型池**：见 `GLOBAL_MODEL_POOL`，Stage1/2/3 可能从候选池中切换（仅动态模式）。
 
@@ -55,6 +55,9 @@ LLM Council 是一个三阶段异步协作系统：
 | `main.py` | FastAPI 入口 | API 路由、SSE、对话存储、限流、输入校验、健康刷新调度 |
 | `council.py` | 三阶段编排 | Stage1/2/3 执行、并发控制、重试策略、匿名映射、thinking 注入 |
 | `model_assigner.py` | 固定分配 | 创建对话时分配模型，保存到 `model_assignments` |
+| `model_assigner.py` | 固定分配 | 创建对话时分配模型，保存到 `model_assignments` |
+| `llm_client.py` | 统一客户端 | 路由分发 (NIM/OpenRouter)，前缀处理 |
+| `nim.py` | NIM 客户端 | 特殊处理 `rule-based thinking` (missing tool name), Token Bucket |
 | `openrouter.py` | LLM 客户端 | 流式请求、解析 tool_calls、回调 thinking |
 | `runtime_stats.py` | 运行时统计 | TTFT/Generation/Total EMA（按 model+stage） |
 | `concurrency_tracker.py` | 并发追踪 | per-model queued/inflight 统计，用于 ETA |
@@ -110,13 +113,16 @@ LLM Council 是一个三阶段异步协作系统：
         },
         "target_anon_id": {
           "type": "string",
-          "description": "(Stage2 only) Indicates which anonymous candidate this thinking step is evaluating (e.g. anon_1, anon_2)."
+          "description": "(Stage2 only) Indicates which anonymous candidate this thinking step is evaluating (e.g. anon_1, anon_2). REQUIRED for Stage 2."
         }
       },
       "required": ["title"]
     }
   }
 }
+```
+
+> **注意**：对于 DeepSeek V3.1 (NIM)，后端实现了智能容错。即使用户代码或模型偶尔输出空的 tool name，只要参数中包含 `title` 或 `bullet_id`，系统也会将其识别为 `emit_thinking` 调用。
 ```
 
 ### 4.2 Thinking 要求（行为约束）
@@ -323,4 +329,4 @@ Stage2 HUD 行为：
 
 ---
 
-*Last updated: 2026-01-03*
+*Last updated: 2026-01-18*

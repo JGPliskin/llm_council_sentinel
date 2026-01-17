@@ -11,7 +11,7 @@ import time
 # Ensure backend directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from openrouter import query_model, stream_model
+from llm_client import query_model, stream_model
 from persona_loader import fetch_persona
 from config import (
     DEFAULT_CONCURRENCY_STAGE1,
@@ -29,6 +29,7 @@ from config import (
     REQUEST_ERROR_KEYWORDS,
     MODEL_ERROR_KEYWORDS,
     DEFAULT_ETA_CONFIG,
+    SUMMARY_MODEL_CANDIDATES,
 )
 from health import health_manager
 from logger import log_request_timing
@@ -40,35 +41,35 @@ THINKING_TOOL_DEF = [
         "type": "function",
         "function": {
             "name": "emit_thinking",
-            "description": "Emit a thinking step payload for UI display.",
+            "description": "Output thinking steps. Call this MULTIPLE times BEFORE the final answer.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "bullet_id": {
                         "type": "string",
-                        "description": "Unique identifier of the thinking step."
+                        "description": "Unique identifier of the thinking step.",
                     },
                     "title": {
                         "type": "string",
-                        "description": "Concise title of the thinking step (6-18 chars)."
+                        "description": "Concise title of the thinking step (6-18 chars).",
                     },
                     "detail": {
                         "type": "string",
-                        "description": "1-3 lines of public-facing detail."
+                        "description": "1-3 lines of public-facing detail.",
                     },
                     "op": {
                         "type": "string",
                         "enum": ["append", "update"],
-                        "description": "append to add, update to modify a prior step."
+                        "description": "append to add, update to modify a prior step.",
                     },
                     "target_anon_id": {
                         "type": "string",
-                        "description": "(Stage2 only) Indicates which anonymous candidate this thinking step is evaluating (e.g. anon_1, anon_2)."
-                    }
+                        "description": "(Stage2 only) Indicates which anonymous candidate this thinking step is evaluating (e.g. anon_1, anon_2).",
+                    },
                 },
-                "required": ["title"]
-            }
-        }
+                "required": ["title"],
+            },
+        },
     }
 ]
 
@@ -93,10 +94,10 @@ def strip_json_fences(text: str) -> str:
 def extract_thinking_from_content(content: str) -> Tuple[List[Dict[str, Any]], str]:
     """
     从 content 中提取 emit_thinking JSON，返回 (thinking_list, cleaned_answer)。
-    
+
     某些模型不正确使用 tool calls，而是直接把 thinking JSON 输出到 content 中，例如：
     { "name": "emit_thinking", "arguments": {"bullet_id": "1", ...} } { ... } 回答内容
-    
+
     这个函数会：
     1. 找到所有 JSON 对象
     2. 过滤出 emit_thinking 相关的
@@ -105,33 +106,33 @@ def extract_thinking_from_content(content: str) -> Tuple[List[Dict[str, Any]], s
     """
     thinking_list = []
     json_spans = []  # [(start, end), ...]
-    
+
     # 逐字符扫描，找到所有顶层 {} 对象
     i = 0
     while i < len(content):
-        if content[i] == '{':
+        if content[i] == "{":
             # 找到开始，计算匹配的结束位置
             depth = 1
             start = i
             i += 1
             in_string = False
             escape_next = False
-            
+
             while i < len(content) and depth > 0:
                 char = content[i]
                 if escape_next:
                     escape_next = False
-                elif char == '\\':
+                elif char == "\\":
                     escape_next = True
                 elif char == '"':
                     in_string = not in_string
                 elif not in_string:
-                    if char == '{':
+                    if char == "{":
                         depth += 1
-                    elif char == '}':
+                    elif char == "}":
                         depth -= 1
                 i += 1
-            
+
             if depth == 0:
                 json_str = content[start:i]
                 try:
@@ -140,55 +141,56 @@ def extract_thinking_from_content(content: str) -> Tuple[List[Dict[str, Any]], s
                     if isinstance(obj, dict) and obj.get("name") == "emit_thinking":
                         args = obj.get("arguments", {})
                         if isinstance(args, dict) and args.get("title"):
-                            thinking_list.append({
-                                "bullet_id": args.get("bullet_id", f"extracted_{len(thinking_list)}"),
-                                "title": args.get("title", ""),
-                                "detail": args.get("detail", ""),
-                                "op": args.get("op", "append")
-                            })
+                            thinking_list.append(
+                                {
+                                    "bullet_id": args.get(
+                                        "bullet_id", f"extracted_{len(thinking_list)}"
+                                    ),
+                                    "title": args.get("title", ""),
+                                    "detail": args.get("detail", ""),
+                                    "op": args.get("op", "append"),
+                                }
+                            )
                             json_spans.append((start, i))
                 except json.JSONDecodeError:
                     pass
         else:
             i += 1
-    
+
     # 从后往前移除所有匹配的 JSON（避免索引偏移问题）
     cleaned_content = content
     for start, end in reversed(json_spans):
         cleaned_content = cleaned_content[:start] + cleaned_content[end:]
-    
+
     # 清理多余的空白和换行
-    cleaned_content = re.sub(r'\n{3,}', '\n\n', cleaned_content)
-    cleaned_content = re.sub(r'[ \t]+', ' ', cleaned_content)
+    cleaned_content = re.sub(r"\n{3,}", "\n\n", cleaned_content)
+    cleaned_content = re.sub(r"[ \t]+", " ", cleaned_content)
     cleaned_content = cleaned_content.strip()
-    
+
     # 如果回答以 "回答" 开头，移除这个标记
-    cleaned_content = re.sub(r'^回答[:：]?\s*', '', cleaned_content)
-    
+    cleaned_content = re.sub(r"^回答[:：]?\s*", "", cleaned_content)
+
     return thinking_list, cleaned_content
-
-
-
 
 
 def is_retryable_error(response_dict: Optional[Dict[str, Any]]) -> bool:
     """Check if the response indicates a retryable failure (Network/RateLimit)."""
     if not response_dict:
         return True  # No response usually implies timeout/network error
-    
+
     # Check for explicit 'error' flag from openrouter.py
     if response_dict.get("error"):
         content = response_dict.get("content", "")
         status = response_dict.get("status_code")
-        
+
         # Explicit Non-Retryable
         if status in [401, 403]:
             return False
-            
+
         # Retryable HTTP Codes
         if status in [408, 429, 500, 502, 503, 504]:
             return True
-            
+
         # Inspect Error Payload for OpenRouter codes
         payload = response_dict.get("error_payload")
         if isinstance(payload, dict):
@@ -198,11 +200,11 @@ def is_retryable_error(response_dict: Optional[Dict[str, Any]]) -> bool:
             msg = err_obj.get("message", "").lower()
             if code in [429, 502, 503] or "rate limit" in msg or "unavailable" in msg:
                 return True
-                
+
         # Fallback: Treat generic network exception strings as retryable
         # This is loose, but usually safer to retry once than fail
         return True
-        
+
     return False
 
 
@@ -220,14 +222,16 @@ def get_retry_after(response_dict: Optional[Dict[str, Any]]) -> Optional[float]:
     return None
 
 
-def classify_400_error(response_dict: Optional[Dict[str, Any]]) -> Tuple[str, bool, bool]:
+def classify_400_error(
+    response_dict: Optional[Dict[str, Any]],
+) -> Tuple[str, bool, bool]:
     """
     分类 400 错误，决定是否应该回退和更新健康状态。
-    
+
     分类优先级：
     1. 先检查 error_payload.error.code
     2. 再进行关键词匹配 (error.message)
-    
+
     Returns:
         (error_class, should_retry, update_health)
         - error_class: "request_error" | "model_error" | "unknown_400" | "other"
@@ -236,13 +240,19 @@ def classify_400_error(response_dict: Optional[Dict[str, Any]]) -> Tuple[str, bo
     """
     if not response_dict:
         return ("other", True, True)
-    
+
+    # Special case: provider_rate_limited (NIM key exhaustion)
+    # Should retry other models but NOT update health status
+    error_code = response_dict.get("error_code")
+    if error_code == "provider_rate_limited":
+        return ("provider_rate_limited", True, False)
+
     status_code = response_dict.get("status_code")
-    
+
     # 非 400 错误，按原逻辑处理
     if status_code != 400:
         return ("other", True, True)
-    
+
     # Step 1: 检查 error code
     error_payload = response_dict.get("error_payload")
     error_obj: Dict[str, Any] = {}
@@ -253,13 +263,17 @@ def classify_400_error(response_dict: Optional[Dict[str, Any]]) -> Tuple[str, bo
         if isinstance(raw_error, dict):
             error_obj = raw_error
         message = str(error_obj.get("message", "")).lower()
-        raw_text = str(error_payload.get("raw_text", "")).lower() if error_payload.get("raw_text") else ""
+        raw_text = (
+            str(error_payload.get("raw_text", "")).lower()
+            if error_payload.get("raw_text")
+            else ""
+        )
 
     code = str(error_obj.get("code", "")).lower()
-    
+
     if code in REQUEST_ERROR_CODES:
         return ("request_error", False, False)
-    
+
     # Step 2: 关键词匹配
     # 优先使用 error.message，其次使用 raw_text
     text_to_match = message or raw_text
@@ -267,20 +281,24 @@ def classify_400_error(response_dict: Optional[Dict[str, Any]]) -> Tuple[str, bo
     if not text_to_match:
         # 仅在无 payload 时回退到 content（可能是 httpx 异常字符串）
         content = str(response_dict.get("content", "")).lower()
-        if content.startswith("400 ") and "client error" in content and "for url" in content:
+        if (
+            content.startswith("400 ")
+            and "client error" in content
+            and "for url" in content
+        ):
             content = ""
         text_to_match = content
-    
+
     # 检查请求错误关键词
     for kw in REQUEST_ERROR_KEYWORDS:
         if kw in text_to_match:
             return ("request_error", False, False)
-    
+
     # 检查模型错误关键词
     for kw in MODEL_ERROR_KEYWORDS:
         if kw in text_to_match:
             return ("model_error", True, True)
-    
+
     # 其他 400：保守回退
     return ("unknown_400", True, True)
 
@@ -289,11 +307,9 @@ def classify_400_error(response_dict: Optional[Dict[str, Any]]) -> Tuple[str, bo
 # ETA 计算辅助函数
 # -------------------------------------------------------------------------
 
+
 def calculate_eta_ms(
-    model: str,
-    stage: str,
-    queued_count: int = 0,
-    concurrency_limit: int = 3
+    model: str, stage: str, queued_count: int = 0, concurrency_limit: int = 3
 ) -> Dict[str, Any]:
     """
     计算指定模型和阶段的 ETA (预计剩余时间)
@@ -319,9 +335,7 @@ def calculate_eta_ms(
     gen_est = runtime_stats_manager.get_effective_generation(model, stage)
     total_est = runtime_stats_manager.get_effective_total(model, stage)
     has_samples = runtime_stats_manager.has_enough_samples(
-        model,
-        stage,
-        min_samples=DEFAULT_ETA_CONFIG.get("warmup_sample_count", 3)
+        model, stage, min_samples=DEFAULT_ETA_CONFIG.get("warmup_sample_count", 3)
     )
     source = "runtime_ema" if has_samples else "default"
 
@@ -362,8 +376,10 @@ def calculate_eta_ms(
 # Concurrency & Routing Helpers
 # -------------------------------------------------------------------------
 
+
 class ModelConcurrencyManager:
     """Manages per-model concurrency semantics."""
+
     def __init__(self):
         self._semaphores: Dict[str, asyncio.Semaphore] = {}
         self._lock = asyncio.Lock()
@@ -372,7 +388,7 @@ class ModelConcurrencyManager:
         # Fast path
         if model_id in self._semaphores:
             return self._semaphores[model_id]
-            
+
         async with self._lock:
             if model_id not in self._semaphores:
                 # Look up limit from Global Pool, default to 3
@@ -382,6 +398,7 @@ class ModelConcurrencyManager:
                 self._semaphores[model_id] = asyncio.Semaphore(limit)
             return self._semaphores[model_id]
 
+
 model_concurrency_manager = ModelConcurrencyManager()
 
 
@@ -390,14 +407,14 @@ _current_model_by_councilor: Dict[str, str] = {}
 
 
 def select_best_model(
-    candidates: List[str], 
+    candidates: List[str],
     excluded: set,
     councilor_id: str = None,
-    auto_route_by_speed: bool = True
+    auto_route_by_speed: bool = True,
 ) -> Optional[str]:
     """
     服务于 Stage1 的模型选择函数。
-    
+
     - auto_route_by_speed=True: 按 TTFT 速度排序选最快 (+ 双阈值防抖)
     - auto_route_by_speed=False: 按 candidates 顺序选第一个健康
     """
@@ -412,17 +429,17 @@ def select_best_model(
         # 允许 healthy 和 unknown 状态
         if health_status in ("healthy", "unknown"):
             healthy_candidates.append(mid)
-    
+
     if not healthy_candidates:
         return None
-    
+
     if len(healthy_candidates) == 1:
         return healthy_candidates[0]
-    
+
     # 2. 如果禁用自动选路，返回第一个健康模型 (按 candidates 原始顺序)
     if not auto_route_by_speed:
         return healthy_candidates[0]
-    
+
     # 3. 自动速度排序模式
     # 获取每个候选的 TTFT
     ttft_map = {}
@@ -433,7 +450,7 @@ def select_best_model(
             ttft_map[mid] = ttft  # 可能是 None
         else:
             ttft_map[mid] = None
-    
+
     # 按 TTFT 排序 (None 排最后，同 TTFT 按 candidates 顺序保持稳定)
     def sort_key(mid: str) -> Tuple[int, float, int]:
         ttft = ttft_map.get(mid)
@@ -448,30 +465,33 @@ def select_best_model(
             return (0, ttft, orig_idx)
         else:
             return (1, 0, orig_idx)
-    
+
     sorted_candidates = sorted(healthy_candidates, key=sort_key)
     top = sorted_candidates[0]
     top_ttft = ttft_map.get(top)
-    
+
     # 4. 双阈值防抖切换
     if councilor_id:
         current = _current_model_by_councilor.get(councilor_id)
-        
+
         # 如果 current 不存在/不健康/TTFT缺失，直接选 top
         if current and current in healthy_candidates:
             current_ttft = ttft_map.get(current)
-            
+
             if current == top:
                 # 保持不变
                 return current
-            
+
             if current_ttft is not None and top_ttft is not None:
                 # 计算差异
                 abs_diff = current_ttft - top_ttft
                 rel_diff = abs_diff / current_ttft if current_ttft > 0 else 0
-                
+
                 # 双阈值: 绝对差 >= 800ms AND 相对差 >= 30%
-                if abs_diff >= SPEED_ROUTE_SWITCH_ABS_MS and rel_diff >= SPEED_ROUTE_SWITCH_REL_PCT:
+                if (
+                    abs_diff >= SPEED_ROUTE_SWITCH_ABS_MS
+                    and rel_diff >= SPEED_ROUTE_SWITCH_REL_PCT
+                ):
                     # 满足切换条件，切换到 top
                     _current_model_by_councilor[councilor_id] = top
                     return top
@@ -486,9 +506,10 @@ def select_best_model(
             # current 不可用，选 top
             _current_model_by_councilor[councilor_id] = top
             return top
-    
+
     # 无 councilor_id，直接返回最快
     return top
+
 
 def get_candidates(obj: Dict[str, Any]) -> List[str]:
     """Helper to get candidates from councilor/chairman object."""
@@ -506,13 +527,12 @@ async def _request_stage1_bounded(
     on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
     on_answer_delta: Optional[Callable[[str, str], Any]] = None,
     enable_thinking: bool = True,
-    fixed_model: Optional[str] = None  # 固定模型分配：如果提供则直接使用，失败不切换
+    fixed_model: Optional[str] = None,  # 固定模型分配：如果提供则直接使用，失败不切换
 ) -> Dict[str, Any]:
-    
     # 计时开始
     t_start = time.time()
     t_model_select = None
-    
+
     persona = fetch_persona(PERSONA_CACHE, councilor.get("persona_path", ""))
     stage_limits = councilor.get("stage_limits", {}).get("stage1", {})
     timeout = stage_limits.get("timeout", DEFAULT_STAGE1_TIMEOUT)
@@ -551,11 +571,7 @@ async def _request_stage1_bounded(
     else:
         system_prompt = f"{persona}\n\n{base_instructions}"
 
-    user_message = (
-        f"用户问题：{user_query}\n"
-        "请依据 persona 直接作答。"
-    )
-
+    user_message = f"用户问题：{user_query}\n请依据 persona 直接作答。"
 
     candidates = get_candidates(councilor)
     excluded_models = set()
@@ -564,27 +580,33 @@ async def _request_stage1_bounded(
 
     last_error = None
     last_error_class = None
-    
+
     # 软回退模式标记：固定模型失败后进入回退流程
     in_fallback_mode = False
     original_fixed_model = fixed_model
-    
+
     # 固定模型分配模式：先检查健康状态
     if fixed_model:
         # 检查固定模型是否在候选池内
         if fixed_model not in candidates:
-            print(f"[SoftFallback] 警告: 固定模型 {fixed_model} 不在候选池 {candidates} 中，仍将尝试", flush=True)
-        
+            print(
+                f"[SoftFallback] 警告: 固定模型 {fixed_model} 不在候选池 {candidates} 中，仍将尝试",
+                flush=True,
+            )
+
         # 检查健康状态
         status = health_manager.get_status(fixed_model)
         health_status = status.get("health_status")
-        
+
         if health_status in ("healthy", "unknown"):
             selected_model = fixed_model
             t_model_select = 0  # 无需选择
         else:
             # 固定模型不健康，直接进入回退流程
-            print(f"[SoftFallback] 固定模型 {fixed_model} 健康状态为 {health_status}，跳过并进入回退", flush=True)
+            print(
+                f"[SoftFallback] 固定模型 {fixed_model} 健康状态为 {health_status}，跳过并进入回退",
+                flush=True,
+            )
             fallback_reason = f"fixed_model_unhealthy:{health_status}"
             in_fallback_mode = True
             fixed_model = None  # 清除固定模型标记，进入动态选择
@@ -592,7 +614,7 @@ async def _request_stage1_bounded(
             selected_model = None
     else:
         selected_model = None
-    
+
     # Outer Loop: Candidate Selection
     while True:
         # A. Select Model
@@ -603,44 +625,45 @@ async def _request_stage1_bounded(
                 auto_route = True  # 回退时强制速度排序
             else:
                 auto_route = councilor.get("auto_route_by_speed", True)
-            
+
             # 记录模型选择开始时间（仅第一次）
             t_select_start = time.time() if t_model_select is None else None
-            
+
             selected_model = select_best_model(
-                candidates, 
-                excluded_models, 
+                candidates,
+                excluded_models,
                 councilor_id=councilor["id"],
-                auto_route_by_speed=auto_route
+                auto_route_by_speed=auto_route,
             )
-            
+
             # 记录模型选择结束时间（仅第一次）
             if t_model_select is None:
                 t_model_select = time.time() - t_select_start
-        
+
         if not selected_model:
             # No healthy models available
             break
-            
-        model_sem = await model_concurrency_manager.get_semaphore(selected_model)
+
         
+        model_sem = await model_concurrency_manager.get_semaphore(selected_model)
+
         model_messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ]
         response = None
         answer_chunks: List[str] = []
-        
+
         # Concurrency Tracker: 进入队列
         await concurrency_tracker.acquire(selected_model)
-        
+
         try:
             # Double Locking
-            async with semaphore: # Stage Limit
-                async with model_sem: # Model Limit
+            async with semaphore:  # Stage Limit
+                async with model_sem:  # Model Limit
                     # Concurrency Tracker: 开始执行
                     await concurrency_tracker.start(selected_model)
-                    
+
                     # Check Capabilities
                     model_cfg = GLOBAL_MODEL_MAP.get(selected_model, {})
                     caps = model_cfg.get("capabilities", {})
@@ -655,7 +678,9 @@ async def _request_stage1_bounded(
                             thinking_payload = payload
                         else:
                             thinking_payload = {"title": str(payload)}
-                        await on_thinking(councilor["id"], "stage1", thinking_payload, selected_model)
+                        await on_thinking(
+                            councilor["id"], "stage1", thinking_payload, selected_model
+                        )
 
                     async def _content_cb(delta: str):
                         answer_chunks.append(delta)
@@ -672,7 +697,7 @@ async def _request_stage1_bounded(
                         on_content=_content_cb,
                         timeout=timeout,
                         max_output_tokens=max_tokens,
-                        tools=THINKING_TOOL_DEF if use_tools else None
+                        tools=THINKING_TOOL_DEF if use_tools else None,
                     )
         except asyncio.CancelledError:
             raise
@@ -695,23 +720,31 @@ async def _request_stage1_bounded(
                 answer = "".join(answer_chunks)
 
             # 后处理：从 content 中提取被错误输出的 thinking JSON
-            extracted_thinking, cleaned_answer = extract_thinking_from_content(answer or "")
-            
+            extracted_thinking, cleaned_answer = extract_thinking_from_content(
+                answer or ""
+            )
+
             # 如果提取到了 thinking，触发回调
             if extracted_thinking and on_thinking:
                 for thinking_item in extracted_thinking:
                     try:
                         if asyncio.iscoroutinefunction(on_thinking):
-                            await on_thinking(councilor["id"], "stage1", thinking_item, selected_model)
+                            await on_thinking(
+                                councilor["id"], "stage1", thinking_item, selected_model
+                            )
                         else:
-                            on_thinking(councilor["id"], "stage1", thinking_item, selected_model)
+                            on_thinking(
+                                councilor["id"], "stage1", thinking_item, selected_model
+                            )
                     except Exception:
                         pass
 
             # 计算耗时并输出日志
             t_end = time.time()
             ttft_ms = response.get("ttft_ms")
-            model_select_ms = int(t_model_select * 1000) if t_model_select else 0  # t_model_select 已经是耗时（秒）
+            model_select_ms = (
+                int(t_model_select * 1000) if t_model_select else 0
+            )  # t_model_select 已经是耗时（秒）
             total_ms = int((t_end - t_start) * 1000)
             generation_ms = total_ms - (ttft_ms or 0) - model_select_ms
 
@@ -721,9 +754,9 @@ async def _request_stage1_bounded(
                     model=selected_model,
                     stage="stage1",
                     ttft_ms=ttft_ms,
-                    total_ms=total_ms
+                    total_ms=total_ms,
                 )
-            
+
             # 需求3 4.4: 检查是否需要触发紧急探测
             if ttft_ms is not None:
                 # 延迟导入以避免循环依赖
@@ -731,25 +764,25 @@ async def _request_stage1_bounded(
                 from config import (
                     EMERGENCY_PROBE_TTFT_THRESHOLD,
                     EMERGENCY_PROBE_TTFT_MULTIPLIER,
-                    EMERGENCY_PROBE_COOLDOWN_MINUTES
+                    EMERGENCY_PROBE_COOLDOWN_MINUTES,
                 )
-                
+
                 is_slow = health_manager.is_ttft_slow(
-                    selected_model, 
-                    ttft_ms, 
-                    threshold=EMERGENCY_PROBE_TTFT_THRESHOLD, 
-                    multiplier=EMERGENCY_PROBE_TTFT_MULTIPLIER
+                    selected_model,
+                    ttft_ms,
+                    threshold=EMERGENCY_PROBE_TTFT_THRESHOLD,
+                    multiplier=EMERGENCY_PROBE_TTFT_MULTIPLIER,
                 )
-                
+
                 if is_slow:
                     # 触发紧急探测 (Fire-and-forget)
                     # 范围：刷新当前 councilor 的所有候选模型
                     # 注意：trigger_emergency_refresh 内部会检查每个 model 的 cooling down
                     asyncio.create_task(
                         health_manager.trigger_emergency_refresh(
-                            candidates, 
-                            check_model_health_probe, 
-                            cooldown_minutes=EMERGENCY_PROBE_COOLDOWN_MINUTES
+                            candidates,
+                            check_model_health_probe,
+                            cooldown_minutes=EMERGENCY_PROBE_COOLDOWN_MINUTES,
                         )
                     )
 
@@ -763,12 +796,12 @@ async def _request_stage1_bounded(
                     "total_ms": total_ms,
                     "model_select_ms": model_select_ms,
                     "ttft_ms": ttft_ms,
-                    "generation_ms": max(0, generation_ms)
+                    "generation_ms": max(0, generation_ms),
                 },
                 status="ok",
                 fallback_count=fallback_count,
                 fallback_reason=fallback_reason,
-                attempted_models=attempted_models
+                attempted_models=attempted_models,
             )
 
             return {
@@ -780,47 +813,56 @@ async def _request_stage1_bounded(
                 "attempted_models": attempted_models,
                 "fallback_used": in_fallback_mode or (selected_model != candidates[0]),
                 "fallback_reason": fallback_reason,
-                "extracted_thinking_count": len(extracted_thinking)
+                "extracted_thinking_count": len(extracted_thinking),
             }
 
-
         # Network Failure
-        err_msg = response.get('content') if response else 'No response'
-        status_code = response.get('status_code') if response else None
-        
+        err_msg = response.get("content") if response else "No response"
+        status_code = response.get("status_code") if response else None
+
         # 400 错误分类
         error_class, should_retry, update_health = classify_400_error(response)
         last_error_class = error_class
-        
+
         if update_health:
-            health_manager.update_status(selected_model, False, err_msg, status_code, source="runtime")
-        
+            health_manager.update_status(
+                selected_model, False, err_msg, status_code, source="runtime"
+            )
+
         last_error = f"{error_class}({selected_model}): {err_msg}"
-        
+
         # 请求错误：不回退，直接返回失败
         if not should_retry:
-            print(f"[SoftFallback] 请求错误，不回退: {error_class} - {err_msg}", flush=True)
+            print(
+                f"[SoftFallback] 请求错误，不回退: {error_class} - {err_msg}",
+                flush=True,
+            )
             break
-        
+
         # 可回退的错误：进入回退流程
         if not fallback_reason:
             fallback_reason = error_class
-        
+
         # 固定模型模式：失败后进入回退流程（软回退）
         if fixed_model:
-            print(f"[SoftFallback] 固定模型 {fixed_model} 调用失败，进入回退流程: {err_msg}", flush=True)
+            print(
+                f"[SoftFallback] 固定模型 {fixed_model} 调用失败，进入回退流程: {err_msg}",
+                flush=True,
+            )
             in_fallback_mode = True
             fixed_model = None  # 清除固定模型标记
-        
+
         excluded_models.add(selected_model)
         continue
-            
+
     # If we exited without returning
     # 记录失败日志
     t_end = time.time()
-    model_select_ms = int(t_model_select * 1000) if t_model_select else 0  # t_model_select 已经是耗时（秒）
+    model_select_ms = (
+        int(t_model_select * 1000) if t_model_select else 0
+    )  # t_model_select 已经是耗时（秒）
     total_ms = int((t_end - t_start) * 1000)
-    
+
     fallback_count = max(0, len(attempted_models) - 1)
     log_request_timing(
         stage="stage1",
@@ -831,16 +873,16 @@ async def _request_stage1_bounded(
             "total_ms": total_ms,
             "model_select_ms": model_select_ms,
             "ttft_ms": None,
-            "generation_ms": 0
+            "generation_ms": 0,
         },
         status="failed",
         error=str(last_error or "All candidates failed"),
         fallback_count=fallback_count,
         fallback_reason=fallback_reason,
         attempted_models=attempted_models,
-        error_class=last_error_class
+        error_class=last_error_class,
     )
-    
+
     return {
         "councilor_id": councilor["id"],
         "councilor_name": councilor.get("name"),
@@ -849,31 +891,31 @@ async def _request_stage1_bounded(
         "error": {
             "code": "EXECUTION_ERROR",
             "message": str(last_error or "All candidates failed"),
-            "retryable": True
+            "retryable": True,
         },
         "answer_markdown": "",
         "attempted_models": attempted_models,
         "fallback_used": in_fallback_mode,
-        "fallback_reason": fallback_reason
+        "fallback_reason": fallback_reason,
     }
 
 
 async def stage1_collect_responses(
-    user_query: str, 
+    user_query: str,
     councilors: List[Dict[str, Any]],
     on_result: Optional[Callable[[Dict[str, Any]], Any]] = None,
     on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
     on_answer_delta: Optional[Callable[[str, str], Any]] = None,
     on_answer_done: Optional[Callable[[str], Any]] = None,
     enable_thinking: bool = True,
-    model_assignments: Optional[Dict[str, str]] = None  # 固定模型分配
+    model_assignments: Optional[Dict[str, str]] = None,  # 固定模型分配
 ) -> List[Dict[str, Any]]:
     """Stage 1: Collect initial responses from all councilors with strict control."""
     semaphore = asyncio.Semaphore(DEFAULT_CONCURRENCY_STAGE1)
-    
+
     # Create Tasks
     # We must start them. `asyncio.create_task` schedules them.
-    # Note: Using a mapping to track who is who is safer if order matters, 
+    # Note: Using a mapping to track who is who is safer if order matters,
     # but `gather` preserves order of input tasks.
     tasks = [
         asyncio.create_task(
@@ -884,12 +926,14 @@ async def stage1_collect_responses(
                 on_thinking,
                 on_answer_delta,
                 enable_thinking,
-                fixed_model=model_assignments.get(c["id"]) if model_assignments else None
+                fixed_model=model_assignments.get(c["id"])
+                if model_assignments
+                else None,
             )
         )
         for c in councilors
     ]
-    
+
     # Wait with Deadline
     if STAGE1_DEADLINE:
         # Stream results as they complete while honoring the stage deadline.
@@ -929,14 +973,14 @@ async def stage1_collect_responses(
                     err_res = {
                         "councilor_id": councilor["id"] if councilor else None,
                         "status": "failed",
-                        "error": {"code": "UNEXPECTED_ERROR", "message": str(e)}
+                        "error": {"code": "UNEXPECTED_ERROR", "message": str(e)},
                     }
                     results.append(err_res)
                     if on_result:
                         if asyncio.iscoroutinefunction(on_result):
-                             await on_result(err_res)
+                            await on_result(err_res)
                         else:
-                             on_result(err_res)
+                            on_result(err_res)
                     if on_answer_done and err_res.get("councilor_id"):
                         if asyncio.iscoroutinefunction(on_answer_done):
                             await on_answer_done(err_res["councilor_id"])
@@ -951,17 +995,19 @@ async def stage1_collect_responses(
 
         for task in pending:
             councilor = task_map.get(task)
-            results.append({
-                "councilor_id": councilor["id"] if councilor else None,
-                "councilor_name": councilor.get("name") if councilor else None,
-                "model": councilor["model"] if councilor else None,
-                "status": "failed",
-                "error": {
-                    "code": "STAGE_DEADLINE",
-                    "message": "Stage deadline exceeded."
-                },
-                "answer_markdown": "",
-            })
+            results.append(
+                {
+                    "councilor_id": councilor["id"] if councilor else None,
+                    "councilor_name": councilor.get("name") if councilor else None,
+                    "model": councilor["model"] if councilor else None,
+                    "status": "failed",
+                    "error": {
+                        "code": "STAGE_DEADLINE",
+                        "message": "Stage deadline exceeded.",
+                    },
+                    "answer_markdown": "",
+                }
+            )
             if on_answer_done and councilor:
                 cid = councilor["id"]
                 if asyncio.iscoroutinefunction(on_answer_done):
@@ -969,7 +1015,7 @@ async def stage1_collect_responses(
                 else:
                     on_answer_done(cid)
         return results
-        
+
     else:
         # No strict stage deadline, just gather all
         # To support streaming, we can't just use gather(*tasks).
@@ -984,31 +1030,31 @@ async def stage1_collect_responses(
         # Let's wrap the coroutine with a reporter helper?
         # No, let's just use `asyncio.as_completed` to fire events, and `gather` to get final ordered list.
         # Note: `as_completed` returns an iterator of futures.
-        
+
         # Parallel strategy: yield via callback as they complete
         if on_result:
-             for f in asyncio.as_completed(tasks):
-                 try:
-                     res = await f
-                     if asyncio.iscoroutinefunction(on_result):
-                         await on_result(res)
-                     else:
-                         on_result(res)
-                     if on_answer_done and res.get("councilor_id"):
-                         if asyncio.iscoroutinefunction(on_answer_done):
-                             await on_answer_done(res["councilor_id"])
-                         else:
-                             on_answer_done(res["councilor_id"])
-                 except Exception as e:
-                     # This exception comes from the task itself
-                     # But _request_stage1_bounded handles exceptions internally and returns dict.
-                     # So strictly, this shouldn't raise unless cancellation or bug.
-                     # We can't identify WHO failed easily here without mapping.
-                     # But wait, `res` IS the result dict containing councilor_id.
-                     # If generic exception, we don't have ID. 
-                     # _request_stage1_bounded guarantees dict return.
-                     pass 
-        
+            for f in asyncio.as_completed(tasks):
+                try:
+                    res = await f
+                    if asyncio.iscoroutinefunction(on_result):
+                        await on_result(res)
+                    else:
+                        on_result(res)
+                    if on_answer_done and res.get("councilor_id"):
+                        if asyncio.iscoroutinefunction(on_answer_done):
+                            await on_answer_done(res["councilor_id"])
+                        else:
+                            on_answer_done(res["councilor_id"])
+                except Exception as e:
+                    # This exception comes from the task itself
+                    # But _request_stage1_bounded handles exceptions internally and returns dict.
+                    # So strictly, this shouldn't raise unless cancellation or bug.
+                    # We can't identify WHO failed easily here without mapping.
+                    # But wait, `res` IS the result dict containing councilor_id.
+                    # If generic exception, we don't have ID.
+                    # _request_stage1_bounded guarantees dict return.
+                    pass
+
         # Now gather for final ordered list (all should be done)
         results = await asyncio.gather(*tasks, return_exceptions=True)
         final_results = []
@@ -1017,7 +1063,7 @@ async def stage1_collect_responses(
                 err_res = {
                     "councilor_id": councilors[i]["id"],
                     "status": "failed",
-                    "error": {"code": "UNHANDLED_EXCEPTION", "message": str(res)}
+                    "error": {"code": "UNHANDLED_EXCEPTION", "message": str(res)},
                 }
                 final_results.append(err_res)
                 if on_answer_done:
@@ -1034,46 +1080,41 @@ async def stage1_collect_responses(
         return final_results
 
 
-def _build_stage2_candidates(stage1_results: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+def _build_stage2_candidates(
+    stage1_results: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """Create anonymized candidate payloads for ranking."""
     candidates = []
     anon_to_councilor_id = {}
-    
-    # We iterate and assign anon_ids. 
+
+    # We iterate and assign anon_ids.
     # To keep anon_ids consistent across debugs, we could sort, but input order is presumed stable.
-    
+
     count = 1
     for result in stage1_results:
         if result.get("status") != "ok":
             continue
-            
+
         anon_id = f"anon_{count}"
         count += 1
-        
+
         # Strict Requirement: anon_map maps anon_id -> councilor_id
         councilor_id = result.get("councilor_id")
-        
+
         anon_to_councilor_id[anon_id] = councilor_id
 
-        payload = {
-            "answer_markdown": result.get("answer_markdown", "")
-        }
+        payload = {"answer_markdown": result.get("answer_markdown", "")}
 
-        candidates.append(
-            {
-                "anon_id": anon_id,
-                "payload": payload
-            }
-        )
+        candidates.append({"anon_id": anon_id, "payload": payload})
 
     return candidates, anon_to_councilor_id
 
 
 def _build_ranking_messages(
-    user_query: str, 
+    user_query: str,
     candidates: List[Dict[str, Any]],
     persona_text: str,
-    rubric_text: str
+    rubric_text: str,
 ) -> List[Dict[str, str]]:
     """
     Build messages using 3-layer system prompt:
@@ -1081,7 +1122,7 @@ def _build_ranking_messages(
     2. Judge Rubric
     3. JSON Guard
     """
-    
+
     # Layer 3: JSON Guard (Strictest)
     json_guard = (
         "HARD CONSTRAINTS (MUST FOLLOW):\n"
@@ -1094,7 +1135,7 @@ def _build_ranking_messages(
         "7) 'per_candidate_comments' (REQUIRED) must be a dictionary mapped by anon_id, with string values (max 200 chars each).\n"
         "ANY extra keys at top level = INVALID."
     )
-    
+
     # Combine Systems
     # persona_text from caching logic
     full_system_prompt = (
@@ -1141,10 +1182,10 @@ def _parse_ranking_response(
     ranking_strs = [str(x) for x in ranking]
     if len(set(ranking_strs)) != len(ranking_strs):
         return None, "Duplicate anon_ids in ranking"
-    
+
     expected_set = set(expected_anon_ids)
     ranking_set = set(ranking_strs)
-    
+
     if ranking_set != expected_set:
         missing = sorted(list(expected_set - ranking_set))
         extra = sorted(list(ranking_set - expected_set))
@@ -1160,7 +1201,7 @@ def _parse_ranking_response(
                     if 1 <= s_val <= 10:
                         filtered_scores[anon_id] = s_val
                 except (ValueError, TypeError):
-                    pass 
+                    pass
 
     rationale = data.get("rationale")
 
@@ -1169,15 +1210,15 @@ def _parse_ranking_response(
     if isinstance(per_candidate_comments, dict):
         for anon_id, comment in per_candidate_comments.items():
             if anon_id in expected_set and isinstance(comment, str):
-                filtered_comments[anon_id] = comment[:200] # Truncate
+                filtered_comments[anon_id] = comment[:200]  # Truncate
 
     parsed = {
         "ranking": ranking_strs,
         "scores": filtered_scores,
         "rationale": rationale,
-        "per_candidate_comments": filtered_comments
+        "per_candidate_comments": filtered_comments,
     }
-    
+
     # Strict Key Validation: Subset check
     # Top keys must be subset of allowed
     current_keys = set(data.keys())
@@ -1198,23 +1239,25 @@ async def _collect_single_ranking_bounded(
     councilor_id: str,
     councilor_name: str,
     councilor_obj: Dict[str, Any],
-    default_model: str, # Renamed for clarity
+    default_model: str,  # Renamed for clarity
     user_query: str,
     candidates: List[Dict[str, Any]],
     expected_anon_ids: List[str],
     timeout: float,
     on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
     enable_thinking: bool = True,
-    fixed_model: Optional[str] = None  # 固定模型分配
+    fixed_model: Optional[str] = None,  # 固定模型分配
 ) -> Dict[str, Any]:
     """Collect ranking with fallback routing."""
-    
+
     # Fetch Persona & Rubric
-    persona_path = councilor_obj.get("judge_persona_path") or councilor_obj.get("persona_path")
+    persona_path = councilor_obj.get("judge_persona_path") or councilor_obj.get(
+        "persona_path"
+    )
     persona_text = fetch_persona(PERSONA_CACHE, persona_path)
     rubric_text = councilor_obj.get("judge_system_prompt", "")
     rubric_text += "\n\n评审要求：忽略文风，仅评可行性与有效性。"
-    
+
     # Limits
     stage_limits = councilor_obj.get("stage_limits", {}).get("stage2", {})
     max_tokens = stage_limits.get("max_output_tokens", 360)
@@ -1226,41 +1269,46 @@ async def _collect_single_ranking_bounded(
             "1. 在输出最终 JSON 前，你必须多次调用 `emit_thinking` 工具展示你的评审思考过程\n"
             "2. **重要**：每次调用 `emit_thinking` 时，必须用中文填写 `title` 和 `detail`\n"
             "3. **重要**：必须指定 `target_anon_id` 参数，表示当前正在评估的候选方案（如 anon_1、anon_2）\n"
-            "4. `title` 应为 6-12 个中文字的简短摘要（如：\"分析 anon_1 的可行性\"）\n"
-            "5. `detail` 应为 1-2 行的详细说明（如：\"关注成本控制与时间安排的合理性\"）\n"
+            '4. `title` 应为 6-12 个中文字的简短摘要（如："分析 anon_1 的可行性"）\n'
+            '5. `detail` 应为 1-2 行的详细说明（如："关注成本控制与时间安排的合理性"）\n'
             "\n"
             "## 示例思考流程\n"
-            "- emit_thinking(title=\"评估 anon_1 的逻辑一致性\", detail=\"检查假设的可验证性\", target_anon_id=\"anon_1\")\n"
-            "- emit_thinking(title=\"对比 anon_2 与 anon_1\", detail=\"分析创新性与深度差异\", target_anon_id=\"anon_2\")\n"
-            "- emit_thinking(title=\"确定最终排序\", detail=\"综合考虑各维度权重\", target_anon_id=\"anon_1\")\n"
+            '- emit_thinking(title="评估 anon_1 的逻辑一致性", detail="检查假设的可验证性", target_anon_id="anon_1")\n'
+            '- emit_thinking(title="对比 anon_2 与 anon_1", detail="分析创新性与深度差异", target_anon_id="anon_2")\n'
+            '- emit_thinking(title="确定最终排序", detail="综合考虑各维度权重", target_anon_id="anon_1")\n'
             "\n"
             "思考完成后，输出最终的 JSON 排名结果。"
         )
-    
-    messages = _build_ranking_messages(user_query, candidates, persona_text, rubric_text)
-    
+
+    messages = _build_ranking_messages(
+        user_query, candidates, persona_text, rubric_text
+    )
+
     candidate_models = get_candidates(councilor_obj)
-    excluded_models: set = set()                                                   
+    excluded_models: set = set()
     attempted_models: List[str] = []
     fallback_reason = None  # 回退原因
     last_error = None
     last_error_class = None
     abort_request_error = False
-    
+
     # 软回退模式标记
     in_fallback_mode = False
     original_fixed_model = fixed_model
-    
+
     # 固定模型模式：先检查健康状态
     if fixed_model:
         status = health_manager.get_status(fixed_model)
         health_status = status.get("health_status")
-        
+
         if health_status in ("healthy", "unknown"):
             selected_model = fixed_model
         else:
             # 固定模型不健康，直接进入回退流程
-            print(f"[SoftFallback/Stage2] 固定模型 {fixed_model} 健康状态为 {health_status}，跳过并进入回退", flush=True)
+            print(
+                f"[SoftFallback/Stage2] 固定模型 {fixed_model} 健康状态为 {health_status}，跳过并进入回退",
+                flush=True,
+            )
             fallback_reason = f"fixed_model_unhealthy:{health_status}"
             in_fallback_mode = True
             fixed_model = None
@@ -1268,24 +1316,24 @@ async def _collect_single_ranking_bounded(
             selected_model = None
     else:
         selected_model = None
-    
+
     while True:  # Outer Loop: Candidates
         if not fixed_model:
             # 回退模式下强制使用速度排序
             selected_model = select_best_model(
-                candidate_models, 
-                excluded_models, 
+                candidate_models,
+                excluded_models,
                 councilor_id=councilor_id,
-                auto_route_by_speed=True  # 回退时强制速度排序
+                auto_route_by_speed=True,  # 回退时强制速度排序
             )
         if not selected_model:
             break
-            
+
         model_sem = await model_concurrency_manager.get_semaphore(selected_model)
-        
+
         # Concurrency Tracker: 进入队列
         await concurrency_tracker.acquire(selected_model)
-        
+
         current_messages = messages
         started = False
 
@@ -1307,13 +1355,19 @@ async def _collect_single_ranking_bounded(
                             can_think = caps.get("thinking", False)
 
                             if can_think and on_thinking:
+
                                 async def _think_cb(payload: Any):
                                     if on_thinking:
                                         if isinstance(payload, dict):
                                             thinking_payload = payload
                                         else:
                                             thinking_payload = {"title": str(payload)}
-                                        await on_thinking(councilor_id, "stage2", thinking_payload, selected_model)
+                                        await on_thinking(
+                                            councilor_id,
+                                            "stage2",
+                                            thinking_payload,
+                                            selected_model,
+                                        )
 
                                 response = await stream_model(
                                     selected_model,
@@ -1321,10 +1375,15 @@ async def _collect_single_ranking_bounded(
                                     on_thinking=_think_cb,
                                     timeout=timeout,
                                     max_output_tokens=max_tokens,
-                                    tools=THINKING_TOOL_DEF
+                                    tools=THINKING_TOOL_DEF,
                                 )
                             else:
-                                response = await query_model(selected_model, current_messages, timeout=timeout, max_output_tokens=max_tokens)
+                                response = await query_model(
+                                    selected_model,
+                                    current_messages,
+                                    timeout=timeout,
+                                    max_output_tokens=max_tokens,
+                                )
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
@@ -1341,41 +1400,58 @@ async def _collect_single_ranking_bounded(
                 attempt_res = {
                     "judge_councilor_id": councilor_id,
                     "judge_councilor_name": councilor_name,
-                    "model": response.get("model", selected_model) if response else selected_model,
-                    "raw_response": response.get("content", "") if response else ""
+                    "model": response.get("model", selected_model)
+                    if response
+                    else selected_model,
+                    "raw_response": response.get("content", "") if response else "",
                 }
 
                 if response and not response.get("error"):
                     # Network OK
                     health_manager.update_status(selected_model, True, source="runtime")
 
-                    parsed, error = _parse_ranking_response(attempt_res["raw_response"], expected_anon_ids)
+                    parsed, error = _parse_ranking_response(
+                        attempt_res["raw_response"], expected_anon_ids
+                    )
                     if error:
                         last_error = f"JSON/Usage Error ({selected_model}): {error}"
                         should_retry_json = True
                     else:
                         attempt_res.update(parsed)
-                        attempt_res["fallback_used"] = in_fallback_mode or (selected_model != candidate_models[0])
+                        attempt_res["fallback_used"] = in_fallback_mode or (
+                            selected_model != candidate_models[0]
+                        )
                         attempt_res["fallback_reason"] = fallback_reason
                         parsed_result = attempt_res
                         success = True
                 else:
                     # Network Fail
-                    err_msg = response.get('content') if response else 'No response'
-                    status_code = response.get('status_code') if response else None
+                    err_msg = response.get("content") if response else "No response"
+                    status_code = response.get("status_code") if response else None
 
                     # 400 错误分类
-                    error_class, should_retry, update_health = classify_400_error(response)
+                    error_class, should_retry, update_health = classify_400_error(
+                        response
+                    )
                     last_error_class = error_class
 
                     if update_health:
-                        health_manager.update_status(selected_model, False, err_msg, status_code, source="runtime")
+                        health_manager.update_status(
+                            selected_model,
+                            False,
+                            err_msg,
+                            status_code,
+                            source="runtime",
+                        )
 
                     last_error = f"{error_class}({selected_model}): {err_msg}"
 
                     # 请求错误：不回退
                     if not should_retry:
-                        print(f"[SoftFallback/Stage2] 请求错误，不回退: {error_class} - {err_msg}", flush=True)
+                        print(
+                            f"[SoftFallback/Stage2] 请求错误，不回退: {error_class} - {err_msg}",
+                            flush=True,
+                        )
                         abort_request_error = True
                         break
 
@@ -1384,7 +1460,10 @@ async def _collect_single_ranking_bounded(
 
                     # 固定模型模式：失败后进入回退流程
                     if fixed_model:
-                        print(f"[SoftFallback/Stage2] 固定模型 {fixed_model} 调用失败，进入回退流程: {err_msg}", flush=True)
+                        print(
+                            f"[SoftFallback/Stage2] 固定模型 {fixed_model} 调用失败，进入回退流程: {err_msg}",
+                            flush=True,
+                        )
                         in_fallback_mode = True
                         fixed_model = None
 
@@ -1403,7 +1482,7 @@ async def _collect_single_ranking_bounded(
                             model=selected_model,
                             stage="stage2",
                             ttft_ms=ttft_ms,
-                            total_ms=total_ms
+                            total_ms=total_ms,
                         )
                     fallback_count = max(0, len(attempted_models) - 1)
                     log_request_timing(
@@ -1420,14 +1499,14 @@ async def _collect_single_ranking_bounded(
                         status="ok",
                         fallback_count=fallback_count,
                         fallback_reason=fallback_reason,
-                        attempted_models=attempted_models
+                        attempted_models=attempted_models,
                     )
                     return parsed_result
 
                 if should_retry_json:
                     if logic_attempt == 0:
-                       # Repair
-                       retry_msg = {
+                        # Repair
+                        retry_msg = {
                             "role": "user",
                             "content": json.dumps(
                                 {
@@ -1437,31 +1516,31 @@ async def _collect_single_ranking_bounded(
                                 ensure_ascii=False,
                             ),
                         }
-                       # Append to NEW list to avoid mutating shared `messages`
-                       current_messages = messages + [retry_msg]
+                        # Append to NEW list to avoid mutating shared `messages`
+                        current_messages = messages + [retry_msg]
                     else:
-                       # 2nd fail
-                       excluded_models.add(selected_model)
-                       last_error_class = "json_invalid"
-                       if not fallback_reason:
-                           fallback_reason = "json_invalid"
-                       if fixed_model:
-                           in_fallback_mode = True
-                           fixed_model = None
-                       break
+                        # 2nd fail
+                        excluded_models.add(selected_model)
+                        last_error_class = "json_invalid"
+                        if not fallback_reason:
+                            fallback_reason = "json_invalid"
+                        if fixed_model:
+                            in_fallback_mode = True
+                            fixed_model = None
+                        break
 
                 if abort_request_error:
                     break
         finally:
             # Concurrency Tracker: 完成执行（无论成功、失败、取消都执行）
             await concurrency_tracker.release(selected_model)
-        
+
         # 固定模型模式且不在回退模式，则退出
         if fixed_model and not in_fallback_mode:
             break
         if abort_request_error:
             break
-            
+
     # Fail
     t_end = time.time()
     total_ms = int((t_end - t_start) * 1000)
@@ -1475,14 +1554,14 @@ async def _collect_single_ranking_bounded(
             "total_ms": total_ms,
             "model_select_ms": 0,
             "ttft_ms": None,
-            "generation_ms": 0
+            "generation_ms": 0,
         },
         status="failed",
         error=str(last_error or "All candidates failed"),
         fallback_count=fallback_count,
         fallback_reason=fallback_reason,
         attempted_models=attempted_models,
-        error_class=last_error_class
+        error_class=last_error_class,
     )
     return {
         "judge_councilor_id": councilor_id,
@@ -1490,92 +1569,94 @@ async def _collect_single_ranking_bounded(
         "error": {
             "code": "EXECUTION_ERROR",
             "message": str(last_error or "All candidates failed"),
-            "retryable": True
+            "retryable": True,
         },
         "attempted_models": attempted_models,
         "fallback_used": in_fallback_mode,
-        "fallback_reason": fallback_reason
+        "fallback_reason": fallback_reason,
     }
 
 
 async def stage2_collect_rankings(
-    user_query: str, 
-    stage1_results: List[Dict[str, Any]], 
+    user_query: str,
+    stage1_results: List[Dict[str, Any]],
     councilors: List[Dict[str, Any]],
     on_result: Optional[Callable[[Dict[str, Any]], Any]] = None,
     on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
     enable_thinking: bool = True,
-    model_assignments: Optional[Dict[str, str]] = None  # 固定模型分配
+    model_assignments: Optional[Dict[str, str]] = None,  # 固定模型分配
 ) -> Dict[str, Any]:
     """
     Stage 2: Each model ranks the anonymized responses.
     Strict concurrency, deadlines, and candidate validation.
     """
-    
+
     # Phase 1: Filter Valid Candidates
     valid_candidates = [r for r in stage1_results if r.get("status") == "ok"]
-    
+
     base_response = {
         "skipped": False,
         "skipped_reason": None,
         "reviews": [],
         "anon_map": {},
-        "judge_failures": []
+        "judge_failures": [],
     }
 
     if len(valid_candidates) < 2:
         base_response["skipped"] = True
-        base_response["skipped_reason"] = "insufficient_candidates" # Covers 0 or 1
+        base_response["skipped_reason"] = "insufficient_candidates"  # Covers 0 or 1
         return base_response
 
     # Phase 2: Execution
     candidates, anon_map_ids = _build_stage2_candidates(valid_candidates)
     base_response["anon_map"] = anon_map_ids
-    
+
     # Should not happen given check above, but consistency
     if len(candidates) < 2:
-         base_response["skipped"] = True
-         base_response["skipped_reason"] = "insufficient_candidates"
-         return base_response
-         
+        base_response["skipped"] = True
+        base_response["skipped_reason"] = "insufficient_candidates"
+        return base_response
+
     anon_ids = [card["anon_id"] for card in candidates]
-    
+
     semaphore = asyncio.Semaphore(DEFAULT_CONCURRENCY_STAGE2)
     tasks = []
-    
+
     # We need to map tasks to models for failure accounting
     # Use councilor objects to get timeouts
     for councilor in councilors:
         model = councilor["model"]
         limits = councilor.get("stage_limits", {}).get("stage2", {})
         timeout = limits.get("timeout", DEFAULT_STAGE2_TIMEOUT)
-        
+
         # 获取固定模型（如果有）
-        fixed_model = model_assignments.get(councilor["id"]) if model_assignments else None
-        
+        fixed_model = (
+            model_assignments.get(councilor["id"]) if model_assignments else None
+        )
+
         t = asyncio.create_task(
             _collect_single_ranking_bounded(
-                semaphore, 
+                semaphore,
                 councilor["id"],
                 councilor.get("name"),
-                councilor, # Pass full councilor object to access persona/rubric
-                model, 
-                user_query, 
-                candidates, 
-                anon_ids, 
+                councilor,  # Pass full councilor object to access persona/rubric
+                model,
+                user_query,
+                candidates,
+                anon_ids,
                 timeout,
                 on_thinking,
                 enable_thinking,
-                fixed_model=fixed_model
+                fixed_model=fixed_model,
             )
         )
         tasks.append((councilor, t))
-        
+
     raw_tasks = [t for _, t in tasks]
-    
+
     # Deadline Logic
     completed_results = []
-    
+
     if STAGE2_DEADLINE:
         # Stream results as they complete while honoring the stage deadline.
         task_map = {task: councilor for councilor, task in tasks}
@@ -1608,7 +1689,7 @@ async def stage2_collect_rankings(
                     err = {
                         "judge_councilor_id": councilor["id"] if councilor else None,
                         "model": councilor["model"] if councilor else None,
-                        "error": str(e)
+                        "error": str(e),
                     }
                     completed_results.append(err)
                     if on_result:
@@ -1625,54 +1706,64 @@ async def stage2_collect_rankings(
 
         for task in pending:
             councilor = task_map.get(task)
-            completed_results.append({
-                "judge_councilor_id": councilor["id"] if councilor else None,
-                "model": councilor["model"] if councilor else None,
-                "error": {
-                    "code": "STAGE_DEADLINE",
-                    "message": "Stage 2 deadline exceeded"
+            completed_results.append(
+                {
+                    "judge_councilor_id": councilor["id"] if councilor else None,
+                    "model": councilor["model"] if councilor else None,
+                    "error": {
+                        "code": "STAGE_DEADLINE",
+                        "message": "Stage 2 deadline exceeded",
+                    },
                 }
-            })
+            )
     else:
         # Callback logic for loose mode
         if on_result:
-             for f in asyncio.as_completed(raw_tasks):
-                 try:
-                     res = await f
-                     if asyncio.iscoroutinefunction(on_result):
-                         await on_result(res)
-                     else:
-                         on_result(res)
-                 except: pass # handled in gather below
+            for f in asyncio.as_completed(raw_tasks):
+                try:
+                    res = await f
+                    if asyncio.iscoroutinefunction(on_result):
+                        await on_result(res)
+                    else:
+                        on_result(res)
+                except:
+                    pass  # handled in gather below
 
         results = await asyncio.gather(*raw_tasks, return_exceptions=True)
         for i, res in enumerate(results):
             if isinstance(res, Exception):
-                completed_results.append({
-                    "judge_councilor_id": councilors[i]["id"],
-                    "model": councilors[i]["model"],
-                    "error": str(res)
-                })
+                completed_results.append(
+                    {
+                        "judge_councilor_id": councilors[i]["id"],
+                        "model": councilors[i]["model"],
+                        "error": str(res),
+                    }
+                )
             else:
                 completed_results.append(res)
-    
+
     reviews = []
     judge_failures = []
 
     for res in completed_results:
         # Check if internal error field exists or if it's a bare exception string (from catch-all)
         if isinstance(res.get("error"), (str, dict)) or res.get("error") is True:
-             judge_failures.append({
-                "judge_councilor_id": res.get("judge_councilor_id") or res.get("model"),
-                "model": res.get("model"),
-                "error": res.get("error") if isinstance(res.get("error"), dict) else {
-                    "code": "JUDGE_EXECUTION_ERROR",
-                    "message": str(res.get("error")),
-                    "retryable": False
+            judge_failures.append(
+                {
+                    "judge_councilor_id": res.get("judge_councilor_id")
+                    or res.get("model"),
+                    "model": res.get("model"),
+                    "error": res.get("error")
+                    if isinstance(res.get("error"), dict)
+                    else {
+                        "code": "JUDGE_EXECUTION_ERROR",
+                        "message": str(res.get("error")),
+                        "retryable": False,
+                    },
                 }
-            })
+            )
         else:
-             reviews.append(res)
+            reviews.append(res)
 
     base_response["judge_failures"] = judge_failures
 
@@ -1689,31 +1780,34 @@ async def stage2_collect_rankings(
 async def stage3_synthesize_final(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
-    stage2_result: Dict[str, Any], # Changed to Dict
+    stage2_result: Dict[str, Any],  # Changed to Dict
     chairman: Dict[str, Any],
     on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
     on_answer_delta: Optional[Callable[[str], Any]] = None,
     enable_thinking: bool = True,
-    fixed_model: Optional[str] = None  # 固定主席模型
+    fixed_model: Optional[str] = None,  # 固定主席模型
 ) -> Dict[str, Any]:
     persona = fetch_persona(PERSONA_CACHE, chairman.get("persona_path", ""))
     stage_limits = chairman.get("stage_limits", {}).get("stage3", {})
     timeout = stage_limits.get("timeout", 90.0)
     max_tokens = stage_limits.get("max_output_tokens", 900)
     t_start = time.time()
-    
+
     # 3. Stage Deadline
     stage_deadline = time.time() + STAGE3_DEADLINE if STAGE3_DEADLINE else None
 
     # Filter Valid Stage 1 inputs
     valid_stage1 = [r for r in stage1_results if r.get("status") == "ok"]
-    
+
     if not valid_stage1:
         return {
             "status": "failed",
             "model": "system",
             "response": "所有模型在第一阶段均未能生成有效回答，无法进行总结。",
-            "error": {"code": "ALL_STAGE1_FAILED", "message": "No valid stage 1 answers"}
+            "error": {
+                "code": "ALL_STAGE1_FAILED",
+                "message": "No valid stage 1 answers",
+            },
         }
 
     stage1_text = "\n\n".join(
@@ -1729,30 +1823,30 @@ async def stage3_synthesize_final(
         "insufficient_candidates": "有效候选方案少于2个，无需排序",
         "no_judges_completed": "所有评审员均超时或失败",
     }
-    
+
     if stage2_result.get("skipped"):
         reason = stage2_result.get("skipped_reason", "unknown")
         stage2_text = f"[评审阶段已跳过：{skipped_reason_map.get(reason, reason)}]"
     else:
         reviews = stage2_result.get("reviews", [])
         anon_map = stage2_result.get("anon_map", {})
-        
+
         review_texts = []
         for r in reviews:
             judge = r.get("judge_councilor_id", "")
             rankings = r.get("rankings", [])
             reasoning = r.get("reasoning", "")
-            
-            ranking_str = " > ".join([
-                f"{x.get('anon_id')} ({x.get('score', '')})" for x in rankings
-            ])
+
+            ranking_str = " > ".join(
+                [f"{x.get('anon_id')} ({x.get('score', '')})" for x in rankings]
+            )
             review_texts.append(f"评审员 {judge}：{ranking_str}\n理由：{reasoning}")
-        
+
         if review_texts:
             stage2_text = "\n\n".join(review_texts)
         else:
             stage2_text = "[无有效评审结果]"
-    
+
     # Build Prompt
     thinking_instructions = ""
     if enable_thinking:
@@ -1796,24 +1890,30 @@ async def stage3_synthesize_final(
     fallback_reason = None
     last_error = None
     last_error_class = None
-    
+
     # 软回退相关
     in_fallback_mode = False
     original_fixed_model = fixed_model
     consecutive_non_request_errors = 0
-    
+
     # 固定模型分配模式：先检查健康状态
     if fixed_model:
         if fixed_model not in candidates:
-             print(f"[SoftFallback/Stage3] 警告: 固定主席模型 {fixed_model} 不在候选池中，仍将尝试", flush=True)
-             
+            print(
+                f"[SoftFallback/Stage3] 警告: 固定主席模型 {fixed_model} 不在候选池中，仍将尝试",
+                flush=True,
+            )
+
         status = health_manager.get_status(fixed_model)
         health_status = status.get("health_status")
-        
+
         if health_status in ("healthy", "unknown"):
             selected_model = fixed_model
         else:
-            print(f"[SoftFallback/Stage3] 固定主席模型 {fixed_model} 健康状态为 {health_status}，跳过并进入回退", flush=True)
+            print(
+                f"[SoftFallback/Stage3] 固定主席模型 {fixed_model} 健康状态为 {health_status}，跳过并进入回退",
+                flush=True,
+            )
             fallback_reason = f"fixed_model_unhealthy:{health_status}"
             in_fallback_mode = True
             fixed_model = None
@@ -1822,25 +1922,27 @@ async def stage3_synthesize_final(
     else:
         selected_model = None
 
-    while True: # Outer Loop: Candidates
+    while True:  # Outer Loop: Candidates
         # 3. Check Stage Deadline
         if stage_deadline and time.time() > stage_deadline:
-             last_error = "Stage 3 Deadline Exceeded"
-             break
-             
+            last_error = "Stage 3 Deadline Exceeded"
+            break
+
         if not fixed_model:
             # 回退模式下强制使用速度排序
             selected_model = select_best_model(
-                candidates, 
-                excluded_models, 
+                candidates,
+                excluded_models,
                 councilor_id=chairman.get("id"),
-                auto_route_by_speed=True if in_fallback_mode else True # Stage3 default usually auto-route
+                auto_route_by_speed=True
+                if in_fallback_mode
+                else True,  # Stage3 default usually auto-route
             )
         if not selected_model:
             break
-            
+
         model_sem = await model_concurrency_manager.get_semaphore(selected_model)
-        
+
         # Inner Loop: Retry (Simple retries for Stage 3)
         for attempt in range(2):
             response = None
@@ -1864,6 +1966,7 @@ async def stage3_synthesize_final(
                             on_answer_delta(delta)
 
                     if use_stream:
+
                         async def _think_cb(payload: Any):
                             if not use_tools or not on_thinking:
                                 return
@@ -1871,7 +1974,12 @@ async def stage3_synthesize_final(
                                 thinking_payload = payload
                             else:
                                 thinking_payload = {"title": str(payload)}
-                            await on_thinking(chairman["id"], "stage3", thinking_payload, selected_model)
+                            await on_thinking(
+                                chairman["id"],
+                                "stage3",
+                                thinking_payload,
+                                selected_model,
+                            )
 
                         response = await stream_model(
                             selected_model,
@@ -1880,11 +1988,14 @@ async def stage3_synthesize_final(
                             on_content=_content_cb if on_answer_delta else None,
                             timeout=timeout,
                             max_output_tokens=max_tokens,
-                            tools=THINKING_TOOL_DEF if use_tools else None
+                            tools=THINKING_TOOL_DEF if use_tools else None,
                         )
                     else:
                         response = await query_model(
-                            selected_model, messages, timeout=timeout, max_output_tokens=max_tokens
+                            selected_model,
+                            messages,
+                            timeout=timeout,
+                            max_output_tokens=max_tokens,
                         )
             except Exception as e:
                 response = {"error": True, "content": str(e)}
@@ -1892,122 +2003,137 @@ async def stage3_synthesize_final(
             if selected_model not in attempted_models:
                 attempted_models.append(selected_model)
 
-            if response and not response.get('error'):
-                 # Success
-                 health_manager.update_status(selected_model, True, source="runtime")
-                 
-                 actual_model = response.get("model", selected_model)
-                 t_end = time.time()
-                 ttft_ms = response.get("ttft_ms")
-                 total_ms = int((t_end - t_start) * 1000)
-                 generation_ms = total_ms - (ttft_ms or 0)
-                 fallback_count = max(0, len(attempted_models) - 1)
-                 log_request_timing(
-                     stage="stage3",
-                     councilor_id=chairman.get("id"),
-                     councilor_name=chairman.get("name", ""),
-                     model=actual_model,
-                     timing={
-                         "total_ms": total_ms,
-                         "model_select_ms": 0,
-                         "ttft_ms": ttft_ms,
-                         "generation_ms": max(0, generation_ms)
-                     },
-                     status="ok",
-                     fallback_count=fallback_count,
-                     fallback_reason=fallback_reason,
-                     attempted_models=attempted_models
-                 )
-                 return {
+            if response and not response.get("error"):
+                # Success
+                health_manager.update_status(selected_model, True, source="runtime")
+
+                actual_model = response.get("model", selected_model)
+                t_end = time.time()
+                ttft_ms = response.get("ttft_ms")
+                total_ms = int((t_end - t_start) * 1000)
+                generation_ms = total_ms - (ttft_ms or 0)
+                fallback_count = max(0, len(attempted_models) - 1)
+                log_request_timing(
+                    stage="stage3",
+                    councilor_id=chairman.get("id"),
+                    councilor_name=chairman.get("name", ""),
+                    model=actual_model,
+                    timing={
+                        "total_ms": total_ms,
+                        "model_select_ms": 0,
+                        "ttft_ms": ttft_ms,
+                        "generation_ms": max(0, generation_ms),
+                    },
+                    status="ok",
+                    fallback_count=fallback_count,
+                    fallback_reason=fallback_reason,
+                    attempted_models=attempted_models,
+                )
+                return {
                     "status": "ok",
-                    "model": actual_model, 
+                    "model": actual_model,
                     "response": response.get("content", ""),
                     "attempted_models": attempted_models,
-                    "fallback_used": in_fallback_mode or (selected_model != candidates[0]),
-                    "fallback_reason": fallback_reason
-                 }
+                    "fallback_used": in_fallback_mode
+                    or (selected_model != candidates[0]),
+                    "fallback_reason": fallback_reason,
+                }
             else:
-                 # Failure
-                 err_msg = response.get("content") if response else "No response from chairman"
-                 status_code = response.get('status_code') if response else None
-                 
-                 # 400 Classification
-                 error_class, should_retry, update_health = classify_400_error(response)
-                 last_error_class = error_class
-                 
-                 if update_health:
-                     health_manager.update_status(selected_model, False, err_msg, status_code, source="runtime")
-                     
-                 last_error = f"{error_class}({selected_model}): {err_msg}"
-                 
-                 # Request Error -> Stop
-                 if not should_retry:
-                     print(f"[SoftFallback/Stage3] 请求错误，不回退: {error_class} - {err_msg}", flush=True)
-                     t_end = time.time()
-                     total_ms = int((t_end - t_start) * 1000)
-                     fallback_count = max(0, len(attempted_models) - 1)
-                     log_request_timing(
-                         stage="stage3",
-                         councilor_id=chairman.get("id"),
-                         councilor_name=chairman.get("name", ""),
-                         model=selected_model,
-                         timing={
-                             "total_ms": total_ms,
-                             "model_select_ms": 0,
-                             "ttft_ms": None,
-                             "generation_ms": 0
-                         },
-                         status="failed",
-                         error=err_msg,
-                         fallback_count=fallback_count,
-                         fallback_reason=fallback_reason,
-                         attempted_models=attempted_models,
-                         error_class=error_class
-                     )
-                     return {
+                # Failure
+                err_msg = (
+                    response.get("content") if response else "No response from chairman"
+                )
+                status_code = response.get("status_code") if response else None
+
+                # 400 Classification
+                error_class, should_retry, update_health = classify_400_error(response)
+                last_error_class = error_class
+
+                if update_health:
+                    health_manager.update_status(
+                        selected_model, False, err_msg, status_code, source="runtime"
+                    )
+
+                last_error = f"{error_class}({selected_model}): {err_msg}"
+
+                # Request Error -> Stop
+                if not should_retry:
+                    print(
+                        f"[SoftFallback/Stage3] 请求错误，不回退: {error_class} - {err_msg}",
+                        flush=True,
+                    )
+                    t_end = time.time()
+                    total_ms = int((t_end - t_start) * 1000)
+                    fallback_count = max(0, len(attempted_models) - 1)
+                    log_request_timing(
+                        stage="stage3",
+                        councilor_id=chairman.get("id"),
+                        councilor_name=chairman.get("name", ""),
+                        model=selected_model,
+                        timing={
+                            "total_ms": total_ms,
+                            "model_select_ms": 0,
+                            "ttft_ms": None,
+                            "generation_ms": 0,
+                        },
+                        status="failed",
+                        error=err_msg,
+                        fallback_count=fallback_count,
+                        fallback_reason=fallback_reason,
+                        attempted_models=attempted_models,
+                        error_class=error_class,
+                    )
+                    return {
                         "status": "failed",
                         "model": selected_model,
                         "response": f"Stage3 无法执行: {err_msg}",
                         "error": {"code": "REQUEST_ERROR", "message": err_msg},
                         "attempted_models": attempted_models,
-                        "fallback_used": in_fallback_mode or (selected_model != candidates[0]),
-                        "fallback_reason": fallback_reason
-                     }
+                        "fallback_used": in_fallback_mode
+                        or (selected_model != candidates[0]),
+                        "fallback_reason": fallback_reason,
+                    }
 
-                 # Count consecutive non-request errors
-                 if error_class != "request_error":
-                     consecutive_non_request_errors += 1
-                     if consecutive_non_request_errors >= 2:
-                         print(f"[Stage3] Warning: 连续 {consecutive_non_request_errors} 次非请求错误，可能上游输入有问题", flush=True)
+                # Count consecutive non-request errors
+                if error_class != "request_error":
+                    consecutive_non_request_errors += 1
+                    if consecutive_non_request_errors >= 2:
+                        print(
+                            f"[Stage3] Warning: 连续 {consecutive_non_request_errors} 次非请求错误，可能上游输入有问题",
+                            flush=True,
+                        )
 
-                 if not fallback_reason:
+                if not fallback_reason:
                     fallback_reason = error_class
 
-                 # Fixed model fails -> enter fallback
-                 if fixed_model:
-                     print(f"[SoftFallback/Stage3] 固定主席模型 {fixed_model} 调用失败，进入回退流程: {err_msg}", flush=True)
-                     in_fallback_mode = True
-                     fixed_model = None
-                     # Break inner to allow re-selection
-                     excluded_models.add(selected_model)
-                     break 
-                 
-                 # Logic Retry for network/other errors
-                 if attempt == 0 and is_retryable_error(response):
-                     retry_after = get_retry_after(response)
-                     delay = retry_after if retry_after else 1.0
-                     await asyncio.sleep(delay)
-                     continue # Retry inner
-                 else:
-                     # 2nd fail or fatal
-                     excluded_models.add(selected_model)
-                     break # Break inner
-         
+                # Fixed model fails -> enter fallback
+                if fixed_model:
+                    print(
+                        f"[SoftFallback/Stage3] 固定主席模型 {fixed_model} 调用失败，进入回退流程: {err_msg}",
+                        flush=True,
+                    )
+                    in_fallback_mode = True
+                    fixed_model = None
+                    # Break inner to allow re-selection
+                    excluded_models.add(selected_model)
+                    break
+
+                # Logic Retry for network/other errors
+                if attempt == 0 and is_retryable_error(response):
+                    retry_after = get_retry_after(response)
+                    delay = retry_after if retry_after else 1.0
+                    await asyncio.sleep(delay)
+                    continue  # Retry inner
+                else:
+                    # 2nd fail or fatal
+                    excluded_models.add(selected_model)
+                    break  # Break inner
+
         # If fixed model was just cleared above, loop continues to pick next model
         # If still fixed model (shouldn't reach here if broke above), safeguards:
         if fixed_model and not in_fallback_mode:
             break
-                     
+
     t_end = time.time()
     total_ms = int((t_end - t_start) * 1000)
     fallback_count = max(0, len(attempted_models) - 1)
@@ -2020,14 +2146,14 @@ async def stage3_synthesize_final(
             "total_ms": total_ms,
             "model_select_ms": 0,
             "ttft_ms": None,
-            "generation_ms": 0
+            "generation_ms": 0,
         },
         status="failed",
         error=str(last_error or "All candidates failed"),
         fallback_count=fallback_count,
         fallback_reason=fallback_reason,
         attempted_models=attempted_models,
-        error_class=last_error_class
+        error_class=last_error_class,
     )
     return {
         "status": "failed",
@@ -2036,7 +2162,7 @@ async def stage3_synthesize_final(
         "error": {"code": "CHAIRMAN_FAILED", "message": str(last_error)},
         "attempted_models": attempted_models,
         "fallback_used": in_fallback_mode or (len(attempted_models) > 1),
-        "fallback_reason": fallback_reason
+        "fallback_reason": fallback_reason,
     }
 
 
@@ -2044,6 +2170,7 @@ def calculate_aggregate_rankings(
     stage2_results: List[Dict[str, Any]], anon_to_councilor: Dict[str, str]
 ) -> List[Dict[str, Any]]:
     from collections import defaultdict
+
     model_positions = defaultdict(list)
 
     for ranking in stage2_results:
@@ -2073,7 +2200,7 @@ def calculate_aggregate_rankings(
 
 
 def calculate_conversation_title_prompt(user_query: str) -> str:
-     return f"""Generate a very short title (3-5 words maximum) that summarizes the following question.
+    return f"""Generate a very short title (3-5 words maximum) that summarizes the following question.
 The title should be concise and descriptive. Do not use quotes or punctuation in the title.
 IMPORTANT: Generate the title in the SAME LANGUAGE as the question below.
 
@@ -2086,29 +2213,55 @@ async def generate_conversation_title(user_query: str) -> str:
     title_prompt = calculate_conversation_title_prompt(user_query)
     messages = [{"role": "user", "content": title_prompt}]
 
-    try:
-        response = await query_model("kwaipilot/kat-coder-pro:free", messages, timeout=30.0)
+    # Auto-select best healthy model from candidates
+    excluded_models = set()
+    attempted_models = []
+    
+    # Try up to 2 models
+    for _ in range(2):
+        selected_model = select_best_model(
+            SUMMARY_MODEL_CANDIDATES,
+            excluded_models,
+            auto_route_by_speed=True
+        )
+        
+        if not selected_model:
+            break
+            
+        try:
+            response = await query_model(
+                selected_model, messages, timeout=30.0
+            )
 
-        if response is None:
-            return "New Conversation"
+            if response is None or response.get("error"):
+                excluded_models.add(selected_model)
+                continue
 
-        title = response.get("content", "New Conversation").strip()
-        title = title.strip("\"'")
-        if len(title) > 50:
-            title = title[:47] + "..."
+            title = response.get("content", "New Conversation").strip()
+            title = title.strip("\"'")
+            if len(title) > 50:
+                title = title[:47] + "..."
 
-        return title
-    except Exception:
-        return "New Conversation"
+            # Success
+            health_manager.update_status(selected_model, True, source="runtime")
+            return title
+            
+        except Exception:
+            health_manager.update_status(selected_model, False, "Summary generation failed", 500, source="runtime")
+            excluded_models.add(selected_model)
+            continue
+
+    # All attempts failed
+    return "New Conversation"
 
 
 async def run_full_council(
-    user_query: str, 
-    councilors: List[Dict[str, Any]], 
+    user_query: str,
+    councilors: List[Dict[str, Any]],
     chairman: Dict[str, Any],
     on_thinking: Optional[Callable[[str, str, Any, str], Any]] = None,
     enable_thinking: bool = True,
-    model_assignments: Optional[Dict[str, str]] = None
+    model_assignments: Optional[Dict[str, str]] = None,
 ) -> Tuple[List, Dict, Dict, Dict]:
     # Stage 1
     stage1_results = await stage1_collect_responses(
@@ -2116,12 +2269,12 @@ async def run_full_council(
         councilors,
         on_thinking=on_thinking,
         enable_thinking=enable_thinking,
-        model_assignments=model_assignments
+        model_assignments=model_assignments,
     )
 
     # Use active models for ranking (using councilors models)
     # Note: stage2_collect_rankings now expects full councilor objects to read timeouts
-    
+
     # Stage 2 (Unified Dict)
     stage2_result = await stage2_collect_rankings(
         user_query,
@@ -2129,13 +2282,13 @@ async def run_full_council(
         councilors,
         on_thinking=on_thinking,
         enable_thinking=enable_thinking,
-        model_assignments=model_assignments
+        model_assignments=model_assignments,
     )
 
     # Aggregate Rankings (if not skipped)
     aggregate_rankings = []
     if not stage2_result.get("skipped"):
-         aggregate_rankings = calculate_aggregate_rankings(
+        aggregate_rankings = calculate_aggregate_rankings(
             stage2_result.get("reviews", []), stage2_result.get("anon_map", {})
         )
 
@@ -2147,7 +2300,7 @@ async def run_full_council(
         chairman,
         on_thinking=on_thinking,
         enable_thinking=enable_thinking,
-        fixed_model=model_assignments.get("chairman") if model_assignments else None
+        fixed_model=model_assignments.get("chairman") if model_assignments else None,
     )
 
     metadata = {

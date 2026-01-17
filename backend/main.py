@@ -6,7 +6,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, field_validator
 from typing import List, Dict, Any, Optional, Tuple
@@ -429,7 +429,7 @@ async def delete_conversation(conversation_id: str, token: str = Depends(verify_
         
     try:
         storage.delete_conversation(conversation_id)
-        return JSONResponse(status_code=204, content=None)
+        return Response(status_code=204)
     except OSError as e:
         # Permission denied or locked (storage logic raises this)
         import errno
@@ -854,6 +854,11 @@ async def send_message_stream(request: Request, conversation_id: str, body: Send
             active_councilors, needs_migration, ignored_ids = resolve_target_councilors(
                 effective_councilor_ids, conversation
             )
+            
+            # 如果 model_assignments 存在但 active_councilors 为空，从 model_assignments 获取 councilor IDs
+            if model_assignments and not active_councilors:
+                assigned_ids = [k for k in model_assignments.keys() if k != "chairman"]
+                active_councilors = [COUNCILOR_MAP[cid] for cid in assigned_ids if cid in COUNCILOR_MAP]
 
             # schema_version=3 但无分配：首次发送补分配
             if schema_version >= 3 and not model_assignments:
