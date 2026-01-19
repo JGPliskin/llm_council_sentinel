@@ -160,11 +160,11 @@ function TacticalHUD({
             <div className="w-full flex items-center gap-4 px-6 py-2 border-b border-zinc-800 bg-black/40 backdrop-blur-md">
                 {/* Controls (Integrated) */}
                 <div className="flex items-center gap-3 border-r border-zinc-800 pr-4 mr-0 md:mr-2">
-                    <button onClick={onToggleSidebar} className="text-zinc-500 hover:text-white transition-colors" title="Toggle Sidebar">
+                    <button onClick={onToggleSidebar} className="text-zinc-500 hover:text-white transition-colors animate-breathe md:animate-none" title="Toggle Sidebar">
                         {isSidebarOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
                     </button>
                     {stage !== 'idle' && (
-                        <button onClick={onToggleDetailPanel} className="text-zinc-500 hover:text-white transition-colors" title="Toggle Detail Panel">
+                        <button onClick={onToggleDetailPanel} className="text-zinc-500 hover:text-white transition-colors animate-breathe md:animate-none" title="Toggle Detail Panel">
                             {isDetailPanelOpen ? <PanelRightOpen size={14} className="rotate-180" /> : <PanelRightOpen size={14} />}
                         </button>
                     )}
