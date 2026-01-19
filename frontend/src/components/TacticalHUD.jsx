@@ -181,7 +181,7 @@ function TacticalHUD({
                 </div>
                 <div className="flex items-center gap-2">
                     <div className={`w-2 h-2 rounded-full ${stage === 'idle' ? 'bg-zinc-500' : 'bg-purple-500 animate-pulse'}`}></div>
-                    <span className="text-[10px] font-mono font-bold text-purple-400 tracking-[0.2em] uppercase">
+                    <span className="text-[10px] font-mono font-bold text-purple-400 tracking-[0.2em] uppercase whitespace-nowrap flex-shrink-0">
                         STAGE [{stage === 'idle' ? 'STANDBY' : stage === 'stage1' ? '01 / 03' : stage === 'stage2' ? '02 / 03' : '03 / 03'}]
                     </span>
                     <span className="text-[10px] font-mono text-zinc-600 uppercase tracking-widest">
