@@ -180,6 +180,19 @@ function AppContent() {
     }
   }, [engine.conversation, conversationId, navigate]);
 
+  // Mobile: Auto-open drawer when entering Stage 2
+  useEffect(() => {
+    if (engine.stage === 'stage2' && window.innerWidth < 768) {
+      setIsPanelOpen(true);
+    }
+  }, [engine.stage]);
+
+  const handleContentClick = () => {
+    if (window.innerWidth < 768 && isPanelOpen) {
+      setIsPanelOpen(false);
+    }
+  };
+
   const handleToggleAgent = (id) => {
     setSelectedAgentIds(prev => {
       if (prev.includes(id)) return prev.filter(x => x !== id);
@@ -213,7 +226,7 @@ function AppContent() {
         {/* Main Content */}
         <div className="flex flex-col h-full flex-1 min-w-0 relative transition-all duration-500">
           {engine.stage === 'idle' ? (
-            <div className="flex-1 overflow-hidden relative">
+            <div className="flex-1 overflow-hidden relative" onClick={handleContentClick}>
               <WelcomeScreen
                 onStart={handleStartSession}
                 councilors={allCouncilors}
@@ -222,23 +235,26 @@ function AppContent() {
               />
             </div>
           ) : (
-            <StageContentArea
-              chairmanId={engine.chairmanId}
-              activeTab={engine.activeTab}
-              onTabSelect={engine.setActiveTab}
-              stage={engine.stage}
-              consensusUnlocked={engine.consensusUnlocked}
-              hasViewedConsensus={engine.hasViewedConsensus}
-              onManualConsensusView={engine.viewConsensus}
-              resolvedCouncilors={engine.resolvedCouncilors}
-              stage1Results={engine.stage1Results}
-              stage3Result={engine.stage3Result}
-              stage3AnswerStream={engine.stage3AnswerStream}
-              thinkingByCouncilor={engine.thinkingByCouncilor}
-              thinkingExpanded={engine.thinkingExpanded}
-              onToggleThinking={engine.toggleThinkingExpanded}
-              stage1AnswerStream={engine.stage1AnswerStream}
-            />
+            <div className="flex-1 min-h-0 relative flex flex-col">
+              <StageContentArea
+                chairmanId={engine.chairmanId}
+                activeTab={engine.activeTab}
+                onTabSelect={engine.setActiveTab}
+                stage={engine.stage}
+                consensusUnlocked={engine.consensusUnlocked}
+                hasViewedConsensus={engine.hasViewedConsensus}
+                onManualConsensusView={engine.viewConsensus}
+                resolvedCouncilors={engine.resolvedCouncilors}
+                stage1Results={engine.stage1Results}
+                stage3Result={engine.stage3Result}
+                stage3AnswerStream={engine.stage3AnswerStream}
+                thinkingByCouncilor={engine.thinkingByCouncilor}
+                thinkingExpanded={engine.thinkingExpanded}
+                onToggleThinking={engine.toggleThinkingExpanded}
+                stage1AnswerStream={engine.stage1AnswerStream}
+                onBackgroundClick={handleContentClick}
+              />
+            </div>
           )}
 
           {/* Footer HUD */}
@@ -253,6 +269,7 @@ function AppContent() {
             onConsensusClick={engine.viewConsensus}
             stage2Skipped={engine.stage2Skipped}
             activeTab={engine.activeTab}
+            onTabSelect={engine.setActiveTab} // Interactive Switching
             // IDLE props
             selectedAgentIds={selectedAgentIds}
             allCouncilors={allCouncilors}

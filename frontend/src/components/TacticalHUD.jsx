@@ -14,6 +14,7 @@ function TacticalHUD({
     onConsensusClick,
     stage2Skipped = false,
     activeTab = null,
+    onTabSelect, // New: for interactive switching
     // New props for IDLE stage
     selectedAgentIds = [],
     allCouncilors = [],
@@ -102,7 +103,13 @@ function TacticalHUD({
         return (
             <div
                 key={agent.councilor_id}
-                className={`agent-slice ${hasRanking ? 'border-opacity-100' : 'border-opacity-50'}`}
+                onClick={(e) => {
+                    if (onTabSelect) {
+                        e.stopPropagation(); // Prevent main content click from closing drawer immediately if needed
+                        onTabSelect(agent.councilor_id);
+                    }
+                }}
+                className={`agent-slice ${hasRanking ? 'border-opacity-100' : 'border-opacity-50'} ${onTabSelect ? 'cursor-pointer hover:bg-white/5' : ''} ${activeTab === agent.councilor_id ? 'bg-white/10 ring-1 ring-white/20' : ''}`}
                 style={{ borderColor: `var(--accent-${uiConfig.color})` }}
             >
                 {/* Background Pattern & Progress Fill (Stage 1 & Stage 2) */}

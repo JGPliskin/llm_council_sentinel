@@ -18,6 +18,7 @@ function StageContentArea({
     thinkingByCouncilor = {},
     thinkingExpanded = {},
     onToggleThinking,
+    onBackgroundClick, // New prop
     stage1AnswerStream = {},
     chairmanId = null, // Added Prop
     // stage2Results not directly displayed in content area ? Refactor shows Stage 1/3 content. Stage 2 evaluates.
@@ -216,7 +217,16 @@ function StageContentArea({
             </div>
 
             {/* MAIN CONTENT */}
-            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-8 pb-40 md:pb-40 scroll-smooth relative z-10 custom-scrollbar">
+            <div
+                ref={scrollRef}
+                onClick={(e) => {
+                    // Only trigger if clicking the background directly, not interactive children
+                    // But events bubble. We rely on interactive children (buttons) stopping propagation if needed.
+                    // Actually, for "Tap to Stow", usually clicking anywhere that isn't a button should work. 
+                    if (onBackgroundClick) onBackgroundClick(e);
+                }}
+                className="flex-1 overflow-y-auto p-4 md:p-8 pb-40 md:pb-40 scroll-smooth relative z-10 custom-scrollbar"
+            >
                 <div className="max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
 
                     {/* Header Card */}
