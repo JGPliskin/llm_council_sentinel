@@ -211,7 +211,7 @@ function AppContent() {
         />
 
         {/* Main Content */}
-        <div className="flex flex-col h-full w-full relative transition-all duration-500">
+        <div className="flex flex-col h-full flex-1 min-w-0 relative transition-all duration-500">
           {engine.stage === 'idle' ? (
             <div className="flex-1 overflow-hidden relative">
               <WelcomeScreen
@@ -241,19 +241,47 @@ function AppContent() {
             />
           )}
 
-          {/* Desktop Toggle Buttons (Tactical Style) */}
-
+          {/* Footer HUD */}
+          <TacticalHUD
+            stage={engine.stage}
+            agentProgress={engine.agentProgress}
+            aggregateRankings={engine.aggregateRankings}
+            resolvedCouncilors={engine.resolvedCouncilors}
+            consensusUnlocked={engine.consensusUnlocked}
+            stage3Complete={engine.stage3Complete}
+            hasViewedConsensus={engine.hasViewedConsensus}
+            onConsensusClick={engine.viewConsensus}
+            stage2Skipped={engine.stage2Skipped}
+            activeTab={engine.activeTab}
+            // IDLE props
+            selectedAgentIds={selectedAgentIds}
+            allCouncilors={allCouncilors}
+            // Controls
+            isSidebarOpen={isSidebarOpen}
+            onToggleSidebar={() => {
+              const newState = !isSidebarOpen;
+              setIsSidebarOpen(newState);
+              if (newState && window.innerWidth < 768) setIsPanelOpen(false);
+            }}
+            isDetailPanelOpen={isPanelOpen}
+            onToggleDetailPanel={() => {
+              const newState = !isPanelOpen;
+              setIsPanelOpen(newState);
+              if (newState && window.innerWidth < 768) setIsSidebarOpen(false);
+            }}
+            onResetSession={() => { if (confirm('Reset Session?')) engine.reset(); }}
+          />
         </div>
 
-        {/* Right Detail Panel */}
+        {/* Right Detail Panel - Outside MainContent, Fixed position */}
         {engine.stage !== 'idle' && (
           <div
             className={`
               fixed bottom-0 inset-x-0 z-50 rounded-t-2xl border-t border-zinc-800
-              md:fixed md:inset-y-0 md:inset-x-auto md:right-0 md:bottom-auto md:rounded-none md:border-t-0 md:border-l md:w-[400px]
+              md:relative md:inset-auto md:w-[400px] md:rounded-none md:border-t-0 md:border-l md:block
               transition-all duration-300
-              h-[var(--panel-height)] md:h-full
-              ${isPanelOpen ? 'translate-y-0 opacity-100 md:translate-y-0 md:translate-x-0' : 'translate-y-full opacity-0 md:translate-y-0 md:translate-x-full md:w-0'}
+              h-[var(--panel-height)] md:h-auto
+              ${isPanelOpen ? 'translate-y-0 opacity-100 md:translate-y-0 md:translate-x-0' : 'translate-y-full opacity-0 md:translate-x-0 md:w-0 md:opacity-0 md:overflow-hidden'}
             `}
             style={{
               '--panel-height': isPanelFullscreen ? '90vh' : `${[30, 45, 60][panelHeightTier - 1] || 60}vh`,
@@ -276,39 +304,8 @@ function AppContent() {
             />
           </div>
         )}
-
-        {/* Footer HUD */}
-        <TacticalHUD
-          stage={engine.stage}
-          agentProgress={engine.agentProgress}
-          aggregateRankings={engine.aggregateRankings}
-          resolvedCouncilors={engine.resolvedCouncilors}
-          consensusUnlocked={engine.consensusUnlocked}
-          stage3Complete={engine.stage3Complete}
-          hasViewedConsensus={engine.hasViewedConsensus}
-          onConsensusClick={engine.viewConsensus}
-          stage2Skipped={engine.stage2Skipped}
-          activeTab={engine.activeTab}
-          // IDLE props
-          selectedAgentIds={selectedAgentIds}
-          allCouncilors={allCouncilors}
-          // Controls
-          isSidebarOpen={isSidebarOpen}
-          onToggleSidebar={() => {
-            const newState = !isSidebarOpen;
-            setIsSidebarOpen(newState);
-            if (newState && window.innerWidth < 768) setIsPanelOpen(false);
-          }}
-          isDetailPanelOpen={isPanelOpen}
-          onToggleDetailPanel={() => {
-            const newState = !isPanelOpen;
-            setIsPanelOpen(newState);
-            if (newState && window.innerWidth < 768) setIsSidebarOpen(false);
-          }}
-          onResetSession={() => { if (confirm('Reset Session?')) engine.reset(); }}
-        />
       </div>
-    </div >
+    </div>
   );
 }
 

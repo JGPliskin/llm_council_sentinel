@@ -169,7 +169,7 @@ function StageContentArea({
 
     // Render
     return (
-        <div className="flex-1 flex flex-col h-full bg-zinc-950 overflow-hidden relative">
+        <div className="flex-1 flex flex-col bg-zinc-950 overflow-hidden relative">
             <div className="absolute inset-0 bg-grid-pattern opacity-20 pointer-events-none" />
 
             {/* TABS */}
