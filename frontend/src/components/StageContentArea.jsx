@@ -216,7 +216,7 @@ function StageContentArea({
             </div>
 
             {/* MAIN CONTENT */}
-            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth relative z-10 custom-scrollbar">
+            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-8 pb-40 md:pb-40 scroll-smooth relative z-10 custom-scrollbar">
                 <div className="max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
 
                     {/* Header Card */}

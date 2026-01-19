@@ -19,7 +19,7 @@ export function WelcomeScreen({ onStart, councilors = [], selectedIds = [], onTo
     const activeCouncilors = councilors.filter(c => c.active !== false);
 
     return (
-        <div className="flex-1 flex flex-col items-center justify-center relative overflow-y-auto overflow-x-hidden bg-zinc-950 p-4 min-h-full">
+        <div className="flex-1 flex flex-col items-center justify-center relative overflow-y-auto overflow-x-hidden bg-zinc-950 p-4 pb-40 min-h-full">
             {/* Background */}
             <div className="absolute inset-0 bg-grid-pattern opacity-10 animate-pulse pointer-events-none"></div>
 

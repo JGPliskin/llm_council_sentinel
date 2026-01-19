@@ -242,7 +242,7 @@ function AppContent() {
           )}
 
           {/* Desktop Toggle Buttons (Tactical Style) */}
-          <div className="absolute bottom-6 left-6 z-20 flex gap-1 pointer-events-auto">
+          <div className="absolute bottom-6 left-6 z-40 flex gap-1 pointer-events-auto">
             {/* Sidebar Toggle */}
             <button
               onClick={() => {
