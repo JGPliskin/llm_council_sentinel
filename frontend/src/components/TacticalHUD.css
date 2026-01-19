@@ -1,6 +1,6 @@
 /* HUD Container */
 .tactical-hud {
-    @apply absolute bottom-0 left-0 w-full border-t-2 border-zinc-800 bg-zinc-950/90 backdrop-blur-md transition-colors duration-500 font-sans z-30;
+    @apply absolute bottom-0 left-0 w-full border-t-2 border-zinc-800 bg-zinc-950/90 backdrop-blur-md transition-colors duration-500 font-sans z-30 md:relative md:z-0;
     min-height: 120px;
     height: auto;
 }

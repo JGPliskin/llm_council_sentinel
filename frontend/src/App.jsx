@@ -252,10 +252,11 @@ function AppContent() {
               fixed bottom-0 inset-x-0 z-50 rounded-t-2xl border-t border-zinc-800
               md:fixed md:inset-y-0 md:inset-x-auto md:right-0 md:bottom-auto md:rounded-none md:border-t-0 md:border-l md:w-[400px]
               transition-all duration-300
+              h-[var(--panel-height)] md:h-full
               ${isPanelOpen ? 'translate-y-0 opacity-100 md:translate-y-0 md:translate-x-0' : 'translate-y-full opacity-0 md:translate-y-0 md:translate-x-full md:w-0'}
             `}
             style={{
-              height: isPanelFullscreen ? '90vh' : `${[30, 45, 60][panelHeightTier - 1] || 60}vh`,
+              '--panel-height': isPanelFullscreen ? '90vh' : `${[30, 45, 60][panelHeightTier - 1] || 60}vh`,
               transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)'
             }}
           >
