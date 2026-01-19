@@ -134,9 +134,19 @@ function AppContent() {
     }
   };
 
+  const handleSelectConversation = (id) => {
+    navigate(`/c/${id}`);
+    if (window.innerWidth < 768) {
+      setIsSidebarOpen(false);
+    }
+  };
+
   const handleNewConversation = () => {
     navigate("/");
     engine.reset();
+    if (window.innerWidth < 768) {
+      setIsSidebarOpen(false);
+    }
   };
 
   const handleDeleteConversation = async (id) => {
@@ -194,7 +204,7 @@ function AppContent() {
         <Sidebar
           conversations={conversations}
           currentConversationId={conversationId}
-          onSelectConversation={(id) => navigate(`/c/${id}`)}
+          onSelectConversation={handleSelectConversation}
           onNewConversation={handleNewConversation}
           onDeleteConversation={handleDeleteConversation}
           isOpen={isSidebarOpen}
@@ -294,14 +304,6 @@ function AppContent() {
           </div>
         </div>
 
-        {/* Mobile Backdrop for Detail Panel */}
-        {isPanelOpen && window.innerWidth < 768 && (
-          <div
-            className="fixed inset-0 bg-black/50 z-40 md:hidden backdrop-blur-sm transition-opacity"
-            onClick={() => setIsPanelOpen(false)}
-          />
-        )}
-
         {/* Right Detail Panel */}
         {engine.stage !== 'idle' && (
           <div
@@ -332,24 +334,24 @@ function AppContent() {
             />
           </div>
         )}
-      </div>
 
-      {/* Footer HUD */}
-      <TacticalHUD
-        stage={engine.stage}
-        agentProgress={engine.agentProgress}
-        aggregateRankings={engine.aggregateRankings}
-        resolvedCouncilors={engine.resolvedCouncilors}
-        consensusUnlocked={engine.consensusUnlocked}
-        stage3Complete={engine.stage3Complete}
-        hasViewedConsensus={engine.hasViewedConsensus}
-        onConsensusClick={engine.viewConsensus}
-        stage2Skipped={engine.stage2Skipped}
-        activeTab={engine.activeTab}
-        // IDLE props
-        selectedAgentIds={selectedAgentIds}
-        allCouncilors={allCouncilors}
-      />
+        {/* Footer HUD */}
+        <TacticalHUD
+          stage={engine.stage}
+          agentProgress={engine.agentProgress}
+          aggregateRankings={engine.aggregateRankings}
+          resolvedCouncilors={engine.resolvedCouncilors}
+          consensusUnlocked={engine.consensusUnlocked}
+          stage3Complete={engine.stage3Complete}
+          hasViewedConsensus={engine.hasViewedConsensus}
+          onConsensusClick={engine.viewConsensus}
+          stage2Skipped={engine.stage2Skipped}
+          activeTab={engine.activeTab}
+          // IDLE props
+          selectedAgentIds={selectedAgentIds}
+          allCouncilors={allCouncilors}
+        />
+      </div>
     </div >
   );
 }

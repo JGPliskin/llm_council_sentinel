@@ -1,8 +1,8 @@
 /* HUD Container */
 .tactical-hud {
     @apply relative w-full border-t-2 border-zinc-800 bg-zinc-950/90 backdrop-blur-md transition-colors duration-500 font-sans;
-    height: 120px;
-    /* Desktop default */
+    min-height: 120px;
+    height: auto;
 }
 
 /* Stage Indicator */
@@ -17,9 +17,13 @@
 
 /* Agent Slice Card */
 .agent-slice {
-    @apply relative flex flex-col items-center justify-center flex-1 min-w-[120px] h-20 bg-zinc-900/50 border border-zinc-800 rounded transition-all duration-300;
+    @apply relative flex flex-col items-center justify-center flex-1 min-w-[120px] h-auto py-2 bg-zinc-900/50 border border-zinc-800 rounded transition-all duration-300;
     clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
     overflow: hidden;
+}
+
+.agent-status {
+    @apply text-[10px] font-mono font-bold tracking-widest mt-1 uppercase;
 }
 
 .agent-slice:hover {
