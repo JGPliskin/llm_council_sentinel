@@ -161,8 +161,10 @@ function TacticalHUD({
             : stage === 'stage3' ? 'tactical-hud--stage3'
                 : '';
 
+    const isBannerActive = stage3Complete && !hasViewedConsensus && activeTab !== 'final';
+
     return (
-        <div className={`tactical-hud ${stageClass}`}>
+        <div className={`tactical-hud ${stageClass}`} style={isBannerActive ? { minHeight: '180px' } : {}}>
             {/* Stage Indicator / Header Line */}
             <div className="w-full flex items-center gap-4 px-6 py-2 border-b border-zinc-800 bg-black/40 backdrop-blur-md">
                 {/* Controls (Integrated) */}
