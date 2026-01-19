@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Scale } from 'lucide-react';
+import { Scale, PanelLeftClose, PanelLeftOpen, PanelRightOpen, RotateCcw } from 'lucide-react';
 import { getCouncilorUIConfig } from '@/config/councilors';
 import './TacticalHUD.css';
 
@@ -17,6 +17,12 @@ function TacticalHUD({
     // New props for IDLE stage
     selectedAgentIds = [],
     allCouncilors = [],
+    // Controls
+    isSidebarOpen,
+    onToggleSidebar,
+    isDetailPanelOpen,
+    onToggleDetailPanel,
+    onResetSession,
 }) {
     // 排序议员：Stage 2 完成后按排名排序
     const sortedAgents = useMemo(() => {
@@ -152,6 +158,20 @@ function TacticalHUD({
         <div className={`tactical-hud ${stageClass}`}>
             {/* Stage Indicator / Header Line */}
             <div className="w-full flex items-center gap-4 px-6 py-2 border-b border-zinc-800 bg-black/40 backdrop-blur-md">
+                {/* Controls (Integrated) */}
+                <div className="flex items-center gap-3 border-r border-zinc-800 pr-4 mr-0 md:mr-2">
+                    <button onClick={onToggleSidebar} className="text-zinc-500 hover:text-white transition-colors" title="Toggle Sidebar">
+                        {isSidebarOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
+                    </button>
+                    {stage !== 'idle' && (
+                        <button onClick={onToggleDetailPanel} className="text-zinc-500 hover:text-white transition-colors" title="Toggle Detail Panel">
+                            {isDetailPanelOpen ? <PanelRightOpen size={14} className="rotate-180" /> : <PanelRightOpen size={14} />}
+                        </button>
+                    )}
+                    <button onClick={onResetSession} className="text-zinc-500 hover:text-white transition-colors" title="Reset Session">
+                        <RotateCcw size={14} />
+                    </button>
+                </div>
                 <div className="flex items-center gap-2">
                     <div className={`w-2 h-2 rounded-full ${stage === 'idle' ? 'bg-zinc-500' : 'bg-purple-500 animate-pulse'}`}></div>
                     <span className="text-[10px] font-mono font-bold text-purple-400 tracking-[0.2em] uppercase">

@@ -242,66 +242,7 @@ function AppContent() {
           )}
 
           {/* Desktop Toggle Buttons (Tactical Style) */}
-          <div className="absolute bottom-6 left-6 z-40 flex gap-1 pointer-events-auto">
-            {/* Sidebar Toggle */}
-            <button
-              onClick={() => {
-                const newState = !isSidebarOpen;
-                setIsSidebarOpen(newState);
-                // Mobile mutual exclusivity
-                if (newState && window.innerWidth < 768) {
-                  setIsPanelOpen(false);
-                }
-              }}
-              className={`
-                 relative group flex items-center justify-center w-12 h-10 border-t border-b border-l transform skew-x-[-15deg] transition-all duration-300
-                 ${isSidebarOpen ? 'bg-zinc-900 border-zinc-700 text-zinc-400' : 'bg-zinc-950/80 border-zinc-600 text-zinc-500 hover:text-white hover:border-orange-500/50'}
-              `}
-              title="Toggle Sidebar"
-            >
-              <div className="transform skew-x-[15deg] flex items-center justify-center">
-                {isSidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
-              </div>
-              {/* Active Indicator */}
-              {isSidebarOpen && <div className="absolute bottom-0 left-0 w-full h-0.5 bg-orange-500/50"></div>}
-            </button>
 
-            {/* Detail Panel Toggle */}
-            {engine.stage !== 'idle' && (
-              <button
-                onClick={() => {
-                  const newState = !isPanelOpen;
-                  setIsPanelOpen(newState);
-                  // Mobile mutual exclusivity
-                  if (newState && window.innerWidth < 768) {
-                    setIsSidebarOpen(false);
-                  }
-                }}
-                className={`
-                   relative group flex items-center justify-center w-12 h-10 border transform skew-x-[-15deg] hover:z-10 transition-all duration-300
-                   ${isPanelOpen ? 'bg-zinc-900 border-zinc-700 text-zinc-400' : 'bg-zinc-950/80 border-zinc-600 text-zinc-500 hover:text-white hover:border-orange-500/50'}
-                `}
-                title="Toggle Detail Panel"
-              >
-                <div className="transform skew-x-[15deg] flex items-center justify-center">
-                  {isPanelOpen ? <PanelRightOpen size={16} className="rotate-180" /> : <PanelRightOpen size={16} />}
-                </div>
-                {/* Active Indicator */}
-                {isPanelOpen && <div className="absolute bottom-0 right-0 w-full h-0.5 bg-orange-500/50"></div>}
-              </button>
-            )}
-
-            {/* Reload/Reset (Optional, for style matching) */}
-            <button
-              onClick={() => { if (confirm('Reset Session?')) engine.reset(); }}
-              className="relative group flex items-center justify-center w-12 h-10 border-t border-b border-r bg-zinc-950/80 border-zinc-600 text-zinc-500 hover:text-white hover:border-orange-500/50 transform skew-x-[-15deg] transition-all duration-300"
-              title="Reset Session"
-            >
-              <div className="transform skew-x-[15deg]">
-                <RotateCcw size={14} />
-              </div>
-            </button>
-          </div>
         </div>
 
         {/* Right Detail Panel */}
@@ -350,6 +291,20 @@ function AppContent() {
           // IDLE props
           selectedAgentIds={selectedAgentIds}
           allCouncilors={allCouncilors}
+          // Controls
+          isSidebarOpen={isSidebarOpen}
+          onToggleSidebar={() => {
+            const newState = !isSidebarOpen;
+            setIsSidebarOpen(newState);
+            if (newState && window.innerWidth < 768) setIsPanelOpen(false);
+          }}
+          isDetailPanelOpen={isPanelOpen}
+          onToggleDetailPanel={() => {
+            const newState = !isPanelOpen;
+            setIsPanelOpen(newState);
+            if (newState && window.innerWidth < 768) setIsSidebarOpen(false);
+          }}
+          onResetSession={() => { if (confirm('Reset Session?')) engine.reset(); }}
         />
       </div>
     </div >
