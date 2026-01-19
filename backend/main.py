@@ -154,6 +154,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",  # Vite dev server
+        "http://localhost:5174",  # Vite dev server (alt)
+        "http://localhost:5175",  # Vite dev server (alt 2)
         "http://localhost:3000",  # Alternative dev server
         "http://localhost:80",    # Docker Nginx
         "http://localhost",       # Docker Nginx (default port)
