@@ -24,6 +24,8 @@ function AppContent() {
   const [selectedAgentIds, setSelectedAgentIds] = useState(['immanuel_kant', 'donald_trump', 'hideo_kojima']);
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 768);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [panelHeightTier, setPanelHeightTier] = useState(1); // 1, 2, 3, or 'full'
+  const [isPanelFullscreen, setIsPanelFullscreen] = useState(false);
 
   // === Engine Hook ===
   const engine = useParliamentEngine();
@@ -46,14 +48,54 @@ function AppContent() {
     }
   }, [conversationId]);
 
-  // Auto-open panel on stage change (Desktop)
+  // Auto-open panel on stage change (Desktop only)
   useEffect(() => {
     if (engine.stage !== 'idle' && window.innerWidth >= 768) {
       setIsPanelOpen(true);
     } else if (engine.stage === 'idle') {
       setIsPanelOpen(false);
+      setPanelHeightTier(1);
+      setIsPanelFullscreen(false);
     }
   }, [engine.stage]);
+
+  // Dynamic height calculation for Stage 2
+  useEffect(() => {
+    if (engine.stage === 'stage1') {
+      setPanelHeightTier(1);
+      setIsPanelFullscreen(false);
+    } else if (engine.stage === 'stage3') {
+      setPanelHeightTier(3);
+      setIsPanelFullscreen(false);
+    } else if (engine.stage === 'stage2' && !isPanelFullscreen) {
+      // Debounce height changes for Stage 2
+      const timer = setTimeout(() => {
+        if (engine.stage2Skipped) {
+          setPanelHeightTier(1);
+          return;
+        }
+
+        // Count visible judge cards
+        const visibleCount = countVisibleJudgeCards(engine.stage2ThinkingByJudge, engine.activeTab);
+        const newTier = Math.min(Math.max(visibleCount, 1), 3);
+
+        // Only increase, never decrease (avoid jitter)
+        setPanelHeightTier(prev => Math.max(prev, newTier));
+      }, 300);
+
+      return () => clearTimeout(timer);
+    }
+  }, [engine.stage, engine.stage2ThinkingByJudge, engine.activeTab, engine.stage2Skipped, isPanelFullscreen]);
+
+  // Helper function to count visible judge cards
+  const countVisibleJudgeCards = (thinkingByJudge, targetId) => {
+    if (!thinkingByJudge) return 0;
+
+    return Object.values(thinkingByJudge).filter(judgeData => {
+      const targetSteps = judgeData.stepsByTarget?.[targetId] || [];
+      return targetSteps.length > 0 || judgeData.status === 'thinking';
+    }).length;
+  };
 
   // === API handlers ===
   const loadConversations = async () => {
@@ -193,7 +235,14 @@ function AppContent() {
           <div className="absolute bottom-6 left-6 z-20 flex gap-1 pointer-events-auto">
             {/* Sidebar Toggle */}
             <button
-              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              onClick={() => {
+                const newState = !isSidebarOpen;
+                setIsSidebarOpen(newState);
+                // Mobile mutual exclusivity
+                if (newState && window.innerWidth < 768) {
+                  setIsPanelOpen(false);
+                }
+              }}
               className={`
                  relative group flex items-center justify-center w-12 h-10 border-t border-b border-l transform skew-x-[-15deg] transition-all duration-300
                  ${isSidebarOpen ? 'bg-zinc-900 border-zinc-700 text-zinc-400' : 'bg-zinc-950/80 border-zinc-600 text-zinc-500 hover:text-white hover:border-orange-500/50'}
@@ -210,7 +259,14 @@ function AppContent() {
             {/* Detail Panel Toggle */}
             {engine.stage !== 'idle' && (
               <button
-                onClick={() => setIsPanelOpen(!isPanelOpen)}
+                onClick={() => {
+                  const newState = !isPanelOpen;
+                  setIsPanelOpen(newState);
+                  // Mobile mutual exclusivity
+                  if (newState && window.innerWidth < 768) {
+                    setIsSidebarOpen(false);
+                  }
+                }}
                 className={`
                    relative group flex items-center justify-center w-12 h-10 border transform skew-x-[-15deg] hover:z-10 transition-all duration-300
                    ${isPanelOpen ? 'bg-zinc-900 border-zinc-700 text-zinc-400' : 'bg-zinc-950/80 border-zinc-600 text-zinc-500 hover:text-white hover:border-orange-500/50'}
@@ -238,14 +294,27 @@ function AppContent() {
           </div>
         </div>
 
+        {/* Mobile Backdrop for Detail Panel */}
+        {isPanelOpen && window.innerWidth < 768 && (
+          <div
+            className="fixed inset-0 bg-black/50 z-40 md:hidden backdrop-blur-sm transition-opacity"
+            onClick={() => setIsPanelOpen(false)}
+          />
+        )}
+
         {/* Right Detail Panel */}
         {engine.stage !== 'idle' && (
           <div
             className={`
-                    fixed inset-y-0 right-0 z-50 w-full md:relative md:z-0 md:w-[400px] border-l border-zinc-800 transition-all duration-500
-                    ${isPanelOpen ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0 md:w-0'}
-                `}
-            style={{ transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)' }}
+              fixed bottom-0 inset-x-0 z-50 rounded-t-2xl border-t border-zinc-800
+              md:fixed md:inset-y-0 md:inset-x-auto md:right-0 md:bottom-auto md:rounded-none md:border-t-0 md:border-l md:w-[400px]
+              transition-all duration-300
+              ${isPanelOpen ? 'translate-y-0 opacity-100 md:translate-y-0 md:translate-x-0' : 'translate-y-full opacity-0 md:translate-y-0 md:translate-x-full md:w-0'}
+            `}
+            style={{
+              height: isPanelFullscreen ? '90vh' : `${[30, 45, 60][panelHeightTier - 1] || 60}vh`,
+              transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)'
+            }}
           >
             <DetailPanel
               stage={engine.stage}
@@ -257,6 +326,9 @@ function AppContent() {
               aggregateRankings={engine.aggregateRankings}
               stage2Skipped={engine.stage2Skipped}
               onClose={() => setIsPanelOpen(false)}
+              userPrompt={engine.conversation?.messages?.[0]?.content}
+              isPanelFullscreen={isPanelFullscreen}
+              onToggleFullscreen={() => setIsPanelFullscreen(!isPanelFullscreen)}
             />
           </div>
         )}
@@ -278,7 +350,7 @@ function AppContent() {
         selectedAgentIds={selectedAgentIds}
         allCouncilors={allCouncilors}
       />
-    </div>
+    </div >
   );
 }
 

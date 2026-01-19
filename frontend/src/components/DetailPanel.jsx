@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { X } from 'lucide-react';
+import { X, Maximize2, Minimize2 } from 'lucide-react';
 import { getCouncilorUIConfig } from '@/config/councilors';
 
 // 延迟显示 review 的时间（毫秒）
@@ -16,6 +16,14 @@ function getDetailContent(stage, activeTab, evaluationComments, synthesisSteps, 
             type: 'consensus_reviews',
             title: 'Peer Reviews',
             // data: evaluationComments, (access directly in component)
+        };
+    }
+
+    // Stage 1 → 显示用户提问
+    if (stage === 'stage1') {
+        return {
+            type: 'user_prompt',
+            title: 'User Question',
         };
     }
 
@@ -124,7 +132,10 @@ export function DetailPanel({
     stage2AnonMap,
     aggregateRankings = [],
     stage2Skipped = false,
-    onClose
+    onClose,
+    userPrompt,
+    isPanelFullscreen = false,
+    onToggleFullscreen
 }) {
     // 用于触发重新渲染的时间戳
     const [now, setNow] = useState(Date.now());
@@ -178,20 +189,40 @@ export function DetailPanel({
         : title;
 
     return (
-        <div className="h-full flex flex-col bg-zinc-900/90 border-l border-zinc-800 backdrop-blur-md">
+        <div className="h-full flex flex-col bg-zinc-900/90 border-l md:border-l border-t-0 md:border-t border-zinc-800 backdrop-blur-md">
+            {/* Drag Handle (Mobile only, visual only) */}
+            <div className="md:hidden flex justify-center py-2">
+                <div className="w-10 h-1 bg-zinc-600 rounded-full"></div>
+            </div>
             {/* Header */}
             <div className="flex items-center justify-between p-4 border-b border-zinc-800 bg-zinc-950/50">
                 <h2 className={`text-sm font-bold tracking-widest uppercase text-zinc-400 ${stage === 'stage2' ? 'animate-breathe' : ''}`}>
                     {displayTitle || "SYSTEM LOG"}
                 </h2>
-                {/* Close Button */}
-                <button
-                    onClick={onClose}
-                    className="p-1.5 text-zinc-500 hover:text-white hover:bg-zinc-800 border border-transparent hover:border-zinc-700 transition-all group"
-                    title="Close Panel"
-                >
-                    <X className="w-4 h-4 group-hover:rotate-90 transition-transform duration-300" />
-                </button>
+                <div className="flex items-center gap-2">
+                    {/* Fullscreen Button (Stage 3 only) */}
+                    {stage === 'stage3' && onToggleFullscreen && (
+                        <button
+                            onClick={onToggleFullscreen}
+                            className="p-1.5 text-zinc-500 hover:text-white hover:bg-zinc-800 border border-transparent hover:border-zinc-700 transition-all group"
+                            title={isPanelFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+                        >
+                            {isPanelFullscreen ? (
+                                <Minimize2 className="w-4 h-4" />
+                            ) : (
+                                <Maximize2 className="w-4 h-4" />
+                            )}
+                        </button>
+                    )}
+                    {/* Close Button */}
+                    <button
+                        onClick={onClose}
+                        className="p-1.5 text-zinc-500 hover:text-white hover:bg-zinc-800 border border-transparent hover:border-zinc-700 transition-all group"
+                        title="Close Panel"
+                    >
+                        <X className="w-4 h-4 group-hover:rotate-90 transition-transform duration-300" />
+                    </button>
+                </div>
             </div>
 
             {/* Content */}
@@ -199,6 +230,15 @@ export function DetailPanel({
                 {type === 'empty' && (
                     <div className="flex items-center justify-center h-full text-zinc-600 text-xs font-mono">
                         NO DATA AVAILABLE
+                    </div>
+                )}
+
+                {type === 'user_prompt' && (
+                    <div className="space-y-2">
+                        <div className="text-xs font-mono text-zinc-500 uppercase mb-2">User Question</div>
+                        <div className="text-sm text-zinc-300 leading-relaxed p-3 bg-zinc-950/50 border border-zinc-800 rounded">
+                            {userPrompt || 'No question available'}
+                        </div>
                     </div>
                 )}
 
