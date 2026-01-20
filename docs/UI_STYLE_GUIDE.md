@@ -101,11 +101,13 @@ code, .mono {
 
 | 区域 | 桌面宽度 | 说明 |
 |---|---|---|
-| Sidebar | 约 256px | 通过 `Sidebar.jsx` 控制 |
-| DetailPanel | 400px | `md:w-[400px]` |
-| 内容区 | 100% | `StageContentArea.jsx` |
+| Sidebar | 260px | `w-64` (approx) |
+| RightPanel | 400px | `md:w-[400px]` (Vertical Column) |
+| Content | Flex-1 | Remaining space ("Squeeze" layout) |
 
-移动端：Sidebar 与 DetailPanel 均为覆盖式抽屉。
+**移动端 (<768px)**:
+- Sidebar: 左侧全屏覆盖式抽屉 (Overlay)。
+- RightPanel: 底部抽屉 (Bottom Sheet)，高度可变 (30vh-90vh)，无遮罩 (Non-modal Interaction)。
 
 ---
 

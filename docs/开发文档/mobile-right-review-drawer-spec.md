@@ -1,141 +1,75 @@
-# 移动端右侧 Review 抽屉规范
+# Mobile Review Drawer & Desktop Layout Implementation
 
-## 目录
-- 背景与目标
-- 用户场景与需求描述
-- 交互与布局规则
-- 抽屉高度策略
-- 内容展示与滚动策略
-- 技术方案与数据流
-- 流程图与结构图
-- 需要改动的代码文件与关键修改
-- 风险与对策
-- 验收标准
+**Status:** Implemented ✅
+**Last Updated:** 2026-01-20
 
-## 背景与目标
-移动端保持左侧对话列表侧边栏不变，仅将右侧 Review 面板改为底部抽屉。抽屉高度采用固定档位，并允许内部滚动，避免内容截断。桌面端保持原有右侧面板。
+## 1. Overview
+This document details the responsive layout implementation for the "Right Detail Panel" (Review Panel).
+- **Mobile (< 768px)**: Bottom Drawer (Sheet) overlay.
+- **Desktop (>= 768px)**: 3-Column Standard Layout (Sidebar - Content - RightPanel).
 
-## 用户场景与需求描述
-| 阶段 (Stage) | 初始状态 | 打开后内容 | 高度行为 | 特殊控件 |
-| --- | --- | --- | --- | --- |
-| Stage 1 | 默认关闭 | 显示用户输入的问题 | 固定 1 档 (30vh) | 无全屏按钮 |
-| Stage 2 | 默认关闭 | 显示 Judge 思考与评审 | 动态 1/2/3 档 | 无全屏按钮 |
-| Stage 3 | 默认关闭 | 展示所有 Peer Reviews | 固定 3 档 (60vh) | 显示全屏按钮 |
+## 2. Interaction Specification (Mobile)
 
-说明：移动端右侧抽屉与左侧对话列表互斥，任一打开都会关闭另一方。
+### 2.1 Opening Logic
+- **Stage 2 Auto-Open**: The drawer automatically opens when the session transitions to `Stage 2` (Review Phase). Code: `useEffect` in `App.jsx`.
+- **Manual Toggle**: Users can toggle the drawer via the `TacticalHUD` controls ("Toggle Detail Panel").
+- **Tab Switching**: Clicking an Agent Card in the `TacticalHUD` bottom bar:
+  - Switches the visible content.
+  - **Keeps the drawer OPEN** (via `stopPropagation()`).
+  - Highlights the active agent.
 
-## 交互与布局规则
-| 规则 | 说明 |
-| --- | --- |
-| 触发方式 | 点击左下角“打开面板”按钮 |
-| 关闭方式 | 抽屉头部关闭按钮 + 点击遮罩 |
-| 互斥 | 打开抽屉时自动关闭左侧对话列表，反之亦然 |
-| 遮罩 | 覆盖主内容，抽屉位于遮罩之上 |
-| HUD 层级 | HUD 位于抽屉下方，抽屉头部固定提供关闭/全屏 |
-| 拖拽 | 仅显示视觉拖拽条，不支持手势关闭 |
+### 2.2 Closing Logic ("Tap-to-Stow")
+- **Background Tap**: Tapping the **Content Background** (the scrollable area of `StageContentArea` or `WelcomeScreen`) closes the drawer.
+- **Scroll Safe**: Scrolling the content background does **NOT** close the drawer.
+- **HUD Safe**: Tapping the HUD bottom bar does **NOT** close the drawer (since HUD is visually distinct and event isolated).
+- **Explicit Close**: Tapping the "X" button in the Drawer Header closes it.
+- **Stage 1 Behavior**: In Stage 1, the drawer is typically closed unless manually opened.
 
-## 抽屉高度策略
-采用固定档位高度，视觉上“约等于 3 张卡片高度”。
+### 2.3 Layout & Z-Index
+- **Drawer (`DetailPanel.jsx`)**:
+  - Position: `fixed bottom-0 left-0 right-0`.
+  - Z-Index: `z-50`.
+  - Height: Responsive (`30vh`, `45vh`, `60vh`, `90vh` full).
+  - Dragging: Visual drag handle (top) indicates interactability but height change is state-driven.
+- **HUD (`TacticalHUD.jsx`)**:
+  - Position: `absolute bottom-0 left-0 ... z-30` (Mobile).
+  - Layering: Visually sits *behind* the drawer if drawer is tall, but remains accessible when drawer is closed or partial.
+- **Main Content (`StageContentArea.jsx`)**:
+  - Position: `relative z-10`.
+  - Interaction: `onClick` listener attached to the specific scrolling container `div`.
 
-| 档位 | 高度 | 用途 |
-| --- | --- | --- |
-| 1 档 | 30vh | Stage 1 / Stage 2 (1 张卡片) |
-| 2 档 | 45vh | Stage 2 (2 张卡片) |
-| 3 档 | 60vh | Stage 2 (>=3 张卡片) / Stage 3 默认 |
-| 全屏 | 90vh | Stage 3 手动切换 |
+## 3. Interaction Specification (Desktop)
 
-Stage 2 规则：
-- 高度只增不减，避免频繁跳动。
-- Stage 2 结束或抽屉关闭时，重置为 1 档。
-- Stage 2 skipped 场景固定 1 档。
+### 3.1 3-Column Layout
+On screens wider than 768px, the layout shifts to a rigid 3-column system:
+1.  **Left Sidebar (260px)**: Conversation History.
+2.  **Middle Content (Flex-1)**: Chat/Stage Area + HUD.
+3.  **Right Panel (400px)**: Review Details.
 
-## 内容展示与滚动策略
-| Stage | 内容 | 滚动策略 |
-| --- | --- | --- |
-| Stage 1 | 用户输入的问题 | 内容区可滚动 |
-| Stage 2 | Judge 思考卡片与评审 | 内容区可滚动，不截断 |
-| Stage 3 | Review 列表 | 内容区可滚动，不截断 |
+### 3.2 Behavior
+- **Push Interaction**: Opening the Right Panel **compresses** the Middle Content width. It does **NOT** overlay content.
+- **HUD Width**: The Tactical HUD is part of Middle Content, so it naturally shrinks to fit the available space, ensuring all controls remain visible.
+- **Auto-Open**: Right Panel auto-opens on Stage 2/3 start.
 
-## 技术方案与数据流
-### 数据与状态
-| 状态/数据 | 归属 | 用途 |
-| --- | --- | --- |
-| isPanelOpen | App | 右侧抽屉开合 |
-| isSidebarOpen | App | 左侧对话列表开合 |
-| panelHeightTier | App | 抽屉高度档位 (1/2/3/Full) |
-| isPanelFullscreen | App | 是否全屏 (Stage 3) |
-| currentPrompt | engine.conversation.messages[0] | Stage 1 显示用户问题 |
+## 4. Key Component Implementation Details
 
-### 互斥逻辑 (App)
-```javascript
-const openRightPanel = () => {
-  setIsPanelOpen(true);
-  if (window.innerWidth < 768) setIsSidebarOpen(false);
-};
+### 4.1 App.jsx
+- Manages `isPanelOpen` state.
+- Handles responsive logic (`window.innerWidth` checks).
+- Passes `handleContentClick` (Tap-to-Stow logic) to content areas.
+- Uses `flex-col` + `flex-row` nesting to achieve the 3-column structure.
 
-const openLeftSidebar = () => {
-  setIsSidebarOpen(true);
-  if (window.innerWidth < 768) setIsPanelOpen(false);
-};
-```
+### 4.2 TacticalHUD.jsx
+- **Flex Layout**: Root container uses `flex flex-col` to allow inner content to fill min-height.
+- **Dynamic Height**: Height adapts to content.
+- **Consistency**: Used `whitespace-nowrap` on headers to prevent breaking lines on narrow screens.
+- **Min-Height expansion**: When the "Consensus Ready" banner appears (Stage 3), the HUD height naturally expands (via flex) to ensure the banner is not clipped.
 
-### 动态高度计算
-动态高度逻辑放在 DetailPanel 或提成共享函数，避免 App 与实际 UI 不一致。
+### 4.3 StageContentArea.jsx
+- Contains the `onClick` listener for "Tap-to-Stow".
+- Ensures listener is on the *background* container, not interactive buttons.
 
-Stage 2 高度计算规则：
-1) 统计可见 JudgeCard 数量。
-2) clamp 到 1-3 档。
-3) debounce 300ms 以减抖。
-4) 只增不减，关闭或 Stage2 结束时重置。
-
-Stage 2 skipped：
-- 抽屉显示 “SKIPPED” 信息时固定 1 档。
-
-## 流程图与结构图
-### 抽屉开合流程
-```
-[点击按钮]
-      |
-      v
-[抽屉上滑 + 遮罩出现]
-      |
-      +--> [点击遮罩或关闭按钮] -> [抽屉关闭]
-```
-
-### 互斥流程
-```
-[打开右侧抽屉] -> [关闭左侧对话列表]
-[打开左侧对话列表] -> [关闭右侧抽屉]
-```
-
-### 移动端结构示意
-```
-Z-30 主内容区
-Z-40 遮罩层
-Z-50 底部抽屉
-```
-
-## 需要改动的代码文件与关键修改
-| 文件 | 目的 | 关键修改 |
-| --- | --- | --- |
-| `frontend/src/App.jsx` | 移动端抽屉容器与互斥逻辑 | mobile 使用 bottom sheet；互斥开合；管理全屏与档位 |
-| `frontend/src/components/DetailPanel.jsx` | Stage1 内容展示 + 高度计算 | 增加 Stage1 prompt 展示；提供可见卡片数计算 |
-| `frontend/src/hooks/useParliamentEngine.js` | Stage1 prompt 数据来源 | 确保 conversation.messages[0] 可用 |
-| `frontend/src/components/ui/sheet.jsx` | 抽屉动画 | 复用 bottom sheet 样式与遮罩 |
-
-## 风险与对策
-| 风险 | 影响 | 对策 |
-| --- | --- | --- |
-| Stage 2 高度频繁跳动 | 视觉疲劳 | debounce 300ms + 高度只增不减 |
-| 内容过长 | 内容被裁切 | 内容区滚动，不截断 |
-| 遮罩挡住按钮 | 无法关闭 | 抽屉头部固定关闭按钮 |
-
-## 验收标准
-1) 移动端右侧面板改为底部抽屉，桌面端保持右侧面板。
-2) 抽屉仅手动打开，不自动弹出。
-3) Stage 1 显示用户问题，固定 1 档高度。
-4) Stage 2 动态 1/2/3 档，高度只增不减，Stage2 结束或关闭后重置。
-5) Stage 2 skipped 时显示 SKIPPED 信息且高度为 1 档。
-6) Stage 3 默认 3 档高度，并支持全屏切换。
-7) 抽屉内容区滚动，不截断。
-8) 移动端左右互斥：打开一方自动关闭另一方。
+## 5. CSS & Styling
+- **Tailwind CSS**: Primary styling engine.
+- **Animations**: `transition-all duration-300` used for smooth drawer slide-in/out.
+- **Backdrop**: Mobile does **not** use a full-screen backdrop blocker, allowing interaction with the top visible part of the content.
