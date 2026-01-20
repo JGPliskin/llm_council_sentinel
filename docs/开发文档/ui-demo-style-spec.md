@@ -7,10 +7,12 @@
 - Design Targets and Constraints
 - HUD Layout Mapping (Top Strip)
 - Reference Demo (Image 2) Fidelity Notes
+- Visual Target Deltas (Image 1 vs Current)
 - Visual System (Tokens)
 - Texture CSS Details
 - Councilor Color Scope
 - Component Mapping and Detailed Plan
+- Thinking Process Bullet Icons
 - Optional UI Components (Not Required)
 - Font Self-Hosting Plan (woff2)
 - Tailwind Config Extension
@@ -98,6 +100,15 @@ Must-match visual cues:
 Explicit exclusions:
 - No "System Time" module anywhere.
 - No text or copy changes; keep existing UI labels and wording.
+
+## Visual Target Deltas (Image 1 vs Current)
+This section clarifies the gaps reported by the user and locks the visual targets.
+
+| Area | Image 1 (Target) | Current Output | Required Change |
+|---|---|---|---|
+| Right sidebar | Thin cyan borders, dark panels, crisp list cards | Still looks like zinc/gray cards | Restyle DetailPanel cards and header to cyan HUD |
+| Bottom bar | Low-height angled tabs with cyan edges | Tall boxed cards with zinc styling | Restyle TacticalHUD agent slices to angled tabs |
+| Thinking bullets | Each bullet has a distinct icon on the left | No per-bullet icons | Add a left icon per bullet with varied icons |
 
 ## Visual System (Tokens)
 All tokens are centralized in `frontend/src/index.css` and applied via Tailwind
@@ -210,6 +221,7 @@ Not allowed for councilor color:
 - Apply demo panel framing: border lines, corner brackets, neon title.
 - Thinking section styled as "LOGIC_PROCESS" block (emerald/teal tone).
 - Preserve existing thinking expansion and auto-fold logic.
+- Add per-bullet left icons (distinct per bullet) to match demo.
 
 ### 4) Detail Panel (`frontend/src/components/DetailPanel.jsx`)
 - Header uses demo HUD strip with cyan label.
@@ -217,6 +229,8 @@ Not allowed for councilor color:
 - Peer review list uses demo card style with small status dots.
 - Keep timers and review delay logic intact.
 - Keep existing header text (no label renaming).
+- Right sidebar must visually match the Image 1 style: thin cyan outlines, muted
+  dark fills, compact spacing, and small rank labels aligned right.
 
 ### 5) Tactical HUD (`frontend/src/components/TacticalHUD.jsx` + .css)
 - Convert to demo-like bottom action bar appearance.
@@ -224,6 +238,8 @@ Not allowed for councilor color:
 - Progress fill uses cyan stripe pattern.
 - Preserve stage semantic colors for the top border (stage1 orange, stage2 blue,
   stage3 purple). All other accents stay cyan.
+- Bottom bar must visually match the Image 1 style: low-height, angled tabs with
+  cyan edge lines, minimal fill, and subtle inner glow.
 
 ### 6) Welcome Screen (`frontend/src/components/WelcomeScreen.jsx`)
 - Apply demo font stack and cyan/amber accents.
@@ -247,6 +263,29 @@ Suggested location: `frontend/src/components/ui/TechPanel.jsx`
 Suggested location: `frontend/src/components/ui/Background.jsx`
 - Purpose: encapsulate grid + vignette + scanline layers.
 - Use in `App.jsx` root container to keep layout clean.
+
+## Thinking Process Bullet Icons
+Goal: each bullet line in the thinking block has a distinct icon to the left,
+matching the demo's varied glyphs.
+
+Implementation constraints:
+- Visual-only change; no effect on thinking logic or interactivity.
+- Icons can be assigned deterministically by index (no content parsing required).
+
+Suggested icon set (Lucide):
+```
+[ChevronRight, LayoutGrid, Lock, Shield, Terminal]
+```
+
+Selection rule:
+```
+icon = ICONS[index % ICONS.length]
+```
+
+Placement:
+- Left of bullet title (8-14px size)
+- Same baseline as title line
+- Color: cyan/teal (matches `--hud-cyan` or `--hud-cyan-soft`)
 
 ## Font Self-Hosting Plan (woff2)
 ### Files (Planned)
@@ -446,3 +485,4 @@ Rendered HUD (neon cyan + textures)
 - Councilor colors appear only in small dots/mini indicators; all major borders/fills are cyan.
 - Mobile layout remains unchanged in behavior; only visuals update.
 - No logic, controls, or animations were modified.
+- Thinking Process bullets each show a distinct left icon (varied per bullet).

@@ -1,8 +1,11 @@
 import React, { useMemo, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Sparkles, Scale, Terminal, Cpu, Fingerprint } from 'lucide-react';
+import { Sparkles, Scale, Terminal, Cpu, Fingerprint, ChevronRight, LayoutGrid, Lock, Shield } from 'lucide-react';
 import { getCouncilorUIConfig } from '@/config/councilors';
 import ConsensusBeacon from './ConsensusBeacon';
+
+// Icon set for thinking bullets (cycles through)
+const THINKING_ICONS = [ChevronRight, LayoutGrid, Lock, Shield, Terminal];
 
 function StageContentArea({
     activeTab,
@@ -269,12 +272,12 @@ function StageContentArea({
                     </div>
 
                     {/* Content Body */}
-                    <div className="relative bg-zinc-900/40 border border-zinc-800 p-6 md:p-10 backdrop-blur-sm">
-                        {/* Corner Brackets */}
-                        <div className="absolute top-0 left-0 w-4 h-4 border-t-2 border-l-2 border-zinc-600"></div>
-                        <div className="absolute top-0 right-0 w-4 h-4 border-t-2 border-r-2 border-zinc-600"></div>
-                        <div className="absolute bottom-0 left-0 w-4 h-4 border-b-2 border-l-2 border-zinc-600"></div>
-                        <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-zinc-600"></div>
+                    <div className="relative p-6 md:p-10 backdrop-blur-sm" style={{ backgroundColor: 'var(--hud-bg-soft)', border: '1px solid var(--hud-cyan-soft)' }}>
+                        {/* Corner Brackets - Cyan */}
+                        <div className="absolute top-0 left-0 w-4 h-4 border-t-2 border-l-2" style={{ borderColor: 'var(--hud-cyan)' }}></div>
+                        <div className="absolute top-0 right-0 w-4 h-4 border-t-2 border-r-2" style={{ borderColor: 'var(--hud-cyan)' }}></div>
+                        <div className="absolute bottom-0 left-0 w-4 h-4 border-b-2 border-l-2" style={{ borderColor: 'var(--hud-cyan)' }}></div>
+                        <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2" style={{ borderColor: 'var(--hud-cyan)' }}></div>
 
                         {hasThinkingSteps && (
                             <div className="mb-8 relative" style={{ border: '1px solid rgba(16, 185, 129, 0.3)', backgroundColor: 'rgba(6, 78, 59, 0.15)' }}>
@@ -310,14 +313,20 @@ function StageContentArea({
                                 </button>
                                 {isThinkingExpanded && (
                                     <div className="px-6 pb-4 space-y-4">
-                                        {thinkingEntry.steps.map(step => (
-                                            <div key={step.bullet_id} className="pb-3 last:pb-0" style={{ borderBottom: '1px solid rgba(16, 185, 129, 0.2)' }}>
-                                                <div className="font-semibold text-sm" style={{ color: '#6ee7b7' }}>▸ {step.title}</div>
-                                                {step.detail && (
-                                                    <div className="text-sm leading-relaxed mt-1" style={{ color: 'rgba(167, 243, 208, 0.7)' }}>{step.detail}</div>
-                                                )}
-                                            </div>
-                                        ))}
+                                        {thinkingEntry.steps.map((step, index) => {
+                                            const IconComponent = THINKING_ICONS[index % THINKING_ICONS.length];
+                                            return (
+                                                <div key={step.bullet_id} className="pb-3 last:pb-0 flex items-start gap-3" style={{ borderBottom: '1px solid rgba(16, 185, 129, 0.2)' }}>
+                                                    <IconComponent className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: '#10b981' }} />
+                                                    <div className="flex-1">
+                                                        <div className="font-semibold text-sm" style={{ color: '#6ee7b7' }}>{step.title}</div>
+                                                        {step.detail && (
+                                                            <div className="text-sm leading-relaxed mt-1" style={{ color: 'rgba(167, 243, 208, 0.7)' }}>{step.detail}</div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 )}
                             </div>

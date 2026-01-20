@@ -21,24 +21,39 @@
     @apply flex items-center justify-center gap-4 h-full w-full px-4 overflow-x-auto;
 }
 
-/* Agent Slice Card */
+/* Agent Slice Card - Demo-style low-profile angled tabs */
 .agent-slice {
-    @apply relative flex flex-col items-center justify-center flex-1 min-w-[120px] h-auto py-2 rounded transition-all duration-300;
-    clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
-    overflow: hidden;
+    @apply relative flex flex-row items-center justify-center flex-1 min-w-[100px] max-w-[180px] py-2 px-4 transition-all duration-300;
+    /* Skew for angled look */
+    transform: skewX(-12deg);
     background: var(--hud-bg);
     border: 1px solid var(--hud-cyan-soft);
+    border-top: 2px solid var(--hud-cyan);
+    overflow: visible;
+}
+
+/* Un-skew content inside */
+.agent-slice>* {
+    transform: skewX(12deg);
 }
 
 .agent-status {
-    @apply text-[10px] font-mono font-bold tracking-widest mt-1 uppercase;
+    @apply text-[9px] font-mono font-bold tracking-widest uppercase ml-2;
     color: var(--hud-cyan);
 }
 
 .agent-slice:hover {
-    @apply transform -translate-y-1;
     border-color: var(--hud-cyan);
-    box-shadow: 0 0 15px var(--hud-cyan-soft);
+    box-shadow: 0 0 20px var(--hud-cyan-soft), inset 0 0 15px rgba(6, 182, 212, 0.1);
+}
+
+.agent-slice.agent-slot--empty {
+    opacity: 0.3;
+    border-style: dashed;
+}
+
+.agent-slice.agent-slot--ready {
+    border-top-color: var(--hud-amber);
 }
 
 /* Background Patterns */
