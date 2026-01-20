@@ -1,13 +1,19 @@
 /* HUD Container */
 .tactical-hud {
-    @apply absolute bottom-0 left-0 w-full border-t-2 border-zinc-800 bg-zinc-950/90 backdrop-blur-md transition-colors duration-500 font-sans z-30 md:static md:z-auto flex flex-col;
+    @apply absolute bottom-0 left-0 w-full border-t-2 backdrop-blur-md transition-colors duration-500 font-sans z-30 md:static md:z-auto flex flex-col;
     min-height: 120px;
     height: auto;
+    background: var(--hud-bg-soft);
+    border-color: var(--hud-cyan-soft);
 }
 
 /* Stage Indicator */
 .stage-indicator {
-    @apply absolute top-0 left-0 px-4 py-1 text-[10px] font-mono tracking-widest text-zinc-500 bg-zinc-900 border-b border-r border-zinc-800 rounded-br-lg z-10;
+    @apply absolute top-0 left-0 px-4 py-1 text-[10px] font-mono tracking-widest rounded-br-lg z-10;
+    color: var(--hud-muted);
+    background: var(--hud-bg);
+    border-bottom: 1px solid var(--hud-cyan-soft);
+    border-right: 1px solid var(--hud-cyan-soft);
 }
 
 /* Agent Slots Container */
@@ -17,17 +23,22 @@
 
 /* Agent Slice Card */
 .agent-slice {
-    @apply relative flex flex-col items-center justify-center flex-1 min-w-[120px] h-auto py-2 bg-zinc-900/50 border border-zinc-800 rounded transition-all duration-300;
+    @apply relative flex flex-col items-center justify-center flex-1 min-w-[120px] h-auto py-2 rounded transition-all duration-300;
     clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
     overflow: hidden;
+    background: var(--hud-bg);
+    border: 1px solid var(--hud-cyan-soft);
 }
 
 .agent-status {
     @apply text-[10px] font-mono font-bold tracking-widest mt-1 uppercase;
+    color: var(--hud-cyan);
 }
 
 .agent-slice:hover {
-    @apply bg-zinc-900/80 transform -translate-y-1;
+    @apply transform -translate-y-1;
+    border-color: var(--hud-cyan);
+    box-shadow: 0 0 15px var(--hud-cyan-soft);
 }
 
 /* Background Patterns */
@@ -69,21 +80,25 @@
 
 /* Name */
 .agent-name {
-    @apply text-xs font-bold text-zinc-300 tracking-wider relative z-10;
+    @apply text-xs font-bold tracking-wider relative z-10;
+    color: var(--hud-text);
 }
 
 /* Progress Bar */
 .progress-bar {
-    @apply w-20 h-1 bg-zinc-800 rounded-full mt-2 overflow-hidden relative z-10;
+    @apply w-20 h-1 rounded-full mt-2 overflow-hidden relative z-10;
+    background: var(--hud-bg);
 }
 
 .progress-fill {
-    @apply h-full bg-zinc-500 transition-all duration-300;
+    @apply h-full transition-all duration-300;
+    background: var(--hud-cyan);
 }
 
 /* Score / Rank */
 .score {
-    @apply mt-1 text-sm font-mono font-bold text-zinc-100 relative z-10;
+    @apply mt-1 text-sm font-mono font-bold relative z-10;
+    color: var(--hud-text);
 }
 
 .rank-badge {

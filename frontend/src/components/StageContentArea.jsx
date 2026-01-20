@@ -170,11 +170,13 @@ function StageContentArea({
 
     // Render
     return (
-        <div className="flex-1 flex flex-col bg-zinc-950 overflow-hidden relative">
-            <div className="absolute inset-0 bg-grid-pattern opacity-20 pointer-events-none" />
+        <div className="flex-1 flex flex-col overflow-hidden relative" style={{ backgroundColor: 'var(--hud-bg)' }}>
+            <div className="absolute inset-0 bg-grid-floor pointer-events-none" />
+            <div className="absolute inset-0 bg-vignette pointer-events-none" />
 
             {/* TABS */}
-            <div className="flex items-end gap-0.5 px-2 border-b border-zinc-800 bg-zinc-900/80 backdrop-blur sticky top-0 z-20 shrink-0 overflow-x-auto no-scrollbar h-14">
+            <div className="flex items-end gap-0.5 px-2 border-b backdrop-blur sticky top-0 z-20 shrink-0 overflow-x-auto no-scrollbar h-14"
+                style={{ borderColor: 'var(--hud-cyan-soft)', backgroundColor: 'var(--hud-bg-soft)' }}>
                 {resolvedCouncilors.map((agent) => {
                     const isActive = activeTab === agent.id;
                     const config = getCouncilorUIConfig(agent.id);
@@ -183,16 +185,22 @@ function StageContentArea({
                             key={agent.id}
                             onClick={() => onTabSelect(agent.id)}
                             className={`
-                              relative px-5 py-3 text-xs md:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2 outline-none uppercase tracking-wide
-                              border-t-2 border-x border-zinc-800 hover:bg-zinc-800/50
+                              relative px-5 py-3 text-xs md:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2 outline-none uppercase tracking-wide font-hud
+                              border-t-2 border-x hover:bg-opacity-50
                               ${isActive
-                                    ? 'bg-zinc-800 text-white z-10 -mb-px pb-4'
-                                    : 'bg-zinc-900/50 text-zinc-500'}
+                                    ? 'z-10 -mb-px pb-4'
+                                    : 'opacity-70 hover:opacity-100'}
                             `}
-                            style={isActive ? { borderColor: `var(--accent-${config.color})`, borderBottomColor: 'transparent' } : {}}
+                            style={{
+                                borderColor: isActive ? 'var(--hud-cyan)' : 'var(--hud-cyan-soft)',
+                                borderBottomColor: isActive ? 'transparent' : 'var(--hud-cyan-soft)',
+                                backgroundColor: isActive ? 'var(--hud-bg-soft)' : 'transparent',
+                                color: isActive ? 'var(--hud-cyan)' : 'var(--hud-muted)',
+                                textShadow: isActive ? '0 0 8px var(--hud-cyan)' : 'none'
+                            }}
                         >
                             <span className={`${isActive ? 'opacity-100' : 'opacity-50'}`}>{agent.avatar}</span>
-                            <span className="hidden md:inline font-mono">{agent.name}</span>
+                            <span className="hidden md:inline">{agent.name}</span>
                         </button>
                     );
                 })}
@@ -229,29 +237,32 @@ function StageContentArea({
             >
                 <div className="max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
 
-                    {/* Header Card */}
-                    <div className="mb-8 flex items-stretch gap-0 bg-zinc-900/50 border border-zinc-700 backdrop-blur-md relative overflow-hidden group">
-                        <div className="absolute top-0 right-0 p-1">
-                            <div className="w-16 h-1 bg-zinc-700/50 rotate-45 transform translate-x-6 -translate-y-2"></div>
-                        </div>
+                    {/* Header Card - HUD Style */}
+                    <div className="mb-8 flex items-stretch gap-0 backdrop-blur-md relative overflow-hidden clip-corner-both"
+                        style={{ backgroundColor: 'var(--hud-bg-soft)', border: '1px solid var(--hud-cyan-soft)' }}>
+                        {/* Corner decorations */}
+                        <div className="absolute top-0 right-0 w-4 h-4 border-t-2 border-r-2" style={{ borderColor: 'var(--hud-cyan)' }}></div>
+                        <div className="absolute bottom-0 left-0 w-4 h-4 border-b-2 border-l-2" style={{ borderColor: 'var(--hud-cyan)' }}></div>
 
-                        <div className="w-24 md:w-32 flex items-center justify-center text-5xl relative overflow-hidden border-r border-zinc-700 bg-zinc-900">
-                            <div className="absolute inset-0 opacity-20 blur-xl" style={{ backgroundColor: `var(--accent-${accentColor})` }}></div>
-                            <div className="relative z-10">{activeAgent.avatar}</div>
-                            <div className="absolute bottom-0 left-0 right-0 text-[10px] text-center font-mono text-zinc-600 bg-zinc-950/80 py-1 uppercase">
+                        <div className="w-24 md:w-32 flex items-center justify-center text-5xl relative overflow-hidden border-r"
+                            style={{ borderColor: 'var(--hud-cyan-soft)', backgroundColor: 'var(--hud-bg)' }}>
+                            <div className="absolute inset-0 opacity-30 blur-xl" style={{ backgroundColor: 'var(--hud-amber)' }}></div>
+                            <div className="relative z-10" style={{ filter: 'drop-shadow(0 0 10px var(--hud-amber))' }}>{activeAgent.avatar}</div>
+                            <div className="absolute bottom-0 left-0 right-0 text-[10px] text-center font-mono py-1 uppercase"
+                                style={{ backgroundColor: 'var(--hud-bg)', color: 'var(--hud-muted)' }}>
                                 ID: {(activeAgent.id || 'unknown').substring(0, 8)}
                             </div>
                         </div>
 
                         <div className="flex-1 p-4 md:p-6 flex flex-col justify-center">
                             <div className="flex items-center gap-2 mb-1">
-                                <Terminal className="w-4 h-4 text-zinc-500" />
-                                <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
+                                <Terminal className="w-4 h-4" style={{ color: 'var(--hud-cyan)' }} />
+                                <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: 'var(--hud-muted)' }}>
                                     Entity // {activeAgent.role || 'Councilor'} // Class A
                                 </span>
                             </div>
-                            <h1 className="text-3xl md:text-5xl font-black uppercase tracking-tighter text-zinc-100"
-                                style={isFinal ? { color: '#c084fc', textShadow: '0 0 10px rgba(192,132,252,0.5)' } : {}}>
+                            <h1 className="text-3xl md:text-5xl font-black uppercase tracking-tighter font-hud hud-glow"
+                                style={isFinal ? { color: '#c084fc', textShadow: '0 0 15px rgba(192,132,252,0.6)' } : { color: 'var(--hud-text)' }}>
                                 {activeAgent.name}
                             </h1>
                         </div>
@@ -266,18 +277,29 @@ function StageContentArea({
                         <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-zinc-600"></div>
 
                         {hasThinkingSteps && (
-                            <div className="mb-6 border border-zinc-800 bg-zinc-950/60">
+                            <div className="mb-8 relative" style={{ border: '1px solid rgba(16, 185, 129, 0.3)', backgroundColor: 'rgba(6, 78, 59, 0.15)' }}>
+                                {/* Emerald left accent line */}
+                                <div className="absolute top-0 left-0 w-[2px] h-full" style={{ backgroundColor: 'rgba(16, 185, 129, 0.5)' }}></div>
+
+                                {/* Header label */}
+                                <div className="absolute -top-3 left-4 px-2 font-hud text-xs tracking-widest"
+                                    style={{ backgroundColor: 'var(--hud-bg)', color: '#10b981' }}>
+                                    LOGIC_PROCESS // {activeAgent.id?.toUpperCase()}_PROTOCOL
+                                </div>
+
                                 <button
                                     type="button"
                                     onClick={() => onToggleThinking && onToggleThinking(isFinal ? (chairmanId || 'chairman') : activeTab)}
-                                    className="w-full flex items-center justify-between px-4 py-3 text-xs font-mono uppercase tracking-widest text-zinc-400 hover:text-zinc-200"
+                                    className="w-full flex items-center justify-between px-4 py-3 text-xs font-mono uppercase tracking-widest transition-colors"
+                                    style={{ color: '#10b981' }}
                                 >
                                     <span className="flex items-center gap-2">
                                         {thinkingEntry?.status === 'done' ? (
-                                            <span className="text-green-500">✓</span>
+                                            <span style={{ color: '#10b981' }}>✓</span>
                                         ) : (
                                             <span
-                                                className="inline-block w-3.5 h-3.5 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"
+                                                className="inline-block w-3.5 h-3.5 border-2 rounded-full animate-spin"
+                                                style={{ borderColor: 'rgba(16, 185, 129, 0.3)', borderTopColor: '#10b981' }}
                                             />
                                         )}
                                         <span>
@@ -287,20 +309,15 @@ function StageContentArea({
                                     <span>{isThinkingExpanded ? '[-]' : '[+]'}</span>
                                 </button>
                                 {isThinkingExpanded && (
-                                    <div className="px-4 pb-4 text-sm text-zinc-300 space-y-3">
+                                    <div className="px-6 pb-4 space-y-4">
                                         {thinkingEntry.steps.map(step => (
-                                            <div key={step.bullet_id} className="border-b border-zinc-800/60 pb-3 last:border-0 last:pb-0">
-                                                <div className="font-semibold text-zinc-200">- {step.title}</div>
+                                            <div key={step.bullet_id} className="pb-3 last:pb-0" style={{ borderBottom: '1px solid rgba(16, 185, 129, 0.2)' }}>
+                                                <div className="font-semibold text-sm" style={{ color: '#6ee7b7' }}>▸ {step.title}</div>
                                                 {step.detail && (
-                                                    <div className="text-zinc-500 leading-relaxed mt-1">{step.detail}</div>
+                                                    <div className="text-sm leading-relaxed mt-1" style={{ color: 'rgba(167, 243, 208, 0.7)' }}>{step.detail}</div>
                                                 )}
                                             </div>
                                         ))}
-                                        {hasAnswerStarted && (
-                                            <div className="text-xs text-zinc-500 font-mono uppercase tracking-widest">
-                                                Answer started, still expanded
-                                            </div>
-                                        )}
                                     </div>
                                 )}
                             </div>
@@ -308,21 +325,26 @@ function StageContentArea({
 
 
                         {!contentData ? (
-                            <div className="flex items-center justify-center h-40 text-zinc-500 font-mono animate-pulse">
+                            <div className="flex items-center justify-center h-40 font-mono animate-pulse" style={{ color: 'var(--hud-muted)' }}>
                                 {isFinal ? 'Awaiting Consensus...' : 'Waiting for data stream...'}
                             </div>
                         ) : !contentData.content ? (
-                            <div className="flex items-center justify-center h-40 text-zinc-500 font-mono animate-pulse">
+                            <div className="flex items-center justify-center h-40 font-mono animate-pulse" style={{ color: 'var(--hud-muted)' }}>
                                 Processing...
                             </div>
                         ) : (
                             <div className="prose prose-invert prose-lg max-w-none">
-                                <h2 className="text-xl font-bold font-mono mb-6 pb-2 border-b border-zinc-800"
-                                    style={{ color: isFinal ? '#d8b4fe' : `var(--accent-${accentColor})` }}>
-                                    <span className="mr-2 opacity-50">{'>>'}</span>{contentData.title}
+                                <h2 className="text-xl font-bold font-hud mb-6 pb-2 flex items-center gap-3"
+                                    style={{
+                                        color: isFinal ? '#c084fc' : 'var(--hud-amber)',
+                                        borderBottom: `2px solid ${isFinal ? 'rgba(192, 132, 252, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`,
+                                        textShadow: isFinal ? '0 0 10px rgba(192, 132, 252, 0.5)' : '0 0 10px rgba(245, 158, 11, 0.5)'
+                                    }}>
+                                    <span style={{ color: isFinal ? '#c084fc' : 'var(--hud-cyan)' }}>{'>'}</span>
+                                    {contentData.title}
                                 </h2>
 
-                                <div className="text-zinc-300 font-sans leading-loose tracking-wide">
+                                <div className="font-sans leading-loose tracking-wide" style={{ color: 'var(--hud-text)' }}>
                                     <ReactMarkdown>{contentData.content}</ReactMarkdown>
                                 </div>
                             </div>

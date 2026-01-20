@@ -3,7 +3,7 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #ffffff;
+  background: var(--hud-bg);
 }
 
 .chat-header {
@@ -11,22 +11,23 @@
   align-items: center;
   justify-content: space-between;
   padding: 16px 24px;
-  border-bottom: 1px solid #e0e0e0;
-  background: #fafafa;
+  border-bottom: 1px solid var(--hud-cyan-soft);
+  background: var(--hud-bg-soft);
 }
 
 .chat-title {
   margin: 0;
   font-size: 20px;
   font-weight: 600;
-  color: #333;
+  color: var(--hud-text);
+  font-family: "Orbitron", "Rajdhani", sans-serif;
 }
 
 .github-link {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #666;
+  color: var(--hud-muted);
   text-decoration: none;
   transition: color 0.2s;
   padding: 4px;
@@ -34,8 +35,8 @@
 }
 
 .github-link:hover {
-  color: #333;
-  background: #e8e8e8;
+  color: var(--hud-cyan);
+  background: rgba(6, 182, 212, 0.1);
 }
 
 .github-link svg {
@@ -44,9 +45,9 @@
 
 .privacy-warning {
   padding: 12px 24px;
-  background: #fff3cd;
-  border-bottom: 1px solid #ffc107;
-  color: #856404;
+  background: rgba(245, 158, 11, 0.1);
+  border-bottom: 1px solid var(--hud-amber);
+  color: var(--hud-amber);
   font-size: 14px;
   font-weight: 500;
   text-align: center;
@@ -68,14 +69,14 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #666;
+  color: var(--hud-muted);
   text-align: center;
 }
 
 .empty-state h2 {
   margin: 0 0 8px 0;
   font-size: 24px;
-  color: #333;
+  color: var(--hud-text);
 }
 
 .empty-state p {
@@ -95,18 +96,18 @@
 .message-label {
   font-size: 12px;
   font-weight: 600;
-  color: #666;
+  color: var(--hud-muted);
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
 .user-message .message-content {
-  background: #f0f7ff;
+  background: rgba(6, 182, 212, 0.1);
   padding: 16px;
   border-radius: 8px;
-  border: 1px solid #d0e7ff;
-  color: #333;
+  border: 1px solid var(--hud-cyan-soft);
+  color: var(--hud-text);
   line-height: 1.6;
   max-width: 80%;
   white-space: pre-wrap;
@@ -117,7 +118,7 @@
   align-items: center;
   gap: 12px;
   padding: 16px;
-  color: #666;
+  color: var(--hud-muted);
   font-size: 14px;
 }
 
@@ -127,10 +128,10 @@
   gap: 12px;
   padding: 16px;
   margin: 12px 0;
-  background: #f9fafb;
+  background: var(--hud-bg-soft);
   border-radius: 8px;
-  border: 1px solid #e0e0e0;
-  color: #666;
+  border: 1px solid var(--hud-cyan-soft);
+  color: var(--hud-muted);
   font-size: 14px;
   font-style: italic;
 }
@@ -138,8 +139,8 @@
 .spinner {
   width: 20px;
   height: 20px;
-  border: 2px solid #e0e0e0;
-  border-top-color: #4a90e2;
+  border: 2px solid var(--hud-cyan-soft);
+  border-top-color: var(--hud-cyan);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -155,17 +156,17 @@
   align-items: flex-end;
   gap: 12px;
   padding: 24px;
-  border-top: 1px solid #e0e0e0;
-  background: #fafafa;
+  border-top: 1px solid var(--hud-cyan-soft);
+  background: var(--hud-bg-soft);
 }
 
 .message-input {
   flex: 1;
   padding: 14px;
-  background: #ffffff;
-  border: 1px solid #d0d0d0;
+  background: var(--hud-bg);
+  border: 1px solid var(--hud-cyan-soft);
   border-radius: 8px;
-  color: #333;
+  color: var(--hud-text);
   font-size: 15px;
   font-family: inherit;
   line-height: 1.5;
@@ -176,38 +177,39 @@
 }
 
 .message-input:focus {
-  border-color: #4a90e2;
-  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.1);
+  border-color: var(--hud-cyan);
+  box-shadow: 0 0 0 3px var(--hud-cyan-soft);
 }
 
 .message-input:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-  background: #f5f5f5;
+  background: var(--hud-bg-soft);
 }
 
 .send-button {
   padding: 14px 28px;
-  background: #4a90e2;
-  border: 1px solid #4a90e2;
+  background: var(--hud-cyan);
+  border: 1px solid var(--hud-cyan);
   border-radius: 8px;
-  color: #fff;
+  color: var(--hud-bg);
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s;
   white-space: nowrap;
   align-self: flex-end;
 }
 
 .send-button:hover:not(:disabled) {
-  background: #357abd;
-  border-color: #357abd;
+  background: transparent;
+  color: var(--hud-cyan);
+  box-shadow: 0 0 15px var(--hud-cyan-soft);
 }
 
 .send-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-  background: #ccc;
-  border-color: #ccc;
+  background: var(--hud-muted);
+  border-color: var(--hud-muted);
 }

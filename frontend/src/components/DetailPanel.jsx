@@ -76,45 +76,47 @@ function JudgeCard({ judgeId, judgeData, targetId, reviewComments, now }) {
     }
 
     return (
-        <div className="bg-zinc-950/50 border border-zinc-800 p-3 rounded transition-all duration-500">
+        <div className="relative p-3 rounded transition-all duration-500 clip-corner-top-right"
+            style={{ backgroundColor: 'var(--hud-bg)', border: '1px solid var(--hud-cyan-soft)' }}>
+            {/* Left accent line */}
+            <div className="absolute top-0 left-0 w-[2px] h-full" style={{ backgroundColor: 'var(--hud-cyan)' }}></div>
+
             {/* Judge Header */}
-            <div className="flex items-center gap-2 mb-2 pb-2 border-b border-zinc-800/50">
+            <div className="flex items-center gap-2 mb-2 pb-2" style={{ borderBottom: '1px solid var(--hud-cyan-soft)' }}>
                 <div className="w-2 h-2 rounded-full" style={{ background: `var(--accent-${uiConfig.color})` }}></div>
-                <span className="text-xs font-bold text-zinc-300">{judgeId.toUpperCase()}</span>
+                <span className="text-xs font-bold font-hud" style={{ color: 'var(--hud-text)' }}>{judgeId.toUpperCase()}</span>
                 {status === 'thinking' && (
-                    <span className="text-xs text-orange-500 animate-pulse ml-auto">ANALYZING...</span>
+                    <span className="text-xs animate-pulse ml-auto" style={{ color: 'var(--hud-amber)' }}>ANALYZING...</span>
                 )}
                 {status === 'done' && !shouldShowReview && (
-                    <span className="text-xs text-green-500 ml-auto">✓ COMPLETE</span>
+                    <span className="text-xs ml-auto" style={{ color: '#10b981' }}>✓ COMPLETE</span>
                 )}
                 {shouldShowReview && reviewFromJudge?.score && (
-                    <div className="text-xs font-mono font-bold text-zinc-400 ml-auto">
+                    <div className="text-xs font-mono font-bold ml-auto" style={{ color: 'var(--hud-cyan)' }}>
                         RANK #{reviewFromJudge.score}
                     </div>
                 )}
             </div>
 
-            {/* 内容区域：thinking 或 review */}
+            {/* Content area */}
             <div className="transition-opacity duration-500">
                 {shouldShowReview ? (
-                    // 显示 review 内容
-                    <div className="text-sm text-zinc-400 leading-relaxed animate-fadeIn">
+                    <div className="text-sm leading-relaxed animate-fadeIn" style={{ color: 'var(--hud-muted)' }}>
                         {reviewFromJudge.comment}
                     </div>
                 ) : latestStep ? (
-                    // 显示 thinking 内容
                     <div className="space-y-1">
-                        <div className="text-sm font-medium text-zinc-300">
+                        <div className="text-sm font-medium" style={{ color: 'var(--hud-text)' }}>
                             {latestStep.title}
                         </div>
                         {latestStep.detail && (
-                            <div className="text-xs text-zinc-400 leading-relaxed opacity-80">
+                            <div className="text-xs leading-relaxed opacity-80" style={{ color: 'var(--hud-muted)' }}>
                                 {latestStep.detail}
                             </div>
                         )}
                     </div>
                 ) : (
-                    <div className="text-xs text-zinc-600 font-mono animate-pulse">
+                    <div className="text-xs font-mono animate-pulse" style={{ color: 'var(--hud-muted)' }}>
                         Initializing analysis...
                     </div>
                 )}
@@ -189,22 +191,24 @@ export function DetailPanel({
         : title;
 
     return (
-        <div className="h-full flex flex-col bg-zinc-900/90 border-l md:border-l border-t-0 md:border-t border-zinc-800 backdrop-blur-md">
+        <div className="h-full flex flex-col backdrop-blur-md" style={{ backgroundColor: 'var(--hud-bg-soft)', borderLeft: '1px solid var(--hud-cyan-soft)' }}>
             {/* Drag Handle (Mobile only, visual only) */}
             <div className="md:hidden flex justify-center py-2">
-                <div className="w-10 h-1 bg-zinc-600 rounded-full"></div>
+                <div className="w-10 h-1 rounded-full" style={{ backgroundColor: 'var(--hud-cyan-soft)' }}></div>
             </div>
             {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b border-zinc-800 bg-zinc-950/50">
-                <h2 className={`text-sm font-bold tracking-widest uppercase text-zinc-400 ${stage === 'stage2' ? 'animate-breathe' : ''}`}>
-                    {displayTitle || "SYSTEM LOG"}
+            <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: 'var(--hud-cyan-soft)', backgroundColor: 'var(--hud-bg)' }}>
+                <h2 className={`text-sm font-bold tracking-widest uppercase font-hud ${stage === 'stage2' ? 'animate-breathe' : ''}`}
+                    style={{ color: 'var(--hud-cyan)', textShadow: '0 0 8px var(--hud-cyan)' }}>
+                    {displayTitle || "UNIT_STATUS"}
                 </h2>
                 <div className="flex items-center gap-2">
                     {/* Fullscreen Button (Stage 3 only) */}
                     {stage === 'stage3' && onToggleFullscreen && (
                         <button
                             onClick={onToggleFullscreen}
-                            className="p-1.5 text-zinc-500 hover:text-white hover:bg-zinc-800 border border-transparent hover:border-zinc-700 transition-all group"
+                            className="p-1.5 hover:bg-opacity-50 border border-transparent transition-all group"
+                            style={{ color: 'var(--hud-muted)' }}
                             title={isPanelFullscreen ? "Exit Fullscreen" : "Fullscreen"}
                         >
                             {isPanelFullscreen ? (
@@ -217,7 +221,8 @@ export function DetailPanel({
                     {/* Close Button */}
                     <button
                         onClick={onClose}
-                        className="p-1.5 text-zinc-500 hover:text-white hover:bg-zinc-800 border border-transparent hover:border-zinc-700 transition-all group"
+                        className="p-1.5 hover:bg-opacity-50 border border-transparent transition-all group"
+                        style={{ color: 'var(--hud-muted)' }}
                         title="Close Panel"
                     >
                         <X className="w-4 h-4 group-hover:rotate-90 transition-transform duration-300" />
@@ -228,15 +233,16 @@ export function DetailPanel({
             {/* Content */}
             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
                 {type === 'empty' && (
-                    <div className="flex items-center justify-center h-full text-zinc-600 text-xs font-mono">
+                    <div className="flex items-center justify-center h-full text-xs font-mono" style={{ color: 'var(--hud-muted)' }}>
                         NO DATA AVAILABLE
                     </div>
                 )}
 
                 {type === 'user_prompt' && (
                     <div className="space-y-2">
-                        <div className="text-xs font-mono text-zinc-500 uppercase mb-2">User Question</div>
-                        <div className="text-sm text-zinc-300 leading-relaxed p-3 bg-zinc-950/50 border border-zinc-800 rounded">
+                        <div className="text-xs font-mono uppercase mb-2" style={{ color: 'var(--hud-muted)' }}>User Question</div>
+                        <div className="text-sm leading-relaxed p-3 rounded"
+                            style={{ backgroundColor: 'var(--hud-bg)', border: '1px solid var(--hud-cyan-soft)', color: 'var(--hud-text)' }}>
                             {userPrompt || 'No question available'}
                         </div>
                     </div>

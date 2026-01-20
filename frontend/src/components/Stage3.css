@@ -1,25 +1,18 @@
 .stage3 {
-  background: #f0fff0;
-  border-color: #c8e6c8;
-}
-
-.final-response {
-  background: #ffffff;
+  background: var(--hud-bg-soft);
+  border: 1px solid var(--hud-cyan-soft);
+  border-radius: 8px;
   padding: 20px;
-  border-radius: 6px;
-  border: 1px solid #c8e6c8;
 }
 
-.chairman-label {
-  color: #2d8a2d;
-  font-size: 12px;
-  font-family: monospace;
-  margin-bottom: 12px;
-  font-weight: 600;
+.stage3-title {
+  color: var(--hud-amber);
+  font-family: "Orbitron", "Rajdhani", sans-serif;
+  font-weight: 700;
+  margin-bottom: 16px;
 }
 
-.final-text {
-  color: #333;
+.stage3-content {
+  color: var(--hud-text);
   line-height: 1.7;
-  font-size: 15px;
 }

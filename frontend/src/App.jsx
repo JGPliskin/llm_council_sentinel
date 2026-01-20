@@ -12,6 +12,7 @@ import TacticalHUD from "@/components/TacticalHUD";
 import { WelcomeScreen } from "@/components/WelcomeScreen";
 import StageContentArea from "@/components/StageContentArea";
 import DetailPanel from "@/components/DetailPanel";
+import { Background } from "@/components/ui/Background";
 
 function AppContent() {
   const { t } = useTranslation();
@@ -202,8 +203,11 @@ function AppContent() {
 
   // === Render ===
   return (
-    <div className="flex flex-col h-screen w-full bg-zinc-950 overflow-hidden font-sans text-zinc-100">
-      <div className="flex-1 flex overflow-hidden relative">
+    <div className="flex flex-col h-screen w-full overflow-hidden font-sans text-hud-text" style={{ backgroundColor: 'var(--hud-bg)' }}>
+      {/* HUD Background Textures */}
+      <Background />
+
+      <div className="flex-1 flex overflow-hidden relative z-10">
 
         {/* Mobile Overlay */}
         {isSidebarOpen && (
