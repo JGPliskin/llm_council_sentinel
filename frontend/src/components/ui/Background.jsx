@@ -13,6 +13,9 @@ export function Background() {
             {/* Grid floor with perspective */}
             <div className="bg-grid-floor" />
 
+            {/* Subtle flat grid */}
+            <div className="absolute inset-0 bg-grid-pattern opacity-15" />
+
             {/* Vignette overlay */}
             <div className="bg-vignette" />
 

@@ -203,7 +203,7 @@ function AppContent() {
 
   // === Render ===
   return (
-    <div className="flex flex-col h-screen w-full overflow-hidden font-sans text-hud-text" style={{ backgroundColor: 'var(--hud-bg)' }}>
+    <div className="flex flex-col h-screen w-full overflow-hidden text-hud-text" style={{ backgroundColor: 'var(--hud-bg)' }}>
       {/* HUD Background Textures */}
       <Background />
 
@@ -299,10 +299,12 @@ function AppContent() {
           <div
             className={`
               fixed bottom-0 inset-x-0 z-50 rounded-t-2xl border-t border-zinc-800
-              md:relative md:inset-auto md:w-[400px] md:rounded-none md:border-t-0 md:border-l md:block
-              transition-all duration-300
+              md:relative md:inset-auto md:rounded-none md:border-t-0 md:border-l md:block
+              transition-all duration-500
               h-[var(--panel-height)] md:h-auto
-              ${isPanelOpen ? 'translate-y-0 opacity-100 md:translate-y-0 md:translate-x-0' : 'translate-y-full opacity-0 md:translate-x-0 md:w-0 md:opacity-0 md:overflow-hidden'}
+              ${isPanelOpen
+                ? 'translate-y-0 opacity-100 md:translate-y-0 md:translate-x-0 md:w-[400px]'
+                : 'translate-y-full opacity-0 md:translate-x-full md:w-0 md:opacity-0 md:overflow-hidden'}
             `}
             style={{
               '--panel-height': isPanelFullscreen ? '90vh' : `${[30, 45, 60][panelHeightTier - 1] || 60}vh`,

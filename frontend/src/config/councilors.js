@@ -4,10 +4,10 @@
  * Value: 前端专用的 UI 属性
  */
 export const COUNCILOR_UI_CONFIG = {
-    "immanuel_kant": { color: "orange" },
-    "donald_trump": { color: "red" },
-    "hideo_kojima": { color: "blue" },
-    "chairman": { color: "purple" },
+    "immanuel_kant": { color: "cyan" },
+    "donald_trump": { color: "cyan" },
+    "hideo_kojima": { color: "cyan" },
+    "chairman": { color: "cyan" },
 };
 
 /**

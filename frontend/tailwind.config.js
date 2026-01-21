@@ -7,6 +7,18 @@ export default {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        sans: [
+          '"Rajdhani"',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          '"PingFang SC"',
+          '"Microsoft YaHei"',
+          '"Segoe UI"',
+          'sans-serif'
+        ],
+        hud: ['"Orbitron"', '"Rajdhani"', 'sans-serif']
+      },
       borderRadius: {
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',

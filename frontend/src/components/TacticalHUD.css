@@ -23,18 +23,12 @@
 
 /* Agent Slice Card - Demo-style low-profile angled tabs */
 .agent-slice {
-    @apply relative flex flex-row items-center justify-center flex-1 min-w-[100px] max-w-[180px] py-2 px-4 transition-all duration-300;
-    /* Skew for angled look */
-    transform: skewX(-12deg);
-    background: var(--hud-bg);
-    border: 1px solid var(--hud-cyan-soft);
-    border-top: 2px solid var(--hud-cyan);
-    overflow: visible;
-}
-
-/* Un-skew content inside */
-.agent-slice>* {
-    transform: skewX(12deg);
+    @apply relative flex flex-col items-center justify-center flex-1 min-w-[110px] max-w-[200px] py-3 px-4 transition-all duration-300;
+    background: rgba(5, 10, 20, 0.9);
+    border: 1px solid rgba(6, 182, 212, 0.25);
+    border-top: 1px solid var(--hud-cyan);
+    overflow: hidden;
+    clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
 }
 
 .agent-status {
@@ -43,8 +37,7 @@
 }
 
 .agent-slice:hover {
-    border-color: var(--hud-cyan);
-    box-shadow: 0 0 20px var(--hud-cyan-soft), inset 0 0 15px rgba(6, 182, 212, 0.1);
+    box-shadow: 0 0 18px rgba(6, 182, 212, 0.25), inset 0 0 15px rgba(6, 182, 212, 0.08);
 }
 
 .agent-slice.agent-slot--empty {
@@ -130,7 +123,7 @@
 }
 
 .tactical-hud--stage3 {
-    border-top-color: theme('colors.purple.600');
+    border-top-color: var(--hud-cyan);
 }
 
 /* Consensus Overlay */
@@ -147,7 +140,8 @@
 }
 
 .overlay-content {
-    @apply flex flex-col items-center gap-2 text-purple-400 animate-pulse font-mono tracking-widest;
+    @apply flex flex-col items-center gap-2 animate-pulse font-mono tracking-widest;
+    color: var(--hud-cyan);
 }
 
 .overlay-content .icon {
@@ -159,5 +153,6 @@
 }
 
 .overlay-content .hint {
-    @apply text-xs text-purple-600/80;
+    @apply text-xs;
+    color: rgba(6, 182, 212, 0.7);
 }

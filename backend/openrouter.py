@@ -174,7 +174,8 @@ async def stream_model(
                                     if "name" in fn:
                                         tool_call_buffer[idx]["name"] = fn["name"]
                                     if "arguments" in fn:
-                                        tool_call_buffer[idx]["arguments"] += fn["arguments"]
+                                        if fn["arguments"] is not None:
+                                            tool_call_buffer[idx]["arguments"] += fn["arguments"]
                                 
                                 # 尝试实时解析 emit_thinking 并触发回调
                                 if tool_call_buffer[idx]["name"] == "emit_thinking":

@@ -1,139 +1,168 @@
-# UI_STYLE_GUIDE.md - LLM Council Sentinel 视觉规范
+# UI_STYLE_GUIDE.md - LLM Council Sentinel HUD Visual System (As-Built)
 
-本文档描述当前前端 UI 的实际视觉规范与约束，目标是“给任何人看都没有歧义”。所有规则以 `frontend/src` 代码与 `frontend/src/index.css` 为准。
-
----
-
-## 1. 设计方向
-
-- 风格：暗色系、战术 HUD、轻量赛博风
-- 关键词：对比清晰、信息密度高、状态可感知
-- 主要使用 Tailwind 类与少量 CSS 变量
+This document defines the long-term visual style for the project. It is the canonical, non-ambiguous UI reference. All UI work should align to this HUD style.
 
 ---
 
-## 2. 颜色系统
+## 1. Visual Direction
+- Style: dark sci-fi HUD, neon cyan, high contrast, minimal color variance.
+- Keywords: HUD, grid, scanline, chamfered panels, cyan glow.
+- Constraint: visuals only; do not change logic or interaction behavior when applying styling.
+- Explicit exclusion: System Time module is not used.
 
-### 2.1 主题变量（`frontend/src/index.css`）
+---
 
+## 2. Color System
+### 2.1 Core Tokens (frontend/src/index.css)
 ```css
 :root {
-  --bg-primary: #09090b;     /* zinc-950 */
-  --bg-secondary: #18181b;   /* zinc-900 */
-  --bg-tertiary: #27272a;    /* zinc-800 */
+  --hud-bg: #050a14;
+  --hud-bg-soft: #0a0f1e;
+  --hud-cyan: #06b6d4;
+  --hud-cyan-soft: rgba(6, 182, 212, 0.2);
+  --hud-amber: #f59e0b; /* allowed only for small status dots if needed */
+  --hud-text: #e0f2fe;
+  --hud-muted: #5b6b7a;
 
-  --text-primary: #f4f4f5;   /* zinc-100 */
-  --text-secondary: #71717a; /* zinc-500 */
-  --text-muted: #3f3f46;     /* zinc-700 */
-
-  --border-default: #27272a; /* zinc-800 */
-  --border-subtle: #18181b;  /* zinc-900 */
-
-  --accent-orange: #f97316;
-  --accent-blue: #3b82f6;
-  --accent-purple: #a855f7;
-  --accent-teal: #14b8a6;
-  --accent-red: #ef4444;
-  --accent-yellow: #facc15;
+  /* Accent palette (only cyan is used for main UI) */
+  --accent-cyan: #06b6d4;
+  --accent-purple: #a855f7; /* legacy; do not use in UI */
 }
 ```
 
-### 2.2 Councilor 颜色映射
-
-来源：`frontend/src/config/councilors.js`
-
-| Councilor ID | 颜色关键字 | CSS 变量 |
-|---|---|---|
-| `immanuel_kant` | orange | `--accent-orange` |
-| `donald_trump` | red | `--accent-red` |
-| `hideo_kojima` | blue | `--accent-blue` |
-| `chairman` | purple | `--accent-purple` |
-
-UI 中多处使用：`style={{ background: "var(--accent-orange)" }}`
+### 2.2 Usage Rules
+- Primary UI color is cyan only.
+- Purple is not used in UI.
+- Councilor colors are unified to cyan (avoid multi-color UI).
+- Only small status dots may use secondary accents if absolutely required.
 
 ---
 
-## 3. 字体系统
+## 3. Typography
+### 3.1 Fonts
+- Body: Rajdhani
+- HUD labels/titles: Orbitron
+- Mono: existing system mono stack
 
-### 3.1 默认字体
+### 3.2 Font Sources (self-hosted)
+Location: `frontend/src/assets/fonts/`
+- Orbitron: woff2 weights (400, 500, 700, 900)
+- Rajdhani: woff2 weights (300, 500, 700)
 
-当前默认字体栈（`index.css`）：
-
+Applied in `frontend/src/index.css` via:
 ```css
+@import "./assets/fonts/fonts.css";
+
 body {
   font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
-    "Ubuntu", "Cantarell", sans-serif;
+    "Rajdhani",
+    -apple-system, BlinkMacSystemFont,
+    "PingFang SC", "Microsoft YaHei",
+    "Segoe UI", sans-serif;
+}
+
+.font-hud, .hud-title, .hud-label {
+  font-family:
+    "Orbitron",
+    "Rajdhani",
+    -apple-system, BlinkMacSystemFont,
+    "PingFang SC", "Microsoft YaHei",
+    "Segoe UI", sans-serif;
 }
 ```
 
-### 3.2 等宽字体
+---
 
-```css
-code, .mono {
-  font-family: "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace;
-}
-```
+## 4. Background and Texture
+### 4.1 Layers (Always On)
+Background is fixed and always visible in all states (Welcome + Stage 1-3):
+1) Perspective grid floor
+2) Flat grid
+3) Vignette
+4) Scanline + cyan sweep
+
+Implementation: `frontend/src/components/ui/Background.jsx`
+
+### 4.2 Reduced Motion
+- Use `prefers-reduced-motion` to disable scanline/sweep animation.
+- Grid and vignette remain visible.
+
+### 4.3 Performance Hints
+- Add `will-change: transform` to animated layers.
 
 ---
 
-## 4. 动画与过渡
+## 5. Layout Rules
+### 5.1 Desktop
+- Sidebar: fixed left column, width ~260px (`w-64`).
+- Right Panel: fixed right column, width 400px; slides in/out horizontally.
+- Center: flexible main content column.
 
-### 4.1 常用类
-
-- `animate-in fade-in slide-in-from-bottom-4 duration-500`
-- `animate-pulse`
-- `scroll-smooth`
-
-### 4.2 Thinking → Review/Answer 过渡
-
-**要求**：cross-fade + 轻微上移，180-240ms
-
-**规范描述**：
-- opacity: 1 → 0（thinking） / 0 → 1（review/answer）
-- transform: translateY(4px) → translateY(0)
-- duration: 180-240ms
-- 背景适配：避免纯透明导致文字对比不足，必要时保持 `bg-zinc-950/60` 底色
+### 5.2 Mobile
+- Sidebar: overlay drawer.
+- Right Panel: bottom sheet drawer (vertical slide), height tiers remain.
 
 ---
 
-## 5. 布局规范
+## 6. Component Style Rules
 
-| 区域 | 桌面宽度 | 说明 |
-|---|---|---|
-| Sidebar | 260px | `w-64` (approx) |
-| RightPanel | 400px | `md:w-[400px]` (Vertical Column) |
-| Content | Flex-1 | Remaining space ("Squeeze" layout) |
+### 6.1 Sidebar
+File: `frontend/src/components/Sidebar.jsx`
+- Header: Mission Logs HUD strip with cyan text and small bar.
+- Initiate Session button: solid translucent fill (no diagonal stripes).
+- Active conversation: cyan border + small dot in top-right.
 
-**移动端 (<768px)**:
-- Sidebar: 左侧全屏覆盖式抽屉 (Overlay)。
-- RightPanel: 底部抽屉 (Bottom Sheet)，高度可变 (30vh-90vh)，无遮罩 (Non-modal Interaction)。
+### 6.2 Tabs (StageContentArea)
+File: `frontend/src/components/StageContentArea.jsx`
+- Tabs border width is uniform (1px) on top/left/right.
+- Consensus tab uses cyan, not purple.
 
----
+### 6.3 Main Content
+File: `frontend/src/components/StageContentArea.jsx`
+- Panels use chamfered corners and cyan edge lines.
+- Proposal header uses cyan only (no amber/purple).
+- Logic process header text is always `LOGIC_PROCESS` to avoid overlap.
 
-## 6. 核心组件样式约定
+### 6.4 Right Panel (Peer Reviews)
+File: `frontend/src/components/DetailPanel.jsx`
+- Panels and cards use cyan border + dark fill.
+- Review header and rank use cyan.
 
-### 6.1 StageContentArea
+### 6.5 Bottom HUD (TacticalHUD)
+Files: `frontend/src/components/TacticalHUD.jsx`, `frontend/src/components/TacticalHUD.css`
+- Card borders must be uniform on all sides (1px).
+- No purple accents; use cyan across all HUD elements.
 
-- 头部 tabs：`bg-zinc-900/80` + 边框
-- 内容卡：`bg-zinc-900/40` + `border-zinc-800`
-- Thinking 区块：`bg-zinc-950/60` + `border-zinc-800`
-
-### 6.2 DetailPanel
-
-- Panel 背景：`bg-zinc-900/90`
-- Judge 卡片：`bg-zinc-950/50` + `border-zinc-800`
-- 状态标识：
-  - thinking：橙色 `text-orange-500`
-  - done：绿色 `text-green-500`
-
-### 6.3 TacticalHUD
-
-- 主题随 Stage 切换
-  - Stage1：橙色
-  - Stage2：蓝色
-  - Stage3：紫色
+### 6.6 Consensus Beacon
+File: `frontend/src/components/ConsensusBeacon.css`
+- Beacon uses cyan glow (no purple).
 
 ---
 
-*Last updated: 2026-01-03*
+## 7. Utility Classes (frontend/src/index.css)
+Required utilities for HUD style:
+- `.bg-grid-floor`, `.bg-grid-pattern`
+- `.bg-vignette`, `.bg-scanline`, `.bg-cyan-sweep`
+- `.hud-panel`, `.hud-panel-soft`
+- `.clip-corner-both`, `.clip-corner-top-right`
+- `.hud-glow`, `.hud-label`, `.hud-title`
+
+---
+
+## 8. Non-Goals
+- Do not introduce System Time.
+- Do not change logic or API behavior.
+- Do not use multi-color theme elements.
+
+---
+
+## 9. Verification Checklist
+- [ ] Background grid visible in Welcome + Stage 1-3.
+- [ ] No purple elements remain in UI.
+- [ ] Tabs and bottom HUD borders have uniform widths.
+- [ ] Right panel slides horizontally on desktop and vertically on mobile.
+- [ ] Logic process header shows only `LOGIC_PROCESS`.
+
+---
+
+Last updated: 2026-01-22
