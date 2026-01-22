@@ -81,7 +81,7 @@ GLOBAL_MODEL_POOL = [
         "provider": "openrouter",
         "concurrency_limit": 5,
         "category": "fast",
-        "capabilities": {"thinking": True, "mode": "standard"},
+        "capabilities": {"thinking": True, "mode": "tool"},
     },
     {
         "id": "openrouter:nvidia/nemotron-nano-9b-v2:free",
@@ -153,7 +153,7 @@ GLOBAL_MODEL_POOL = [
         "provider": "openrouter",
         "concurrency_limit": 5,
         "category": "fast",
-        "capabilities": {"thinking": False, "mode": "standard"},
+        "capabilities": {"thinking": True, "mode": "tool"},
     },
     {
         "id": "nim:deepseek-ai/deepseek-v3.1",

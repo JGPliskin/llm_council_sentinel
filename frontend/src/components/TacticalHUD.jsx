@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Scale } from 'lucide-react';
+import { Scale, PanelLeftClose, PanelLeftOpen, PanelRightOpen, RotateCcw } from 'lucide-react';
 import { getCouncilorUIConfig } from '@/config/councilors';
 import './TacticalHUD.css';
 
@@ -14,9 +14,16 @@ function TacticalHUD({
     onConsensusClick,
     stage2Skipped = false,
     activeTab = null,
+    onTabSelect, // New: for interactive switching
     // New props for IDLE stage
     selectedAgentIds = [],
     allCouncilors = [],
+    // Controls
+    isSidebarOpen,
+    onToggleSidebar,
+    isDetailPanelOpen,
+    onToggleDetailPanel,
+    onResetSession,
 }) {
     // 排序议员：Stage 2 完成后按排名排序
     const sortedAgents = useMemo(() => {
@@ -96,8 +103,17 @@ function TacticalHUD({
         return (
             <div
                 key={agent.councilor_id}
-                className={`agent-slice ${hasRanking ? 'border-opacity-100' : 'border-opacity-50'}`}
-                style={{ borderColor: `var(--accent-${uiConfig.color})` }}
+                onClick={(e) => {
+                    if (onTabSelect) {
+                        e.stopPropagation(); // Prevent main content click from closing drawer immediately if needed
+                        onTabSelect(agent.councilor_id);
+                    }
+                }}
+                className={`agent-slice ${hasRanking ? 'border-opacity-100' : 'border-opacity-50'} ${onTabSelect ? 'cursor-pointer' : ''} ${activeTab === agent.councilor_id ? 'ring-1 ring-cyan-400/40' : ''}`}
+                style={{
+                    borderColor: `var(--accent-${uiConfig.color})`,
+                    backgroundColor: activeTab === agent.councilor_id ? 'rgba(6, 182, 212, 0.08)' : undefined
+                }}
             >
                 {/* Background Pattern & Progress Fill (Stage 1 & Stage 2) */}
                 {(stage === 'stage1' || stage === 'stage2') && progress > 0 && (
@@ -106,35 +122,38 @@ function TacticalHUD({
                         style={{
                             height: `${progress}%`,
                             backgroundColor: `var(--accent-${uiConfig.color})`,
-                            opacity: stage === 'stage1' ? 0.2 : 0.12  // Stage2 lighter fill
+                            opacity: stage === 'stage1' ? 0.2 : 0.18  // Stage2 lighter fill
                         }}
                     >
-                        <div className="absolute inset-0 bg-stripe-pattern opacity-30 animate-[scanline_2s_linear_infinite]" />
+                        <div
+                            className="absolute inset-0 bg-stripe-pattern animate-[scanline_2s_linear_infinite]"
+                            style={{ opacity: stage === 'stage1' ? 0.3 : 0.4 }}
+                        />
                         <div className="absolute top-0 left-0 right-0 h-px bg-white/30 shadow-[0_0_10px_rgba(255,255,255,0.5)]" />
                     </div>
                 )}
 
                 {/* Identity / Role Label */}
-                <div className="agent-identity font-mono text-[9px] uppercase tracking-wider text-zinc-500 mt-1 relative z-10 transition-colors duration-300"
-                    style={{ color: progress > 0 ? `var(--accent-${uiConfig.color})` : undefined, opacity: 0.7 }}>
+                <div className="agent-identity font-mono text-[9px] uppercase tracking-wider mt-1 relative z-10 transition-colors duration-300"
+                    style={{ color: progress > 0 ? `var(--accent-${uiConfig.color})` : 'var(--hud-muted)', opacity: 0.8 }}>
                     {uiConfig.role || 'COUNCILOR'}
                 </div>
 
                 {/* Agent Name */}
-                <div className="agent-name text-xs md:text-sm font-black uppercase tracking-tight text-zinc-100 truncate mt-0.5 relative z-10 drop-shadow-md">
+                <div className="agent-name text-xs md:text-sm font-black uppercase tracking-tight truncate mt-0.5 relative z-10 drop-shadow-md" style={{ color: 'var(--hud-text)' }}>
                     {agent.name}
                 </div>
 
                 {/* Rank / Skipped Badge */}
                 {showSkippedBadge ? (
-                    <div className="absolute top-0 right-0 p-1 bg-black/40 backdrop-blur z-20 border-l border-b border-zinc-700/50 rounded-bl">
-                        <span className="text-[10px] font-bold text-zinc-300 font-mono">
+                    <div className="absolute top-0 right-0 p-1 bg-black/40 backdrop-blur z-20 border-l border-b rounded-bl" style={{ borderColor: 'rgba(6, 182, 212, 0.2)' }}>
+                        <span className="text-[10px] font-bold font-mono" style={{ color: 'var(--hud-text)' }}>
                             SKIPPED
                         </span>
                     </div>
                 ) : hasRanking ? (
-                    <div className="absolute top-0 right-0 p-1 bg-black/40 backdrop-blur z-20 border-l border-b border-zinc-700/50 rounded-bl">
-                        <span className="text-xs font-bold text-zinc-200 font-mono">
+                    <div className="absolute top-0 right-0 p-1 bg-black/40 backdrop-blur z-20 border-l border-b rounded-bl" style={{ borderColor: 'rgba(6, 182, 212, 0.2)' }}>
+                        <span className="text-xs font-bold font-mono" style={{ color: 'var(--hud-text)' }}>
                             #{agent.average_rank?.toFixed(1) || index + 1}
                         </span>
                     </div>
@@ -148,21 +167,40 @@ function TacticalHUD({
             : stage === 'stage3' ? 'tactical-hud--stage3'
                 : '';
 
+    const isBannerActive = stage3Complete && !hasViewedConsensus && activeTab !== 'final';
+
     return (
-        <div className={`tactical-hud ${stageClass}`}>
+        <div className={`tactical-hud ${stageClass}`} style={isBannerActive ? { minHeight: '180px' } : {}}>
             {/* Stage Indicator / Header Line */}
-            <div className="w-full flex items-center gap-4 px-6 py-2 border-b border-zinc-800 bg-black/40 backdrop-blur-md">
+            <div
+                className="w-full flex items-center gap-4 px-6 py-2 border-b backdrop-blur-md"
+                style={{ borderColor: 'rgba(6, 182, 212, 0.2)', backgroundColor: 'rgba(5, 10, 20, 0.9)' }}
+            >
+                {/* Controls (Integrated) */}
+                <div className="flex items-center gap-3 border-r pr-4 mr-0 md:mr-2" style={{ borderColor: 'rgba(6, 182, 212, 0.2)' }}>
+                    <button onClick={onToggleSidebar} className="transition-colors animate-breathe md:animate-none" style={{ color: 'var(--hud-muted)' }} title="Toggle Sidebar">
+                        {isSidebarOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
+                    </button>
+                    {stage !== 'idle' && (
+                        <button onClick={onToggleDetailPanel} className="transition-colors animate-breathe md:animate-none" style={{ color: 'var(--hud-muted)' }} title="Toggle Detail Panel">
+                            {isDetailPanelOpen ? <PanelRightOpen size={14} className="rotate-180" /> : <PanelRightOpen size={14} />}
+                        </button>
+                    )}
+                    <button onClick={onResetSession} className="transition-colors" style={{ color: 'var(--hud-muted)' }} title="Reset Session">
+                        <RotateCcw size={14} />
+                    </button>
+                </div>
                 <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${stage === 'idle' ? 'bg-zinc-500' : 'bg-purple-500 animate-pulse'}`}></div>
-                    <span className="text-[10px] font-mono font-bold text-purple-400 tracking-[0.2em] uppercase">
+                    <div className={`w-2 h-2 rounded-full ${stage === 'idle' ? '' : 'animate-pulse'}`} style={{ backgroundColor: stage === 'idle' ? 'var(--hud-muted)' : 'var(--hud-cyan)' }}></div>
+                    <span className="text-[10px] font-mono font-bold tracking-[0.2em] uppercase whitespace-nowrap flex-shrink-0" style={{ color: 'var(--hud-cyan)' }}>
                         STAGE [{stage === 'idle' ? 'STANDBY' : stage === 'stage1' ? '01 / 03' : stage === 'stage2' ? '02 / 03' : '03 / 03'}]
                     </span>
-                    <span className="text-[10px] font-mono text-zinc-600 uppercase tracking-widest">
+                    <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: 'var(--hud-muted)' }}>
                         // {stage === 'idle' ? 'SYSTEM_IDLE' : stage === 'stage1' ? 'PROPOSAL_STREAM' : stage === 'stage2' ? 'PEER_REVIEW' : 'CONSENSUS'}
                     </span>
                 </div>
                 <div className="flex-1"></div>
-                <div className="hidden md:flex text-[9px] font-mono text-zinc-700 gap-4">
+                <div className="hidden md:flex text-[9px] font-mono gap-4" style={{ color: 'var(--hud-muted)' }}>
                     <span>CPU: 45%</span>
                     <span>MEM: 12GB</span>
                 </div>
@@ -180,14 +218,17 @@ function TacticalHUD({
                         className="absolute inset-0 bg-black/80 backdrop-blur-sm z-40 flex items-center justify-center animate-in fade-in duration-1000 cursor-pointer hover:bg-black/70 transition-colors"
                     >
                         {/* 内部卡片样式：紫色边框 + 倾斜效果 (skew-x-12) */}
-                        <div className="bg-zinc-900 border-2 border-purple-500 p-3 md:p-4 transform -skew-x-12 shadow-[0_0_50px_rgba(168,85,247,0.5)] max-w-lg w-full mx-4 group">
+                        <div
+                            className="border-2 p-3 md:p-4 transform -skew-x-12 shadow-[0_0_40px_rgba(6,182,212,0.5)] max-w-lg w-full mx-4 group"
+                            style={{ backgroundColor: 'rgba(5, 10, 20, 0.9)', borderColor: 'rgba(6, 182, 212, 0.8)' }}
+                        >
                             <div className="transform skew-x-12 text-center group-hover:scale-105 transition-transform duration-300">
                                 <div className="flex justify-center mb-1">
-                                    <div className="bg-purple-500 text-white p-1.5 rounded-full"><Scale className="w-6 h-6" /></div>
+                                    <div className="rounded-full p-1.5" style={{ backgroundColor: 'var(--hud-cyan)', color: '#001018' }}><Scale className="w-6 h-6" /></div>
                                 </div>
                                 <h2 className="text-xl md:text-2xl font-black text-white uppercase tracking-tighter mb-1">Consensus Ready</h2>
-                                <div className="h-px w-24 bg-purple-500 mx-auto mb-2" />
-                                <p className="text-purple-300 font-mono text-[10px] md:text-xs">
+                                <div className="h-px w-24 mx-auto mb-2" style={{ backgroundColor: 'var(--hud-cyan)' }} />
+                                <p className="font-mono text-[10px] md:text-xs" style={{ color: 'var(--hud-cyan)' }}>
                                     PARLIAMENTARY DECREE #404 ISSUED.<br />TAP TO VIEW REPORT.
                                 </p>
                             </div>

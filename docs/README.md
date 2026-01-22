@@ -101,7 +101,7 @@ docker-compose up -d
 - `docs/DATA_SCHEMA.md` - 数据模型
 - `docs/配置说明.md` - 配置参数
 - `docs/UI_STYLE_GUIDE.md` - UI 样式规范
-- `docs/开发文档/stage2-thinking-stream.md` - Stage2 Thinking 方案
+- `docs/开发文档/mobile-right-review-drawer-spec.md` - Mobile Review Drawer Implementation
 
 ---
 

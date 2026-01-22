@@ -85,6 +85,18 @@ Data Storage: `data/conversations/*.json`
 | `DetailPanel.jsx` | Stage2 Thinking + Reviews，Stage3 Synthesis |
 | `TacticalHUD.jsx` | 进度与状态 HUD |
 
+### 3.3 Frontend Layout Strategy
+
+**Desktop (>=768px)**:
+- **3-Column Fluid Layout**: `[Sidebar (Fixed)]` - `[Main Content (Flex)]` - `[Right Detail Panel (Relative/Fixed)]`
+- **Non-Overlay**: Right panel pushes content to prevent obstruction ("Squeeze" layout).
+- **HUD**: Integrated into Main Content footer, ensuring constant visibility.
+
+**Mobile (<768px)**:
+- **Stacked Layout**: Sidebar (Overlay) + Main Content (Full Width).
+- **Bottom Drawer**: Right Detail Panel behaves as a bottom sheet (`fixed bottom-0 z-50`).
+- **Interactive Details**: "Tap-to-Stow" interaction on background; Stage 2 Auto-open logic.
+
 ---
 
 ## 4. 核心流程

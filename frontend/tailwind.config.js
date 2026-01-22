@@ -7,6 +7,18 @@ export default {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        sans: [
+          '"Rajdhani"',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          '"PingFang SC"',
+          '"Microsoft YaHei"',
+          '"Segoe UI"',
+          'sans-serif'
+        ],
+        hud: ['"Orbitron"', '"Rajdhani"', 'sans-serif']
+      },
       borderRadius: {
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
@@ -52,6 +64,16 @@ export default {
           '3': 'hsl(var(--chart-3))',
           '4': 'hsl(var(--chart-4))',
           '5': 'hsl(var(--chart-5))'
+        },
+        /* HUD Design System Colors */
+        hud: {
+          bg: 'var(--hud-bg)',
+          'bg-soft': 'var(--hud-bg-soft)',
+          cyan: 'var(--hud-cyan)',
+          'cyan-soft': 'var(--hud-cyan-soft)',
+          amber: 'var(--hud-amber)',
+          text: 'var(--hud-text)',
+          muted: 'var(--hud-muted)',
         }
       }
     }
