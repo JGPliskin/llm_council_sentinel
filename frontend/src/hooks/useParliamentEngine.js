@@ -319,7 +319,7 @@ export function useParliamentEngine() {
         // Set default tab (Use the resolved local variable)
         // Set default tab (Use the resolved local variable)
         if (resolved.length > 0) {
-            setActiveTab(resolved[0].id);
+            setActiveTabRaw(resolved[0].id);
         } else {
             console.warn("[loadSession] No councilors resolved, activeTab not set");
         }

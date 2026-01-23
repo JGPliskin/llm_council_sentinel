@@ -13,6 +13,16 @@ import ConsensusBeacon from './ConsensusBeacon';
 
 const THINKING_ICONS = [Terminal, LayoutGrid, Lock, Shield, ChevronRight];
 
+const isAvatarUrl = (avatar) =>
+    typeof avatar === "string" && (avatar.startsWith("http") || avatar.startsWith("/"));
+
+const renderAvatar = (avatar, alt) => {
+    if (isAvatarUrl(avatar)) {
+        return <img src={avatar} alt={alt || "Avatar"} className="h-full w-full object-cover" />;
+    }
+    return <span aria-hidden="true">{avatar || "?"}</span>;
+};
+
 
 function StageContentArea({
 
@@ -47,6 +57,7 @@ function StageContentArea({
     stage1AnswerStream = {},
 
     chairmanId = null, // Added Prop
+    chairmanInfo = null,
 
     // stage2Results not directly displayed in content area ? Refactor shows Stage 1/3 content. Stage 2 evaluates.
 
@@ -78,11 +89,11 @@ function StageContentArea({
 
             return {
 
-                id: 'chairman',
+                id: chairmanInfo?.id || chairmanId || 'chairman',
 
-                name: 'CHAIRMAN',
+                name: chairmanInfo?.name || 'CHAIRMAN',
 
-                avatar: 'ð§ ',
+                avatar: chairmanInfo?.avatar || 'ð§ ',
 
                 role: 'ARBITRATOR'
 
@@ -98,7 +109,7 @@ function StageContentArea({
 
         return found || { id: fallbackId, name: fallbackName, avatar: '?', role: 'UNKNOWN' };
 
-    }, [activeTab, isFinal, resolvedCouncilors]);
+    }, [activeTab, isFinal, resolvedCouncilors, chairmanInfo, chairmanId]);
 
 
 
@@ -362,7 +373,9 @@ function StageContentArea({
                                 textShadow: isActive ? '0 0 8px rgba(6, 182, 212, 0.6)' : 'none'
                             }}
                         >
-                            <span className={`${isActive ? 'opacity-100' : 'opacity-50'}`}>{agent.avatar}</span>
+                            <span className={`${isActive ? 'opacity-100' : 'opacity-50'} inline-flex h-5 w-5 items-center justify-center rounded-full overflow-hidden`}>
+                                {renderAvatar(agent.avatar, agent.name)}
+                            </span>
                             <span className="hidden md:inline">{agent.name}</span>
                         </button>
                     );
@@ -441,7 +454,9 @@ function StageContentArea({
                                 background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.35), rgba(120, 53, 15, 0.95))'
                             }}>
                             <div className="absolute inset-0 opacity-30 blur-xl" style={{ backgroundColor: 'rgba(245, 158, 11, 0.6)' }}></div>
-                            <div className="relative z-10" style={{ filter: 'drop-shadow(0 0 12px rgba(245, 158, 11, 0.7))' }}>{activeAgent.avatar}</div>
+                            <div className="relative z-10 h-16 w-16 md:h-20 md:w-20 rounded-full overflow-hidden flex items-center justify-center" style={{ filter: 'drop-shadow(0 0 12px rgba(245, 158, 11, 0.7))' }}>
+                                {renderAvatar(activeAgent.avatar, activeAgent.name)}
+                            </div>
                             <div className="absolute bottom-0 left-0 right-0 text-[10px] text-center font-mono py-1 uppercase"
                                 style={{ backgroundColor: 'rgba(5, 10, 20, 0.9)', color: 'var(--hud-muted)' }}>
                                 ID: {(activeAgent.id || 'unknown').substring(0, 8)}

@@ -8,7 +8,25 @@ const PROTOCOL_PRESETS = [
     { id: 'p3', title: 'Global Strategy', icon: 'Globe', prompt: 'Propose a geopolitical strategy for this crisis scenario.' },
 ];
 
-export function WelcomeScreen({ onStart, councilors = [], selectedIds = [], onToggleId }) {
+const CHAIRMAN_LABEL = "Chairman";
+
+const isAvatarUrl = (avatar) =>
+    typeof avatar === "string" && (avatar.startsWith("http") || avatar.startsWith("/"));
+
+const renderAvatar = (avatar, alt, className) => {
+    if (isAvatarUrl(avatar)) {
+        return (
+            <img
+                src={avatar}
+                alt={alt || "Avatar"}
+                className={className || "h-full w-full object-cover"}
+            />
+        );
+    }
+    return <span aria-hidden="true" className={className}>{avatar || "?"}</span>;
+};
+
+export function WelcomeScreen({ onStart, councilors = [], chairman = null, selectedIds = [], onToggleId }) {
     const [inputValue, setInputValue] = useState('');
 
     const handleSubmit = (e) => {
@@ -49,6 +67,17 @@ export function WelcomeScreen({ onStart, councilors = [], selectedIds = [], onTo
                                 const uiConfig = getCouncilorUIConfig(agent.id);
                                 const color = uiConfig.color;
 
+                                const avatarClassName = `h-full w-full object-cover ${isSelected ? '' : 'opacity-80'}`;
+                                const ringStyle = isSelected
+                                    ? {
+                                        borderColor: 'transparent',
+                                        boxShadow: '0 0 0 2px rgba(6, 182, 212, 0.9), 0 0 12px rgba(6, 182, 212, 0.45)'
+                                    }
+                                    : {
+                                        borderColor: 'transparent',
+                                        boxShadow: '0 0 0 1px rgba(6, 182, 212, 0.2)'
+                                    };
+
                                 return (
                                     <button
                                         key={agent.id}
@@ -61,16 +90,17 @@ export function WelcomeScreen({ onStart, councilors = [], selectedIds = [], onTo
                                         <div
                                             className="relative w-12 h-12 md:w-16 md:h-16 rounded-full flex items-center justify-center text-xl md:text-3xl border-2 transition-all"
                                             style={{
-                                                borderColor: isSelected ? 'var(--hud-cyan)' : 'rgba(6, 182, 212, 0.2)',
                                                 backgroundColor: isSelected ? 'rgba(5, 10, 20, 0.85)' : 'rgba(5, 10, 20, 0.7)',
-                                                boxShadow: isSelected ? '0 0 12px rgba(6, 182, 212, 0.4)' : 'none'
+                                                ...ringStyle
                                             }}
                                         >
-                                            {agent.avatar}
+                                            <div className="absolute inset-0 rounded-full overflow-hidden flex items-center justify-center">
+                                                {renderAvatar(agent.avatar, agent.name, avatarClassName)}
+                                            </div>
                                             {isSelected && (
                                                 <div
-                                                    className="absolute -top-1 -right-1 rounded-full p-0.5 border"
-                                                    style={{ backgroundColor: `var(--accent-${color})`, borderColor: 'var(--hud-bg)' }}
+                                                    className="absolute -top-1 -right-1 rounded-full p-0.5 border shadow"
+                                                    style={{ backgroundColor: `var(--accent-${color})`, borderColor: 'var(--hud-bg)', boxShadow: '0 0 8px rgba(6, 182, 212, 0.6)' }}
                                                 >
                                                     <CheckCircle2 className="w-3 h-3 md:w-4 md:h-4" style={{ color: 'var(--hud-bg)' }} />
                                                 </div>
@@ -96,13 +126,13 @@ export function WelcomeScreen({ onStart, councilors = [], selectedIds = [], onTo
                         <div className="text-[9px] font-bold mb-2 uppercase tracking-widest" style={{ color: 'var(--hud-cyan)' }}>Chairman</div>
                         <div className="flex flex-col items-center opacity-100">
                             <div
-                                className="relative w-14 h-14 md:w-20 md:h-20 rounded-full flex items-center justify-center text-2xl md:text-4xl border-2"
+                                className="relative w-14 h-14 md:w-20 md:h-20 rounded-full flex items-center justify-center text-2xl md:text-4xl border-2 overflow-hidden"
                                 style={{ borderColor: 'rgba(6, 182, 212, 0.3)', backgroundColor: 'rgba(5, 10, 20, 0.7)', boxShadow: '0 0 20px rgba(6, 182, 212, 0.2)' }}
                             >
-                                🧠
+                                {renderAvatar(chairman?.avatar, chairman?.name || CHAIRMAN_LABEL)}
                             </div>
                             <span className="mt-2 text-[9px] md:text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--hud-muted)' }}>
-                                Chairman
+                                {chairman?.name || CHAIRMAN_LABEL}
                             </span>
                         </div>
                     </div>

@@ -1,332 +1,180 @@
-# AGENTS.md - 技术架构与工作流（最新版）
+﻿# AGENTS.md - 技术架构与工作流（权威版）
 
-本文件是 LLM Council Sentinel 的权威技术说明文档，覆盖架构、关键流程、数据结构、边界条件与运行规则。
-文档内容以当前代码实现为准（以 `backend/` 与 `frontend/src/` 为准），要求“给任何人看都没有歧义”。
-
-> 相关文档
-> - [Architecture.md](./Architecture.md) - 系统架构总览
-> - [API_REFERENCE.md](./API_REFERENCE.md) - API 接口参考
-> - [DATA_SCHEMA.md](./DATA_SCHEMA.md) - 数据模型定义
-> - [配置说明.md](./配置说明.md) - 环境配置指南
-> - [UI_STYLE_GUIDE.md](./UI_STYLE_GUIDE.md) - 前端视觉规范
-> - [开发文档/stage2-thinking-stream.md](./开发文档/stage2-thinking-stream.md) - Stage2 Thinking 方案
+本文档是系统流程与行为约束的权威说明，内容以当前代码为准（`backend/` 与 `frontend/src/`）。目标是“给任何人看都无歧义”。
 
 ---
 
-## 1. 系统概览
+## 1. 范围与定义
 
-LLM Council 是一个三阶段异步协作系统：
+- **范围**：后端三阶段编排、模型分配、SSE 事件协议、持久化结构、前端状态机。
+- **不包含**：测试代码（按要求跳过）。
 
-- **Stage1**：多名 Councilor 并行产出回答（Markdown）
-- **Stage2**：匿名互评、评分与排序（JSON）
-- **Stage3**：Chairman 综合输出最终结论（Markdown）
-
-系统具备：
-
-- 模型健康管理（健康 / 冷却 / 不可用）
-- 对话持久化（JSON 文件）
-- 流式 SSE 输出（前端实时渲染）
-- Thinking 工具调用（前端按阶段展示）
-- 固定模型分配（创建对话时分配并固定，schema_version=3）
+核心术语：
+- **Councilor**：参与 Stage1/Stage2 的议员模型
+- **Chairman**：负责 Stage3 综合结论的模型
+- **Thinking**：通过 `emit_thinking` 工具输出的公开推理步骤
 
 ---
 
-## 2. Active Councilors（当前配置）
+## 2. 总体流程（ASCII）
 
-> 数据来源：`backend/config.py`。注意：对话创建后可能使用 `model_assignments` 进行固定分配，实际运行模型可能与默认模型不同。
-
-| ID | Name | Role | Candidate Pool (Priority Order) | Judge Style (Stage2) |
-| :--- | :--- | :--- | :--- | :--- |
-| `immanuel_kant` | 康德 | Councilor | **[OR]** mimo, nemotron(x3), chimera, glm-4.5, devstral, deepseek-v3.2, grok-4.1 <br> **[NIM]** deepseek-v3.1, gpt-oss, terminus, glm4.7 | 冷静、结构化、强调长期稳健性 |
-| `donald_trump` | 特朗普 | Councilor | **[OR]** mimo, nemotron(x3), chimera, glm-4.5, devstral, deepseek-v3.2, grok-4.1 <br> **[NIM]** deepseek-v3.1, gpt-oss, terminus, glm4.7 | 可执行性、风险隔离、资源约束 |
-| `hideo_kojima` | 小岛秀夫 | Councilor | **[OR]** mimo, nemotron(x3), chimera, glm-4.5, devstral, deepseek-v3.2, grok-4.1 <br> **[NIM]** deepseek-v3.1, gpt-oss, terminus, glm4.7 | 学术审慎、可验证性、避免偏误 |
-| `chairman` | 共识主席 | Chairman | **[OR]** mimo, nemotron(x3), chimera, glm-4.5, devstral, deepseek-v3.2, grok-4.1 <br> **[NIM]** deepseek-v3.1, gpt-oss, terminus, glm4.7 | 中立综合、突出共识与分歧 |
-
-**候选模型池**：见 `GLOBAL_MODEL_POOL`，Stage1/2/3 可能从候选池中切换（仅动态模式）。
-
----
-
-## 3. 架构与模块
-
-### 3.1 后端模块（`backend/`）
-
-| 模块 | 作用 | 关键职责 |
-|---|---|---|
-| `main.py` | FastAPI 入口 | API 路由、SSE、对话存储、限流、输入校验、健康刷新调度 |
-| `council.py` | 三阶段编排 | Stage1/2/3 执行、并发控制、重试策略、匿名映射、thinking 注入 |
-| `model_assigner.py` | 固定分配 | 创建对话时分配模型，保存到 `model_assignments` |
-| `model_assigner.py` | 固定分配 | 创建对话时分配模型，保存到 `model_assignments` |
-| `llm_client.py` | 统一客户端 | 路由分发 (NIM/OpenRouter)，前缀处理 |
-| `nim.py` | NIM 客户端 | 特殊处理 `rule-based thinking` (missing tool name), Token Bucket |
-| `openrouter.py` | LLM 客户端 | 流式请求、解析 tool_calls、回调 thinking |
-| `runtime_stats.py` | 运行时统计 | TTFT/Generation/Total EMA（按 model+stage） |
-| `concurrency_tracker.py` | 并发追踪 | per-model queued/inflight 统计，用于 ETA |
-| `storage.py` | 存储层 | JSON 持久化、对话列表、删除、schema 迁移 |
-| `validation.py` / `health.py` | 健康系统 | 状态缓存、冷却与失败阈值、探测逻辑 |
-| `persona_loader.py` | Persona 载入 | 启动预加载 persona 文件 |
-| `config.py` | 全局配置 | 模型池、超时、并发、健康参数、路径配置 |
-
-### 3.2 前端模块（`frontend/src/`）
-
-| 模块 | 作用 | 关键职责 |
-|---|---|---|
-| `App.jsx` | 应用入口 | 会话加载、流式渲染、全局状态注入 |
-| `hooks/useParliamentEngine.js` | 状态机 | Stage1/2/3 SSE 事件分发与状态维护 |
-| `StageContentArea.jsx` | 内容区 | Stage1/Stage3 内容渲染与 Thinking 展示 |
-| `DetailPanel.jsx` | 侧边栏 | Stage2 Thinking 与评审详情；Stage3 主席思考 |
-| `TacticalHUD.jsx` | HUD | 底部状态栏、Councilor 卡片与共识提示 |
-| `Sidebar.jsx` | 会话列表 | 新建 / 选择 / 删除对话 |
-| `api.js` | API 客户端 | REST/SSE 请求封装 |
-| `config/councilors.js` | UI 配置 | Councilor 颜色映射 |
-
----
-
-## 4. Thinking 工具定义
-
-### 4.1 工具 Schema（后端定义）
-
-```json
-{
-  "type": "function",
-  "function": {
-    "name": "emit_thinking",
-    "description": "Emit a thinking step payload for UI display.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "bullet_id": {
-          "type": "string",
-          "description": "Unique identifier of the thinking step."
-        },
-        "title": {
-          "type": "string",
-          "description": "Concise title of the thinking step."
-        },
-        "detail": {
-          "type": "string",
-          "description": "1-3 lines of public-facing detail."
-        },
-        "op": {
-          "type": "string",
-          "enum": ["append", "update"],
-          "description": "append to add, update to modify a prior step."
-        },
-        "target_anon_id": {
-          "type": "string",
-          "description": "(Stage2 only) Indicates which anonymous candidate this thinking step is evaluating (e.g. anon_1, anon_2). REQUIRED for Stage 2."
-        }
-      },
-      "required": ["title"]
-    }
-  }
-}
 ```
-
-> **注意**：对于 DeepSeek V3.1 (NIM)，后端实现了智能容错。即使用户代码或模型偶尔输出空的 tool name，只要参数中包含 `title` 或 `bullet_id`，系统也会将其识别为 `emit_thinking` 调用。
-```
-
-### 4.2 Thinking 要求（行为约束）
-
-Stage1 & Stage3 (Councilor/Chairman) 提示词要求：
-- 使用 `emit_thinking` 记录对问题的分析或共识形成过程（Stage3）
-
-Stage2 (Judge) 提示词要求：
-- **必须多次调用** `emit_thinking`
-- **必须中文**输出 `title` 与 `detail`
-- **必须提供** `target_anon_id`
-
-示例：
-
-```json
-{
-  "title": "评估 anon_1 的逻辑一致性",
-  "detail": "检查关键假设是否可验证",
-  "target_anon_id": "anon_1",
-  "op": "append"
-}
+create_conversation
+   |
+   v
+meta (resolved_councilors + chairman)
+   |
+   v
+Stage1 -> Stage2 -> Stage3
+   |
+   v
+persist assistant message + metadata
 ```
 
 ---
 
-## 5. SSE 事件协议（关键摘要）
+## 3. 模型固定分配（schema_version=3）
 
-### 5.1 事件序列（流式）
+### 3.1 触发时机
+- 创建会话时执行 `assign_models_for_councilors`。
+- 若旧会话无分配但 schema_version >= 3，则在首次发送消息时补分配。
 
-```
-meta → stage1_start → [eta_update]* → [thinking]* → [stage1_item]* → stage1_complete
-     → stage2_start → [eta_update]* → [thinking]* → [stage2_item]* → stage2_complete
-     → stage3_start → [thinking]* → stage3_complete
-     → [title_complete] → complete
-```
+### 3.2 规则
+- 优先使用 **healthy** 模型，其次 **unknown**。
+- 目标：尽量避免重复模型，重复时允许。
+- 若候选池与健康池无交集：抛出 `CandidateIntersectionEmptyError`。
 
-### 5.2 Thinking 事件（Stage2 支持 target_anon_id）
-
-```json
-{
-  "type": "thinking",
-  "stage": "stage2",
-  "councilor_id": "donald_trump",
-  "model": "xiaomi/mimo-v2-flash:free",
-  "bullet_id": "donald_trump-stage2-1",
-  "title": "评估 anon_2 的可行性",
-  "detail": "关注成本与时间的权衡",
-  "op": "append",
-  "target_anon_id": "anon_2",
-  "t": 2.31
-}
-```
-
-**说明**：
-- `councilor_id` 表示评审者（judge）
-- `target_anon_id` 表示被评审对象（匿名 ID）
-- 前端通过 `stage2_start.anon_map` 映射为真实 `councilor_id`
-
-### 5.3 ETA 事件（进度驱动）
-
-```json
-{
-  "type": "eta_update",
-  "stage": "stage2",
-  "councilor_id": "immanuel_kant",
-  "eta_ms_remaining": 5200,
-  "reason": "queue_start"
-}
-```
-
-**说明**：
-- `councilor_id` 在 stage2 仍使用同字段承载 judge_id。
-- `reason`: `queue_start` / `done`。
+### 3.3 输出
+- `model_assignments`：`{ councilor_id: model_id, chairman: model_id }`
+- `assignment_seed`：可复现随机种子
+- `assignment_strategy`：`healthy_first` 或 `healthy_first_then_unknown`
 
 ---
 
-## 6. 关键数据结构
+## 4. Stage1（并行答复）
 
-### 6.1 Stage1Result
+### 4.1 输入
+- 用户问题（字符串）
+- Councilor 列表（对象数组）
 
-```json
-{
-  "councilor_id": "immanuel_kant",
-  "councilor_name": "康德",
-  "model": "xiaomi/mimo-v2-flash:free",
-  "status": "ok",
-  "answer_markdown": "...",
-  "attempted_models": ["xiaomi/mimo-v2-flash:free"],
-  "fallback_used": false,
-  "extracted_thinking_count": 0
-}
-```
+### 4.2 输出
+- `stage1_results[]`（每位议员一条）
 
-### 6.2 Stage2 Review
+### 4.3 Thinking 规则
+- 若 `enable_thinking=true` 且模型支持工具：
+  - 通过 `emit_thinking` 多次输出思考步骤
+  - 若模型错误地把 JSON 放入正文，会被 `extract_thinking_from_content` 抽取
 
-```json
-{
-  "judge_councilor_id": "immanuel_kant",
-  "judge_councilor_name": "康德",
-  "model": "xiaomi/mimo-v2-flash:free",
-  "ranking": ["anon_1", "anon_2"],
-  "scores": {"anon_1": 8, "anon_2": 6},
-  "rationale": "...",
-  "per_candidate_comments": {
-    "anon_1": "...",
-    "anon_2": "..."
-  },
-  "raw_response": "{...}",
-  "fallback_used": false
-}
-```
-
-### 6.3 Stage3 Result
-
-```json
-{
-  "status": "ok",
-  "model": "xiaomi/mimo-v2-flash:free",
-  "response": "...",
-  "attempted_models": ["xiaomi/mimo-v2-flash:free"],
-  "fallback_used": false
-}
-```
-
-### 6.4 Metadata.thinking（流式持久化）
-
-```json
-"thinking": {
-  "stage1": {
-    "immanuel_kant": {
-      "model": "xiaomi/mimo-v2-flash:free",
-      "status": "done",
-      "steps": [
-        {"bullet_id": "immanuel_kant-stage1-1", "title": "...", "detail": null, "t": 0.5}
-      ]
-    }
-  },
-  "stage2": {
-    "donald_trump": {
-      "model": "xiaomi/mimo-v2-flash:free",
-      "status": "thinking",
-      "steps": [
-        {"bullet_id": "donald_trump-stage2-1", "title": "...", "detail": "...", "target_anon_id": "anon_2", "t": 2.3}
-      ]
-    }
-  },
-  "stage3": {
-    "chairman": {
-      "model": "xiaomi/mimo-v2-flash:free",
-      "status": "done",
-      "steps": [
-        {"bullet_id": "chairman-stage3-1", "title": "...", "detail": "...", "t": 12.5}
-      ]
-    }
-  }
-}
-```
-
-**持久化限制**：每阶段每人最多 50 条，总计最多 200 条。
+### 4.4 SSE 事件
+- `stage1_start`
+- `eta_update`（queue_start / done）
+- `thinking`
+- `stage1_answer_delta`
+- `stage1_answer_done`
+- `stage1_item`
+- `stage1_complete`
 
 ---
 
-## 7. 模型分配与回退规则
+## 5. Stage2（匿名互评）
 
-- **动态模式（无固定分配）**：从候选池中选择健康/未知模型，失败后回退到下一个候选。
-- **固定模式（schema_version=3）**：使用 `model_assignments` 中的固定模型，失败不回退。
-- `councilor_ids` 在 fixed 模式下会被忽略。
+### 5.1 匿名规则
+- 对 Stage1 有效答案按顺序分配 `anon_1..n`。
+- 生成映射：`anon_map = {anon_id: councilor_id}`。
 
----
+### 5.2 排名 JSON 约束
+输出必须为 JSON 对象，仅允许字段：
+- `ranking`（必填，数组，包含全部 anon_id，且不重复）
+- `scores`（可选，1-10 整数）
+- `rationale`（可选）
+- `per_candidate_comments`（必填，匿名候选 -> 评语，单条最多 200 字符）
 
-## 8. 前端状态与 UI 行为
+### 5.3 Thinking 规则
+- **必须多次调用 `emit_thinking`**
+- `title`、`detail` 必须中文
+- **必须包含 `target_anon_id`**
 
-关键状态（`useParliamentEngine`）：
-
-- `stage`: idle / stage1 / stage2 / stage3
-- `thinkingByCouncilor`: Stage1 thinking
-- `stage2ThinkingByJudge`: Stage2 thinking（按 judge + target 分组）
-- `stage3AnswerStream`: Stage3 文本增量
-- `evaluationComments`: Stage2 评审 comments（按 target 分组）
-- `etaByCouncilor`: ETA 状态（stage1/2）
-- `stageEtaMs`: 阶段剩余时间（取 max ETA）
-- `stage2Skipped`: Stage2 是否被跳过（用于 HUD 标识）
-
-Stage2 DetailPanel 行为：
-
-- 只要任意 judge 仍为 `thinking`，DetailPanel 保持 Thinking 模式（无混合 Review）
-- 全部 judge 变为 `done` 后，整体切换为 Review 模式（动画衔接）
-
-Stage2 HUD 行为：
-
-- 进度柱为 per-judge 进度（`eta_update` 驱动）
-- Stage2 skipped 时 HUD 进度 100% 并显示 `SKIPPED`
-- Stage2 header 仅显示 `done/total + ETA 文本`（无进度条）
+### 5.4 跳过规则
+- 若有效候选 < 2：Stage2 直接跳过
+- `stage2_start` 会包含 `skipped=true`
+- 仍会产生 `stage2_complete`（`skipped=true`）
 
 ---
 
-## 9. 运行要点与边界条件
+## 6. Stage3（主席综合）
+
+### 6.1 输入
+- Stage1 结果 + Stage2 结果
+
+### 6.2 行为
+- 若 Stage2 被跳过，则在输入中加入“评审阶段已跳过”说明
+- 支持 `emit_thinking` 输出综合思考过程
+
+---
+
+## 7. SSE 协议（关键摘要）
+
+事件顺序（典型）：
+```
+meta
+ -> stage1_start
+ -> eta_update / thinking / stage1_answer_delta / stage1_item / stage1_complete
+ -> stage2_start
+ -> eta_update / thinking / stage2_item / stage2_complete
+ -> stage3_start
+ -> thinking / stage3_answer_delta / stage3_complete
+ -> title_complete
+ -> complete
+```
+
+完整字段定义见：`docs/API_REFERENCE.md`。
+
+---
+
+## 8. ETA 与进度
+
+- `eta_update` 在阶段开始时发送（queue_start）。
+- 当某个议员/评审完成时发送 `reason=done`。
+- ETA 基于 `concurrency_tracker` 与模型并发上限估算。
+
+---
+
+## 9. 持久化与元数据
+
+### 9.1 会话存储
+- `data/conversations/{id}.json`
+- `messages` 为用户与 assistant 消息数组
+
+### 9.2 Thinking 持久化限制
+- 每阶段每人最多 50 条
+- 总计最多 200 条
+- 仅流式 `/message/stream` 写入 `metadata.thinking`
+
+---
+
+## 10. 前端状态机（useParliamentEngine）
+
+关键状态：
+- `stage`：`idle` / `stage1` / `stage2` / `stage3`
+- `thinkingByCouncilor`：Stage1/3 thinking
+- `stage2ThinkingByJudge`：Stage2 thinking（按 judge + target）
+- `evaluationComments`：Stage2 评论（按 target）
+- `etaByCouncilor` / `stageEtaMs`：ETA
+- `aggregateRankings`：综合排名
+
+UI 行为：
+- Stage2：只要任意 judge 仍为 `thinking`，DetailPanel 显示 Thinking 视图
+- Stage2 全部完成后切换到 Review 视图
+
+---
+
+## 11. 运行约束
 
 - `MAX_MESSAGE_LENGTH = 1000`
-- `/message` 与 `/message/stream` 限流：`5/min`
-- Stage2 跳过条件：有效候选 < 2
-- Stage2 自评 **允许**（评审者可以对自己匿名答案评分）
-- 非流式请求不会记录 thinking 到 metadata
+- `/message` 与 `/message/stream` 限流 `5/min`
+- `schema_version >= 3` 时忽略请求中的 `councilor_ids`
 
 ---
 
-*Last updated: 2026-01-18*
+Last updated: 2026-01-23
+

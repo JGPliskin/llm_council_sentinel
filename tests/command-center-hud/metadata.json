@@ -1,0 +1,5 @@
+{
+  "name": "Command Center HUD",
+  "description": "Next-generation mission control interface for AI Council selection and directive input.",
+  "requestFramePermissions": []
+}

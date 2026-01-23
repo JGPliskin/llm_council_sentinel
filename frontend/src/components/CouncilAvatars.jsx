@@ -330,6 +330,7 @@ export const CouncilAvatars = ({
   councilModels,
   councilors,
   chairmanModel,
+  chairmanItem = null,
   activeModel,
   onSelectModel,
   modelStatuses = {},
@@ -436,6 +437,7 @@ export const CouncilAvatars = ({
               return (
                 <ModelAvatar
                   modelId={chairmanModel}
+                  item={chairmanItem}
                   isActive={activeModel === chairmanModel}
                   onClick={() => onChairmanClick?.(chairmanModel)}
                   status={modelStatuses[chairmanModel]}

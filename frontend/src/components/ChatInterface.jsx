@@ -707,6 +707,7 @@ export default function ChatInterface({
               <CouncilAvatars
                 councilors={councilors} // Pass full councilor objects
                 chairmanModel={effectiveChairmanModel}
+                chairmanItem={chairman}
                 activeModel={null} // No "active" for viewing
                 modelStatuses={{}}
 
@@ -825,6 +826,7 @@ export default function ChatInterface({
                             <CouncilAvatars
                               councilors={messageCouncilors}
                               chairmanModel={messageChairmanModel}
+                              chairmanItem={chairman}
                               activeModel={activeModel}
                               onSelectModel={handleSelectModel}
                               onChairmanClick={handleChairmanClick}

@@ -22,6 +22,7 @@ function AppContent() {
   // === Global State ===
   const [conversations, setConversations] = useState([]);
   const [allCouncilors, setAllCouncilors] = useState([]);
+  const [chairmanInfo, setChairmanInfo] = useState(null);
   const [selectedAgentIds, setSelectedAgentIds] = useState(['immanuel_kant', 'donald_trump', 'hideo_kojima']);
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 768);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
@@ -115,10 +116,13 @@ function AppContent() {
       // Safety check
       if (response && response.councilors && Array.isArray(response.councilors)) {
         setAllCouncilors(response.councilors);
+        setChairmanInfo(response.chairman || null);
       } else if (Array.isArray(response)) {
         setAllCouncilors(response);
+        setChairmanInfo(null);
       } else {
         setAllCouncilors([]);
+        setChairmanInfo(null);
         console.warn("Unexpected councilors format", response);
       }
     } catch (error) {
@@ -234,6 +238,7 @@ function AppContent() {
               <WelcomeScreen
                 onStart={handleStartSession}
                 councilors={allCouncilors}
+                chairman={chairmanInfo}
                 selectedIds={selectedAgentIds}
                 onToggleId={handleToggleAgent}
               />
@@ -257,6 +262,7 @@ function AppContent() {
                 onToggleThinking={engine.toggleThinkingExpanded}
                 stage1AnswerStream={engine.stage1AnswerStream}
                 onBackgroundClick={handleContentClick}
+                chairmanInfo={chairmanInfo}
               />
             </div>
           )}

@@ -212,7 +212,7 @@ COUNCILORS = [
             "openrouter:deepseek/deepseek-v3.2",
             "openrouter:x-ai/grok-4.1-fast",
         ],
-        "avatar": "🧠",
+        "avatar": "/avatars/immanuel_kant.png",
         "persona_path": "backend/personas/immanuel_kant.md",
         "judge_persona_path": "backend/personas/immanuel_kant_judge.md",
         "judge_system_prompt": (
@@ -244,7 +244,7 @@ COUNCILORS = [
             "openrouter:deepseek/deepseek-v3.2",
             "openrouter:x-ai/grok-4.1-fast",
         ],
-        "avatar": "🧱",
+        "avatar": "/avatars/donald_trump.png",
         "persona_path": "backend/personas/donald_trump.md",
         "judge_persona_path": "backend/personas/donald_trump_judge.md",
         "judge_system_prompt": (
@@ -276,7 +276,7 @@ COUNCILORS = [
             "openrouter:deepseek/deepseek-v3.2",
             "openrouter:x-ai/grok-4.1-fast",
         ],
-        "avatar": "🎮",
+        "avatar": "/avatars/hideo_kojima.png",
         "persona_path": "backend/personas/hideo_kojima.md",
         "judge_persona_path": "backend/personas/hideo_kojima_judge.md",
         "judge_system_prompt": (
@@ -310,7 +310,7 @@ CHAIRMAN = {
         "openrouter:deepseek/deepseek-v3.2",
         "openrouter:x-ai/grok-4.1-fast",
     ],
-    "avatar": "🪶",
+    "avatar": "/avatars/chairman.png",
     "persona_path": "backend/personas/chairman.md",
     "judge_system_prompt": (
         "以平实、公允的口吻综合各方论证，突出共识与冲突点，优先给出清晰、可落地的建议。"

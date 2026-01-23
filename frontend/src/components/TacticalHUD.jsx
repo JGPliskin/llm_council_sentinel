@@ -3,6 +3,16 @@ import { Scale, PanelLeftClose, PanelLeftOpen, PanelRightOpen, RotateCcw } from 
 import { getCouncilorUIConfig } from '@/config/councilors';
 import './TacticalHUD.css';
 
+const isAvatarUrl = (avatar) =>
+    typeof avatar === "string" && (avatar.startsWith("http") || avatar.startsWith("/"));
+
+const renderAvatar = (avatar, alt) => {
+    if (isAvatarUrl(avatar)) {
+        return <img src={avatar} alt={alt || "Avatar"} className="h-8 w-8 rounded-full object-cover" />;
+    }
+    return <span aria-hidden="true">{avatar || "?"}</span>;
+};
+
 function TacticalHUD({
     stage,
     agentProgress,
@@ -80,6 +90,7 @@ function TacticalHUD({
         }
 
         const uiConfig = getCouncilorUIConfig(agent.councilor_id);
+        const avatarUrl = isAvatarUrl(agent.avatar) ? agent.avatar : null;
 
         // IDLE Stage: Ready State
         if (agent.isIdle) {
@@ -89,7 +100,10 @@ function TacticalHUD({
                     className="agent-slice agent-slot--ready"
                     style={{ borderColor: `var(--accent-${uiConfig.color})` }}
                 >
-                    <div className="agent-avatar">{agent.avatar}</div>
+                    {avatarUrl && (
+                        <div className="agent-avatar-bg" style={{ backgroundImage: `url(${avatarUrl})` }} />
+                    )}
+                    <div className="agent-avatar">{renderAvatar(agent.avatar, agent.name)}</div>
                     <div className="agent-name">{agent.name}</div>
                     <div className="agent-status" style={{ color: `var(--accent-${uiConfig.color})` }}>READY</div>
                 </div>
@@ -115,6 +129,9 @@ function TacticalHUD({
                     backgroundColor: activeTab === agent.councilor_id ? 'rgba(6, 182, 212, 0.08)' : undefined
                 }}
             >
+                {avatarUrl && (
+                    <div className="agent-avatar-bg" style={{ backgroundImage: `url(${avatarUrl})` }} />
+                )}
                 {/* Background Pattern & Progress Fill (Stage 1 & Stage 2) */}
                 {(stage === 'stage1' || stage === 'stage2') && progress > 0 && (
                     <div

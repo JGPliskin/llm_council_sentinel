@@ -1,66 +1,85 @@
-# API_REFERENCE.md - LLM Council Sentinel API 接口文档
+﻿# API_REFERENCE.md - LLM Council Sentinel API 参考
 
-本文档提供 LLM Council Sentinel 后端 API 的完整参考，包括 REST 接口、SSE 流式事件、请求/响应格式及错误码。
+本文档定义后端 API 与 SSE 协议，基于当前实现（`backend/main.py`）。
 
 ---
 
-## 1. 基础信息
+## 1. 基本信息
 
 ### 1.1 Base URL
 
 | 场景 | Base URL | 说明 |
-|---|---|---|
-| 本地开发（后端） | `http://localhost:8010` | `uvicorn main:app --port 8010` 默认端口 |
-| Docker + Nginx | `http://localhost/api` | Nginx 反向代理 `/api/*` → `backend:8008` |
+| --- | --- | --- |
+| 本地开发 | `http://localhost:8010` | `uv run python -m backend.main` |
+| Docker + Nginx | `http://localhost/api` | Nginx 反向代理 `/api/*` -> `backend:8008` |
 
-> 前端默认 `API_BASE` 固定为 `http://localhost:8010`（见 `frontend/src/api.js`）。
-> 若使用 Docker/Nginx，需要手动修改 `API_BASE` 或提供与 8010 兼容的代理。
+### 1.2 请求协议
+- REST：`Content-Type: application/json`
+- SSE：`Content-Type: text/event-stream`
 
-### 1.2 协议与认证
+### 1.3 认证
+- 管理接口需要 `X-Admin-Token`。
+- 当前后端为调试模式：`verify_admin` 直接放行（见 `backend/main.py`）。
 
-- 协议：HTTP/1.1
-- 内容类型：`application/json`
-- 流式响应：`text/event-stream` (SSE)
-- 认证：`X-Admin-Token`（仅删除操作）
+### 1.4 速率限制
 
-### 1.3 限流
-
-| 接口 | 限流 |
-|---|---|
-| `/api/conversations/{id}/message` | 5/min (按 IP) |
-| `/api/conversations/{id}/message/stream` | 5/min (按 IP) |
+| 接口 | 限流 | 说明 |
+| --- | --- | --- |
+| `/api/conversations/{id}/message` | 5/min | 按 IP |
+| `/api/conversations/{id}/message/stream` | 5/min | 按 IP |
 
 ---
 
-## 2. API 概览
+## 2. 通用错误返回格式
+
+```json
+{
+  "error": {
+    "code": "RATE_LIMIT_EXCEEDED",
+    "message": "请求过于频繁，请稍后再试",
+    "message_en": "Too many requests, please try again later",
+    "details": {"retry_after": 60}
+  }
+}
+```
+
+常见 `code`：
+- `CONTENT_TOO_LONG`
+- `VALIDATION_ERROR`
+- `RATE_LIMIT_EXCEEDED`
+- `DELETE_FAILED`
+
+---
+
+## 3. 接口概览
 
 | 方法 | 路径 | 描述 | 认证 |
-|---|---|---|---|
-| `GET` | `/` | 健康检查 | 否 |
+| --- | --- | --- | --- |
+| `GET` | `/` | 服务状态 | 否 |
 | `GET` | `/health` | Docker 健康检查 | 否 |
-| `GET` | `/api/councilors` | 获取 Councilor 列表 | 否 |
+| `GET` | `/api/councilors` | 获取议员与主席配置 | 否 |
 | `GET` | `/api/models` | `/api/councilors` 别名 | 否 |
-| `GET` | `/api/conversations` | 获取对话列表 | 否 |
-| `POST` | `/api/conversations` | 创建新对话 | 否 |
-| `GET` | `/api/conversations/{id}` | 获取对话详情 | 否 |
-| `DELETE` | `/api/conversations/{id}` | 删除对话 | 是 |
+| `GET` | `/api/conversations` | 会话列表 | 否 |
+| `POST` | `/api/conversations` | 创建会话 | 否 |
+| `GET` | `/api/conversations/{id}` | 获取会话详情 | 否 |
+| `DELETE` | `/api/conversations/{id}` | 删除会话 | 是 |
 | `POST` | `/api/conversations/bulk-delete` | 批量删除 | 是 |
-| `POST` | `/api/conversations/{id}/message` | 发送消息（同步） | 否 |
-| `POST` | `/api/conversations/{id}/message/stream` | 发送消息（流式） | 否 |
+| `POST` | `/api/conversations/{id}/message` | 同步问答 | 否 |
+| `POST` | `/api/conversations/{id}/message/stream` | 流式 SSE | 否 |
 
 ---
 
-## 3. Councilor 接口
+## 4. Councilor 接口
 
-### 3.1 GET `/api/councilors`
+### 4.1 GET `/api/councilors`
 
-**查询参数**:
+**查询参数**
 
-| 参数 | 类型 | 默认 | 描述 |
-|---|---|---|---|
+| 参数 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
 | `refresh` | boolean | `false` | 是否强制刷新健康状态 |
 
-**响应示例**:
+**响应示例**
 
 ```json
 {
@@ -69,8 +88,8 @@
     {
       "id": "immanuel_kant",
       "name": "康德",
-      "model": "xiaomi/mimo-v2-flash:free",
-      "avatar": "??",
+      "model": "openrouter:xiaomi/mimo-v2-flash:free",
+      "avatar": "/avatars/immanuel_kant.png",
       "active": true,
       "healthy": true,
       "health_error": null,
@@ -80,8 +99,8 @@
   "chairman": {
     "id": "chairman",
     "name": "共识主席",
-    "model": "xiaomi/mimo-v2-flash:free",
-    "avatar": "??",
+    "model": "openrouter:xiaomi/mimo-v2-flash:free",
+    "avatar": "/avatars/chairman.png",
     "active": true,
     "healthy": true
   },
@@ -92,33 +111,33 @@
 }
 ```
 
-**字段说明**:
+**字段说明**
 
-| 字段 | 类型 | 描述 |
-|---|---|---|
-| `councilors[].id` | string | Councilor ID |
-| `councilors[].model` | string | 默认模型 ID（非固定分配结果） |
-| `healthy` | boolean | 当前健康状态 |
-| `health_error` | string | 最近一次错误（如有） |
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `councilors[].id` | string | 议员 ID |
+| `councilors[].model` | string | 当前默认模型（不一定是固定分配） |
+| `healthy` | boolean | 健康状态 |
+| `health_error` | string | 最近一次健康异常说明 |
 
 ---
 
-## 4. 对话接口
+## 5. 会话接口
 
-### 4.1 POST `/api/conversations`
+### 5.1 POST `/api/conversations`
+创建新会话并执行模型固定分配（schema_version=3）。
 
-**描述**：创建新对话并进行固定模型分配。
-
-**请求体**:
-
+**请求体**
 ```json
-{
-  "councilor_ids": ["immanuel_kant", "donald_trump"]
-}
+{ "councilor_ids": ["immanuel_kant", "donald_trump"] }
 ```
 
-**响应示例**:
+**行为规则**
+- `councilor_ids` 可为空；为空时使用当前健康的默认议员。
+- 若包含模型 ID，会通过 `normalize_councilor_ids` 映射为议员 ID。
+- 不合法 ID 会被忽略，若全部无效则回退为默认议员。
 
+**响应示例**
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
@@ -129,68 +148,43 @@
   "active_chairman": "chairman",
   "schema_version": 3,
   "model_assignments": {
-    "immanuel_kant": "nvidia/nemotron-3-nano-30b-a3b:free",
-    "donald_trump": "xiaomi/mimo-v2-flash:free",
-    "chairman": "xiaomi/mimo-v2-flash:free"
+    "immanuel_kant": "openrouter:nvidia/nemotron-3-nano-30b-a3b:free",
+    "donald_trump": "openrouter:xiaomi/mimo-v2-flash:free",
+    "chairman": "openrouter:xiaomi/mimo-v2-flash:free"
   },
   "assignment_seed": "2026-01-03T03:01:00Z-xxxx",
   "assignment_strategy": "healthy_first"
 }
 ```
 
-### 3.2.1 ID规范 update
-- OpenRouter 模型推荐使用 `openrouter:` 前缀（如 `openrouter:xiaomi/mimo-v2-flash:free`）
-- NIM 模型推荐使用 `nim:` 前缀（如 `nim:deepseek-ai/deepseek-v3.1`）
-- **兼容性**：若不带前缀，系统尝试根据 `provider` 配置或字符串特征自动推断，但推荐显式带前缀。
+### 5.2 GET `/api/conversations/{id}`
+返回会话完整 JSON（见 `docs/DATA_SCHEMA.md`）。
 
----
+### 5.3 GET `/api/conversations`
+返回会话列表（仅元数据）。
 
-### 4.2 GET `/api/conversations/{id}`
+### 5.4 DELETE `/api/conversations/{id}`
+删除单个会话，返回 `204`。
 
-**描述**：获取单个对话详情。
-
-**错误响应**：
-- `404` 对话不存在
-
----
-
-### 4.3 DELETE `/api/conversations/{id}`
-
-**描述**：删除单个对话。
-
-**认证**：`X-Admin-Token`
-
----
-
-### 4.4 POST `/api/conversations/bulk-delete`
-
-**描述**：批量删除对话。
-
-**请求体**:
-
+### 5.5 POST `/api/conversations/bulk-delete`
+**请求体**
 ```json
 { "ids": ["uuid1", "uuid2"] }
 ```
 
-**响应示例**:
-
+**响应体**
 ```json
-{
-  "deletedIds": ["uuid1"],
-  "failed": [{"id": "uuid2", "reason": "not_found"}]
-}
+{ "deletedIds": ["uuid1"], "failed": [{"id": "uuid2", "reason": "not_found"}] }
 ```
 
 ---
 
-## 5. 消息接口
+## 6. 消息接口
 
-### 5.1 POST `/api/conversations/{id}/message`
+### 6.1 POST `/api/conversations/{id}/message`
+同步执行三阶段，并一次性返回结果。
 
-**描述**：同步执行三阶段并返回完整结果。
-
-**请求体**:
-
+**请求体**
 ```json
 {
   "content": "...",
@@ -199,57 +193,80 @@
 }
 ```
 
-**规则**：
-- `councilor_ids` 在 `schema_version >= 3` 时会被忽略
-- 同步接口不返回 thinking 流式事件，且 **不会持久化** thinking
+**注意**
+- 当 `schema_version >= 3` 且已有 `model_assignments` 时，`councilor_ids` 会被忽略。
+- 同步接口不会写入 `metadata.thinking`。
+
+**响应体**
+```json
+{
+  "stage1": [...],
+  "stage2": {...},
+  "stage3": {...},
+  "metadata": {
+    "anon_to_councilor": {...},
+    "aggregate_rankings": [...]
+  }
+}
+```
+
+### 6.2 POST `/api/conversations/{id}/message/stream`
+流式 SSE，逐步返回阶段事件。
 
 ---
 
-### 5.2 POST `/api/conversations/{id}/message/stream`
+## 7. SSE 事件协议
 
-**描述**：流式 SSE 返回三阶段过程。
-
-**请求体**：同 5.1
-
----
-
-## 6. SSE 事件协议
-
-### 6.1 事件流顺序
-
+### 7.1 事件顺序（典型）
 ```
-meta → stage1_start → [eta_update]* → [thinking]* → [stage1_item]* → stage1_complete
-     → stage2_start → [eta_update]* → [thinking]* → [stage2_item]* → stage2_complete
-     → stage3_start → [thinking]* → stage3_complete
-     → [title_complete] → complete
+meta
+ -> stage1_start
+ -> eta_update / thinking / stage1_answer_delta / stage1_item / stage1_complete
+ -> stage2_start
+ -> eta_update / thinking / stage2_item / stage2_complete
+ -> stage3_start
+ -> thinking / stage3_answer_delta / stage3_complete
+ -> title_complete
+ -> complete
 ```
 
-### 6.2 事件定义
+### 7.2 事件定义
 
-#### 6.2.1 `meta`
-
+#### 7.2.1 `meta`
 ```json
 {
   "type": "meta",
   "resolved_councilor_ids": ["immanuel_kant", "donald_trump"],
   "resolved_councilors": [
-    {"id": "immanuel_kant", "name": "康德", "avatar": "??", "model": "xiaomi/mimo-v2-flash:free"}
+    {"id": "immanuel_kant", "name": "康德", "avatar": "/avatars/immanuel_kant.png", "model": "openrouter:..."}
   ],
-  "chairman": {"id": "chairman", "name": "共识主席", "avatar": "??", "model": "xiaomi/mimo-v2-flash:free"},
+  "chairman": {"id": "chairman", "name": "共识主席", "avatar": "/avatars/chairman.png", "model": "openrouter:..."},
   "ignored_ids": [],
   "spec_version": "stage2_v1.2",
   "model_assignments": {"immanuel_kant": "...", "chairman": "..."}
 }
 ```
 
-#### 6.2.2 `thinking`
+#### 7.2.2 `eta_update`
+```json
+{
+  "type": "eta_update",
+  "stage": "stage1",
+  "councilor_id": "immanuel_kant",
+  "eta_ms_remaining": 5200,
+  "model": "openrouter:...",
+  "reason": "queue_start"
+}
+```
+- `reason`: `queue_start` | `done`
 
+#### 7.2.3 `thinking`
 ```json
 {
   "type": "thinking",
   "stage": "stage2",
   "councilor_id": "donald_trump",
-  "model": "xiaomi/mimo-v2-flash:free",
+  "model": "openrouter:...",
   "bullet_id": "donald_trump-stage2-1",
   "title": "评估 anon_2 的可行性",
   "detail": "关注成本与时间权衡",
@@ -258,84 +275,47 @@ meta → stage1_start → [eta_update]* → [thinking]* → [stage1_item]* → s
   "t": 2.31
 }
 ```
+- Stage2 必须包含 `target_anon_id`。
 
-**说明**：
-- `stage` 可为 `stage1`, `stage2`, `stage3`。
-- `target_anon_id` 仅 Stage2 有意义；若缺失，前端可视为 global 并忽略或标注。
-- `title` 和 `detail` 字段用于流式结构化思考展示。Stage 3 时，这些字段来自 Chairman 的 `emit_thinking` tool calls。
-
-#### 6.2.3 `stage1_answer_delta`
-
+#### 7.2.4 `stage1_answer_delta`
 ```json
 { "type": "stage1_answer_delta", "councilor_id": "immanuel_kant", "delta": "..." }
 ```
 
-#### 6.2.4 `stage1_answer_done`
-
+#### 7.2.5 `stage1_answer_done`
 ```json
 { "type": "stage1_answer_done", "councilor_id": "immanuel_kant" }
 ```
 
-#### 6.2.5 `eta_update`
-
+#### 7.2.6 `stage1_item`
 ```json
-{
-  "type": "eta_update",
-  "stage": "stage1",
-  "councilor_id": "immanuel_kant",
-  "eta_ms_remaining": 5200,
-  "model": "xiaomi/mimo-v2-flash:free",
-  "reason": "queue_start"
-}
+{ "type": "stage1_item", "data": { ...Stage1Result... } }
 ```
 
-**说明**：
-- `councilor_id` 在 stage2 仍使用同字段承载 judge_id。
-- `reason`: `queue_start` / `done`。
-- Stage2 被跳过时，后端会对每个 judge 推送一次 `eta_update`（`reason=done`）以结束 HUD 进度。
-
-#### 6.2.6 `stage2_start`
-
+#### 7.2.7 `stage1_complete`
 ```json
-{ "type": "stage2_start", "anon_map": {"anon_1": "immanuel_kant"}, "skipped": false }
+{ "type": "stage1_complete", "data": [ ...Stage1Result... ] }
 ```
 
+#### 7.2.8 `stage2_start`
+```json
+{ "type": "stage2_start", "anon_map": {"anon_1": "immanuel_kant"} }
+```
 若跳过：
-
 ```json
 { "type": "stage2_start", "skipped": true, "skipped_reason": "insufficient_candidates" }
 ```
 
-#### 6.2.7 `stage2_item`
-
+#### 7.2.9 `stage2_item`
 ```json
-{
-  "type": "stage2_item",
-  "data": {
-    "judge_councilor_id": "immanuel_kant",
-    "judge_councilor_name": "康德",
-    "model": "xiaomi/mimo-v2-flash:free",
-    "ranking": ["anon_1", "anon_2"],
-    "scores": {"anon_1": 8, "anon_2": 6},
-    "rationale": "...",
-    "per_candidate_comments": {"anon_1": "...", "anon_2": "..."},
-    "raw_response": "{...}",
-    "fallback_used": false
-  }
-}
+{ "type": "stage2_item", "data": { ...Review... } }
 ```
 
-#### 6.2.8 `stage2_complete`
-
+#### 7.2.10 `stage2_complete`
 ```json
 {
   "type": "stage2_complete",
-  "data": {
-    "skipped": false,
-    "reviews": [...],
-    "anon_map": {"anon_1": "immanuel_kant"},
-    "judge_failures": []
-  },
+  "data": { ...Stage2Result... },
   "metadata": {
     "anon_to_councilor": {"anon_1": "immanuel_kant"},
     "aggregate_rankings": [{"councilor_id": "immanuel_kant", "average_rank": 1.0, "rankings_count": 1}]
@@ -343,41 +323,47 @@ meta → stage1_start → [eta_update]* → [thinking]* → [stage1_item]* → s
 }
 ```
 
-#### 6.2.9 `stage3_answer_delta`
+#### 7.2.11 `stage3_start`
+```json
+{ "type": "stage3_start" }
+```
 
+#### 7.2.12 `stage3_answer_delta`
 ```json
 { "type": "stage3_answer_delta", "councilor_id": "chairman", "delta": "..." }
 ```
 
-#### 6.2.10 `complete`
+#### 7.2.13 `stage3_complete`
+```json
+{ "type": "stage3_complete", "data": { ...Stage3Result... } }
+```
 
+#### 7.2.14 `title_complete`
+```json
+{ "type": "title_complete", "data": {"title": "..."} }
+```
+仅首条消息时触发。
+
+#### 7.2.15 `complete`
 ```json
 { "type": "complete" }
 ```
 
 ---
 
-## 7. 错误码
+## 8. HTTP 状态码
 
-### 7.1 HTTP 状态码
-
-| 状态码 | 描述 |
-|---|---|
-| 400 | 参数错误 / 校验失败 |
-| 401 | 未授权（删除接口） |
+| 状态码 | 含义 |
+| --- | --- |
+| 200 | 成功 |
+| 204 | 删除成功（无内容） |
+| 400 | 参数错误/校验失败 |
+| 401 | 未授权（管理接口） |
 | 404 | 资源不存在 |
-| 429 | 限流 |
-| 500 | 服务端异常 |
-
-### 7.2 业务错误码
-
-| 错误码 | 描述 |
-|---|---|
-| `CONTENT_TOO_LONG` | 消息超过 1000 字符 |
-| `VALIDATION_ERROR` | 参数校验失败 |
-| `RATE_LIMIT_EXCEEDED` | 限流 |
-| `DELETE_FAILED` | 删除失败 |
+| 429 | 触发限流 |
+| 500 | 服务器内部错误 |
 
 ---
 
-*Last updated: 2026-01-18*
+Last updated: 2026-01-23
+

@@ -86,6 +86,17 @@
     @apply text-2xl mb-1 select-none relative z-10;
 }
 
+.agent-avatar-bg {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center;
+    opacity: 0.2;
+    filter: grayscale(100%);
+    z-index: 0;
+    pointer-events: none;
+}
+
 /* Name */
 .agent-name {
     @apply text-xs font-bold tracking-wider relative z-10;

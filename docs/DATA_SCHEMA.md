@@ -1,21 +1,21 @@
-# DATA_SCHEMA.md - LLM Council Sentinel 数据模型文档
+﻿# DATA_SCHEMA.md - 数据结构说明
 
-本文档定义 LLM Council Sentinel 的核心数据结构、字段说明及数据关系，用于存储层与前后端数据交换。
+本文档定义系统持久化与前后端交互的核心数据结构。所有结构以当前代码实现为准。
 
 ---
 
-## 1. 数据存储概览
+## 1. 存储路径
 
-### 1.1 存储路径
+| 路径 | 内容 |
+| --- | --- |
+| `data/conversations/` | 会话 JSON 文件（每个会话 1 个文件） |
+| `backend/personas/` | Persona Prompt 文本文件 |
 
-| 路径 | 描述 |
-|---|---|
-| `data/conversations/` | 对话 JSON 文件 |
-| `backend/personas/` | Persona 文本文件 |
+---
 
-### 1.2 Conversation 文件结构
+## 2. Conversation 文件结构
 
-**文件路径**：`data/conversations/{conversation_id}.json`
+文件路径：`data/conversations/{conversation_id}.json`
 
 ```json
 {
@@ -24,31 +24,37 @@
   "title": "New Conversation",
   "messages": [ ... ],
   "active_models": null,
-  "active_councilor_ids": ["immanuel_kant", "donald_trump", "hideo_kojima"],
+  "active_councilor_ids": ["immanuel_kant", "donald_trump"],
   "active_chairman": "chairman",
+  "schema_version": 3,
   "model_assignments": {
-    "immanuel_kant": "openrouter:nvidia/nemotron-3-nano-30b-a3b:free",
+    "immanuel_kant": "openrouter:xiaomi/mimo-v2-flash:free",
     "donald_trump": "nim:deepseek-ai/deepseek-v3.1",
     "chairman": "openrouter:xiaomi/mimo-v2-flash:free"
   },
   "assignment_seed": "2026-01-03T03:01:00Z-xxxx",
-  "assignment_strategy": "healthy_first",
-  "schema_version": 3
+  "assignment_strategy": "healthy_first"
 }
 ```
 
+### 2.1 schema_version
+
+| 值 | 含义 |
+| --- | --- |
+| `1` | 旧结构，仅 `active_models` |
+| `2` | 引入 `active_councilor_ids` |
+| `3` | 固定模型分配（`model_assignments`） |
+
 ---
 
-## 2. Message 结构
+## 3. Message 结构
 
-### 2.1 User Message
-
+### 3.1 User Message
 ```json
 { "role": "user", "content": "..." }
 ```
 
-### 2.2 Assistant Message
-
+### 3.2 Assistant Message
 ```json
 {
   "role": "assistant",
@@ -59,44 +65,43 @@
 }
 ```
 
-**注意**：
-- `stage2` 为对象结构（非数组）
-- 非流式请求不会写入 `metadata.thinking`
+说明：
+- `stage2` 为对象（非数组）。
+- `metadata.thinking` 仅在流式 `/message/stream` 时写入。
 
 ---
 
-## 3. Stage1Result
+## 4. Stage1Result
 
 ```json
 {
   "councilor_id": "immanuel_kant",
   "councilor_name": "康德",
-  "model": "xiaomi/mimo-v2-flash:free",
+  "model": "openrouter:xiaomi/mimo-v2-flash:free",
   "status": "ok",
   "answer_markdown": "...",
-  "attempted_models": ["xiaomi/mimo-v2-flash:free"],
+  "attempted_models": ["openrouter:xiaomi/mimo-v2-flash:free"],
   "fallback_used": false,
   "extracted_thinking_count": 0
 }
 ```
 
 失败示例：
-
 ```json
 {
   "councilor_id": "immanuel_kant",
   "councilor_name": "康德",
-  "model": "xiaomi/mimo-v2-flash:free",
+  "model": "openrouter:xiaomi/mimo-v2-flash:free",
   "status": "failed",
   "answer_markdown": "",
-  "attempted_models": ["xiaomi/mimo-v2-flash:free"],
+  "attempted_models": ["openrouter:xiaomi/mimo-v2-flash:free"],
   "error": {"code": "EXECUTION_ERROR", "message": "...", "retryable": true}
 }
 ```
 
 ---
 
-## 4. Stage2Result
+## 5. Stage2Result
 
 ```json
 {
@@ -108,13 +113,17 @@
 }
 ```
 
-### 4.1 Review 结构
+`skipped_reason` 取值：
+- `insufficient_candidates`
+- `all_judges_failed`
+
+### 5.1 Review
 
 ```json
 {
   "judge_councilor_id": "immanuel_kant",
   "judge_councilor_name": "康德",
-  "model": "xiaomi/mimo-v2-flash:free",
+  "model": "openrouter:xiaomi/mimo-v2-flash:free",
   "ranking": ["anon_1", "anon_2"],
   "scores": {"anon_1": 8, "anon_2": 6},
   "rationale": "...",
@@ -127,41 +136,41 @@
 }
 ```
 
-### 4.2 Judge Failure 结构
+约束：
+- `ranking` 必须包含全部 `anon_id`，且不重复。
+- `scores` 可选，区间 1-10。
+- `per_candidate_comments` 必填，单条最多 200 字符。
+
+### 5.2 Judge Failure
 
 ```json
 {
   "judge_councilor_id": "immanuel_kant",
-  "model": "xiaomi/mimo-v2-flash:free",
+  "model": "openrouter:xiaomi/mimo-v2-flash:free",
   "error": {"code": "JUDGE_EXECUTION_ERROR", "message": "...", "retryable": false}
 }
 ```
 
-**`skipped_reason` 值**：
-- `insufficient_candidates`
-- `all_judges_failed`
-
 ---
 
-## 5. Stage3Result
+## 6. Stage3Result
 
 ```json
 {
   "status": "ok",
-  "model": "xiaomi/mimo-v2-flash:free",
+  "model": "openrouter:xiaomi/mimo-v2-flash:free",
   "response": "...",
-  "attempted_models": ["xiaomi/mimo-v2-flash:free"],
+  "attempted_models": ["openrouter:xiaomi/mimo-v2-flash:free"],
   "fallback_used": false,
   "fallback_reason": null
 }
 ```
 
 失败示例：
-
 ```json
 {
   "status": "failed",
-  "model": "xiaomi/mimo-v2-flash:free",
+  "model": "openrouter:xiaomi/mimo-v2-flash:free",
   "response": "最终总结生成失败: ...",
   "error": {"code": "CHAIRMAN_FAILED", "message": "..."},
   "attempted_models": ["..."]
@@ -170,23 +179,32 @@
 
 ---
 
-## 6. Metadata
+## 7. Metadata
 
 ```json
 {
   "anon_to_councilor": {"anon_1": "immanuel_kant"},
-  "aggregate_rankings": [{"councilor_id": "immanuel_kant", "average_rank": 1.0, "rankings_count": 1}],
+  "aggregate_rankings": [
+    {"councilor_id": "immanuel_kant", "average_rank": 1.0, "rankings_count": 1}
+  ],
   "spec_version": "stage2_v1.2",
   "thinking": {
-    "stage1": {"immanuel_kant": {"model": "...", "status": "done", "steps": [ ... ]}},
-    "stage2": {"donald_trump": {"model": "...", "status": "thinking", "steps": [ ... ]}},
-    "stage3": {"chairman": {"model": "...", "status": "done", "steps": [ ... ]}}
-  }
+    "stage1": {
+      "immanuel_kant": {
+        "model": "openrouter:...",
+        "status": "done",
+        "steps": [
+          {"bullet_id": "immanuel_kant-stage1-1", "title": "...", "detail": null, "t": 0.5}
+        ]
+      }
+    },
+    "stage2": { ... },
+    "stage3": { ... }
   }
 }
 ```
 
-### 6.1 Thinking Step 结构
+### 7.1 Thinking Step
 
 ```json
 {
@@ -198,20 +216,23 @@
 }
 ```
 
-**注意**：`target_anon_id` 仅 Stage2 有意义，且仅当模型按约定返回时才存在。
+约束：
+- Stage2 必须包含 `target_anon_id`。
+- `thinking` 持久化限制：每阶段每人最多 50 条，总计最多 200 条。
 
 ---
 
-## 7. ID 约束
+## 8. ID 规则
 
-| ID 类型 | 约束 | 示例 |
-|---|---|---|
-| `conversation_id` | UUID v4 | `550e8400-e29b-41d4-a716-446655440000` |
+| ID 类型 | 规则 | 示例 |
+| --- | --- | --- |
+| `conversation_id` | `[a-zA-Z0-9_-]{1,64}` | `550e8400-e29b-41d4-a716-446655440000` |
 | `councilor_id` | 小写字母+下划线 | `immanuel_kant` |
-| `model` | 推荐带前缀 `provider:` | `nim:deepseek-ai/deepseek-v3.1` / `openrouter:xiaomi/mimo-v2-flash:free` |
+| `model` | 推荐带前缀 `provider:` | `openrouter:xiaomi/mimo-v2-flash:free` |
 | `anon_id` | `anon_` + 数字 | `anon_1` |
 | `bullet_id` | `{cid}-{stage}-{seq}` | `immanuel_kant-stage1-1` |
 
 ---
 
-*Last updated: 2026-01-18*
+Last updated: 2026-01-23
+
