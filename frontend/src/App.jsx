@@ -34,6 +34,10 @@ function AppContent() {
 
   // === Loading Data ===
   useEffect(() => {
+    // Force check for mobile on mount to ensure sidebar is closed
+    if (window.innerWidth < 768) {
+      setIsSidebarOpen(false);
+    }
     loadConversations();
     loadCouncilors();
   }, []);

@@ -279,6 +279,8 @@ def sanitize_councilor_public(definitions: List[Dict[str, Any]]):
             "name": c.get("name"), 
             "model": c.get("model"),
             "avatar": c.get("avatar"),
+            "description": c.get("description"),
+            "role": c.get("role"),
             "active": c.get("active", True),
             "healthy": c.get("healthy", True),
             "health_error": c.get("health_error"),

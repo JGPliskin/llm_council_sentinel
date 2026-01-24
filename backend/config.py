@@ -212,7 +212,9 @@ COUNCILORS = [
             "openrouter:deepseek/deepseek-v3.2",
             "openrouter:x-ai/grok-4.1-fast",
         ],
-        "avatar": "/avatars/immanuel_kant.png",
+        "avatar": "/avatars/kant.png",
+        "role": "Ethics Guardian",
+        "description": "严谨的逻辑审查者。擅长运用绝对律令（Categorical Imperative）扫描提案，精准捕捉潜在的道德风险与逻辑谬误，确保决策符合普世伦理框架。",
         "persona_path": "backend/personas/immanuel_kant.md",
         "judge_persona_path": "backend/personas/immanuel_kant_judge.md",
         "judge_system_prompt": (
@@ -244,7 +246,9 @@ COUNCILORS = [
             "openrouter:deepseek/deepseek-v3.2",
             "openrouter:x-ai/grok-4.1-fast",
         ],
-        "avatar": "/avatars/donald_trump.png",
+        "avatar": "/avatars/trump.png",
+        "role": "Market Strategist",
+        "description": "敏锐的直觉主义者。蔑视教条，专注于市场情绪捕捉与高风险博弈。通过非传统视角重构局势，提供极具破坏力与不对称优势的行动方案。",
         "persona_path": "backend/personas/donald_trump.md",
         "judge_persona_path": "backend/personas/donald_trump_judge.md",
         "judge_system_prompt": (
@@ -276,7 +280,9 @@ COUNCILORS = [
             "openrouter:deepseek/deepseek-v3.2",
             "openrouter:x-ai/grok-4.1-fast",
         ],
-        "avatar": "/avatars/hideo_kojima.png",
+        "avatar": "/avatars/kojima.png",
+        "role": "Narrative Weaver",
+        "description": "深邃的模因构建者。能够解构复杂的信息流，将其编织为具有电影质感与哲学深度的连贯叙事，赋予枯燥数据以情感共鸣与文化穿透力。",
         "persona_path": "backend/personas/hideo_kojima.md",
         "judge_persona_path": "backend/personas/hideo_kojima_judge.md",
         "judge_system_prompt": (
@@ -311,6 +317,8 @@ CHAIRMAN = {
         "openrouter:x-ai/grok-4.1-fast",
     ],
     "avatar": "/avatars/chairman.png",
+    "role": "Consensus Arbiter",
+    "description": "系统的最终校准器。负责在激烈的多方辩论中提取最大公约数，消除由于立场偏见产生的噪音，输出具备最高可执行性的融合指令。",
     "persona_path": "backend/personas/chairman.md",
     "judge_system_prompt": (
         "以平实、公允的口吻综合各方论证，突出共识与冲突点，优先给出清晰、可落地的建议。"
