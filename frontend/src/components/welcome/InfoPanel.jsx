@@ -21,7 +21,7 @@ export const InfoPanel = ({ data }) => {
     const { name, role, description } = displayData;
 
     return (
-        <div className="w-full max-w-3xl min-h-[120px] flex gap-4 md:gap-6 items-start py-4 px-2 md:px-0">
+        <div className="w-full max-w-4xl min-h-[120px] flex gap-4 md:gap-6 items-start py-4 px-2 md:px-0">
             {/* Decorative Indicator */}
             <div className="hidden md:flex flex-col items-center gap-1 mt-1">
                 <div className="w-2 h-2 bg-hud-cyan rounded-sm shadow-[0_0_8px_cyan]"></div>

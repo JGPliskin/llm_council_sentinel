@@ -114,7 +114,7 @@ export function WelcomeScreen({ onStart, councilors = [], chairman = null, selec
             <main className="relative z-10 flex-1 flex flex-col items-center justify-start pt-4 md:justify-center md:pt-0 w-full max-w-7xl mx-auto">
 
                 {/* Desktop Grid */}
-                <div className="hidden md:flex flex-wrap justify-center gap-8 lg:gap-12 perspective-1000 my-4">
+                <div className="hidden md:flex flex-wrap justify-center gap-6 lg:gap-8 perspective-1000 my-4">
                     {councilors.map(c => (
                         <CouncilorCard
                             key={c.id}

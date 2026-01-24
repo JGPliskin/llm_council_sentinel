@@ -1,0 +1,5 @@
+{
+  "name": "Neural Council OS",
+  "description": "A cyberpunk-themed tactical interface for interacting with AI personas using Gemini models.",
+  "requestFramePermissions": []
+}

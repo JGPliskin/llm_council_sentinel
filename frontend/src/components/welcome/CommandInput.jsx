@@ -22,7 +22,7 @@ export const CommandInput = ({ value, onChange, onEngage, isReady }) => {
     };
 
     return (
-        <div className="w-full max-w-3xl flex flex-col gap-4 z-20 animate-in slide-in-from-bottom-4 fade-in duration-700 delay-300">
+        <div className="w-full max-w-5xl flex flex-col gap-4 z-20 animate-in slide-in-from-bottom-4 fade-in duration-700 delay-300">
 
             {/* Input Bar */}
             <form onSubmit={handleSubmit} className="relative group">
