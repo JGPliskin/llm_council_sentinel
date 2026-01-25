@@ -1,63 +1,94 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { ChairmanWidget } from './welcome/ChairmanWidget';
-import { CouncilorCard } from './welcome/CouncilorCard';
+import { StandingArtDisplay } from './welcome/StandingArtDisplay';
 import { InfoPanel } from './welcome/InfoPanel';
 import { CommandInput } from './welcome/CommandInput';
+import { UnitDeckList } from './UnitDeckList';
+import { PanelLeftClose, PanelLeftOpen, PanelRightOpen, RotateCcw } from 'lucide-react';
+import { getCouncilorUIConfig } from '@/config/councilors';
 
-export function WelcomeScreen({ onStart, councilors = [], chairman = null, selectedIds: initialSelectedIds, onToggleId }) {
+export function WelcomeScreen({
+    onStart,
+    councilors = [],
+    chairman = null,
+    selectedIds: initialSelectedIds,
+    onToggleId,
+    isSidebarOpen = false,
+    onToggleSidebar,
+    isDetailPanelOpen = false,
+    onToggleDetailPanel,
+    onResetSession
+}) {
     // -------------------------------------------------------------------------
     // 1. State Management
     // -------------------------------------------------------------------------
-    // Local UI State
-    const [focusedId, setFocusedId] = useState(null);
-    const [stickyId, setStickyId] = useState(null);
+    const [focusedId, setFocusedId] = useState(null); // Hover focus
+    const [stickyId, setStickyId] = useState(null);   // Click "Lock" focus
     const [inputValue, setInputValue] = useState('');
 
-    const carouselRef = useRef(null);
+    // Clear sticky focus if the stickied unit is deselected? 
+    // Spec says: "Click InfoPanel 'UNLINK' -> Unit deselects." 
+    // If it deselects, it disappears from stage. Sticky focus usually implies looking at the art.
+    // If art is gone, maybe sticky focus should clear or fallback?
+    // Let's keep it simple: Sticky is just a preference for InfoPanel.
 
     // -------------------------------------------------------------------------
-    // 2. Interaction Handlers
+    // 2. Data Preparation (ViewModels)
     // -------------------------------------------------------------------------
+    const deckItems = useMemo(() => {
+        return councilors.map(c => {
+            const isSelected = initialSelectedIds.includes(c.id);
+            const uiConfig = getCouncilorUIConfig(c.id);
+            return {
+                id: c.id,
+                name: c.name,
+                role: uiConfig.role || c.role || 'COUNCILOR',
+                avatar: c.avatar, // standard avatar for deck
+                state: isSelected ? 'linked' : 'standby',
+                progress: 0, // Welcome screen has no progress
+                rank: undefined,
+                isActiveTab: false // or use this to indicate looking at? No, keep it simple.
+            };
+        });
+    }, [councilors, initialSelectedIds]);
 
-    // Update stickyId when focusedId changes to a valid ID
-    useEffect(() => {
-        if (focusedId) {
-            setStickyId(focusedId);
-        }
-    }, [focusedId]);
+    const activeStandingArts = useMemo(() => {
+        return initialSelectedIds
+            .map(id => {
+                const c = councilors.find(x => x.id === id);
+                if (!c) return null;
+                const uiConfig = getCouncilorUIConfig(c.id);
+                return {
+                    ...c,
+                    standing: uiConfig.standing || c.avatar, // Fallback logic
+                    role: uiConfig.role || c.role
+                };
+            })
+            .filter(Boolean);
+    }, [initialSelectedIds, councilors]);
 
-    // PC Hover
-    const handleHover = (id) => {
+    // -------------------------------------------------------------------------
+    // 3. Interaction Handlers
+    // -------------------------------------------------------------------------
+    const handleDeckHover = (id) => {
         setFocusedId(id);
     };
 
-    // Mobile Scroll Snap Logic
-    const handleScroll = () => {
-        if (!carouselRef.current) return;
-        const container = carouselRef.current;
-        const center = container.scrollLeft + container.clientWidth / 2;
-
-        let closestId = null;
-        let minDistance = Infinity;
-
-        Array.from(container.children).forEach((child) => {
-            // Find the card container
-            const childCenter = child.offsetLeft + child.clientWidth / 2;
-            const distance = Math.abs(center - childCenter);
-
-            if (distance < minDistance) {
-                minDistance = distance;
-                closestId = child.getAttribute('data-id');
-            }
-        });
-
-        // Threshold to trigger focus (e.g., within 50% of card width)
-        if (closestId && closestId !== focusedId) {
-            setFocusedId(closestId);
-        }
+    const handleDeckClick = (id) => {
+        // Toggle selection
+        onToggleId(id);
+        // If we just clicked (selected/deselected), we might want to sticky it?
+        // Spec says: UnitDeck Click -> Toggle selection.
+        // It doesn't explicitly say focus it, but usually clicking implies interest.
+        // Let's set sticky to this id so InfoPanel shows it immediately.
+        setStickyId(id);
     };
 
-    // Engage
+    const handleArtClick = (id) => {
+        // Spec: Focus Lock InfoPanel (No selection toggle)
+        setStickyId(id);
+    };
+
     const handleEngage = (finalInput) => {
         if (initialSelectedIds.length > 0) {
             onStart(finalInput, initialSelectedIds);
@@ -65,104 +96,197 @@ export function WelcomeScreen({ onStart, councilors = [], chairman = null, selec
     };
 
     // -------------------------------------------------------------------------
-    // 3. InfoPanel Data Resolution
+    // 4. InfoPanel Logic
+    // Priority: Hover (focused) > Focus Locked (sticky) > Last Selected
     // -------------------------------------------------------------------------
-    // Priority: focused > sticky > firstSelected > default > chairman
     const getActiveData = () => {
-        let idToFind = focusedId || stickyId;
+        // 1. Hover
+        if (focusedId) return councilors.find(c => c.id === focusedId);
 
-        if (!idToFind && initialSelectedIds.length > 0) {
-            // Use first selected
-            idToFind = Array.from(initialSelectedIds)[0];
+        // 2. Sticky (Focused Lock)
+        if (stickyId) return councilors.find(c => c.id === stickyId);
+
+        // 3. Last Selected (if any)
+        if (initialSelectedIds.length > 0) {
+            const lastId = initialSelectedIds[initialSelectedIds.length - 1];
+            return councilors.find(c => c.id === lastId);
         }
 
-        let data = councilors.find(c => c.id === idToFind);
-
-        if (!data && councilors.length > 0) {
-            data = councilors[0]; // Default to first available
-        }
-
-        return data || chairman;
+        // 4. Empty Fallback (or Chairman?)
+        // Spec says "Show NO UNIT SELECTED", handled by InfoPanel passing null.
+        return null;
     };
 
-    return (
-        <div className="relative w-full h-full flex flex-col overflow-hidden bg-hud-bg text-white">
+    const activeInfoData = getActiveData();
 
-            {/* Background Ambience */}
+    // Augment InfoPanel data with UI config and state for properly rendering the button
+    const infoPanelData = activeInfoData ? {
+        ...activeInfoData,
+        description: activeInfoData.description || "Waiting for neural link...",
+        role: getCouncilorUIConfig(activeInfoData.id).role || activeInfoData.role,
+        state: initialSelectedIds.includes(activeInfoData.id) ? 'linked' : 'standby'
+    } : null;
+
+    return (
+        <div className="relative w-full h-[100dvh] flex flex-col overflow-hidden bg-hud-bg text-white selection:bg-[rgba(6,182,212,0.3)]">
+
+            {/* Background Ambience (Deepest Layer) */}
             <div className="absolute inset-0 pointer-events-none z-0">
-                <div className="absolute inset-0 bg-grid-floor"></div>
+                <div className="absolute inset-0 bg-grid-floor opacity-50"></div>
                 <div className="absolute inset-0 bg-vignette"></div>
-                <div className="absolute inset-0 bg-scanline"></div>
-                <div className="absolute inset-0 bg-cyan-sweep opacity-30"></div>
+                <div className="absolute inset-0 bg-scanline opacity-30"></div>
             </div>
 
-            {/* Header */}
-            <header className="relative z-20 flex-shrink-0 px-4 md:px-6 py-2 md:py-4 flex justify-between items-start">
-                <div>
+            {/* Header / Top Bar */}
+            <header className="relative z-20 flex-shrink-0 px-4 md:px-6 py-2 md:py-4 flex justify-between items-start pointer-events-none md:pointer-events-auto">
+                <div className="pointer-events-auto">
                     <h1 className="text-hud-cyan font-orbitron font-black text-xl md:text-2xl tracking-[0.2em] uppercase text-shadow-glow">
                         Mission Logs
                     </h1>
-                    <div className="flex items-center gap-2 mt-0.5 md:mt-1">
-                        <div className="w-1.5 h-1.5 bg-hud-cyan rounded-full animate-pulse"></div>
-                        <span className="text-[9px] md:text-[10px] font-mono text-hud-muted tracking-widest">SYSTEM ONLINE // {initialSelectedIds.length} UNITS ENGAGED</span>
-                    </div>
                 </div>
-                <ChairmanWidget data={chairman} />
+                <div className="pointer-events-auto">
+                    <ChairmanWidget data={chairman} />
+                </div>
             </header>
 
-            {/* Main Content (Hangar) */}
-            <main className="relative z-10 flex-1 flex flex-col items-center justify-start pt-4 md:justify-center md:pt-0 w-full max-w-7xl mx-auto">
+            {/* ---------------------------------------------------------------------------
+                CENTER STAGE: Standing Art
+               --------------------------------------------------------------------------- */}
+            <main className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+                {/* 
+                  Standing Art Container 
+                  - We center it vertically/horizontally.
+                  - On keyboard open (mobile), we rely on CSS media queries or Height clamping 
+                    but since we use absolute centering, it might overlap input if not careful.
+                    Plan says: "Shrink StandingArtStage (e.g. to 20vh)".
+                    We can use flex layout for the main container to push it up?
+                    Actually current layout is absolute inset-0.
+                */}
+                <div className="
+                    relative w-full max-w-6xl h-full flex items-end justify-center pb-[280px] md:pb-[240px] gap-2 lg:gap-8
+                    transition-all duration-300
+                    pointer-events-none
+                ">
+                    {/* Empty State Message in Stage */}
+                    {activeStandingArts.length === 0 && (
+                        <div className="absolute top-1/3 text-center opacity-50 animate-pulse">
+                            <h2 className="text-2xl font-mono tracking-widest text-hud-muted">NO UNIT SELECTED</h2>
+                            <p className="text-xs text-[rgba(91,107,122,0.5)] mt-2">SELECT AGENTS FROM DECK TO INITIALIZE</p>
+                        </div>
+                    )}
 
-                {/* Desktop Grid */}
-                <div className="hidden md:flex flex-wrap justify-center gap-6 lg:gap-8 perspective-1000 my-4">
-                    {councilors.map(c => (
-                        <CouncilorCard
-                            key={c.id}
-                            data={c}
-                            isSelected={initialSelectedIds.includes(c.id)}
-                            isFocused={focusedId === c.id}
-                            onToggle={(id) => onToggleId(id)}
-                            onHover={handleHover}
-                        />
-                    ))}
-                </div>
-
-                {/* Mobile Carousel - Resized & Re-spaced for Input Visibility */}
-                <div
-                    ref={carouselRef}
-                    onScroll={handleScroll}
-                    className="md:hidden w-full flex overflow-x-auto snap-x snap-mandatory gap-4 px-[50vw] py-4 no-scrollbar scroll-smooth"
-                    style={{ paddingLeft: 'calc(50vw - 88px)', paddingRight: 'calc(50vw - 88px)' }} // Centering allowance for 176px card
-                >
-                    {councilors.map(c => (
-                        <div key={c.id} data-id={c.id} className="snap-center shrink-0">
-                            <CouncilorCard
-                                key={c.id}
-                                data={c}
-                                isSelected={initialSelectedIds.includes(c.id)}
-                                isFocused={focusedId === c.id}
-                                onToggle={(id) => onToggleId(id)}
-                                onHover={() => { }} // Mobile doesn't hover
+                    {activeStandingArts.map((art, index) => (
+                        <div key={art.id} className="pointer-events-auto z-10 relative">
+                            <StandingArtDisplay
+                                data={art}
+                                isFocused={focusedId === art.id || stickyId === art.id}
+                                onInteraction={handleArtClick}
                             />
                         </div>
                     ))}
                 </div>
+            </main>
 
-                {/* Bottom Control Deck - Added background and z-index to prevent underlap issues */}
-                <div className="w-full flex flex-col items-center mt-2 md:mt-4 pb-6 md:pb-12 px-4 gap-4 md:gap-6 z-20 bg-gradient-to-t from-hud-bg via-hud-bg to-transparent">
+            {/* ---------------------------------------------------------------------------
+                MIDDLE LAYER: InfoPanel + Input overlay
+                Positioned absolutely or Flex above the bottom panel?
+                Plan: "Center: StandingArt, Top Layer: InfoPanel, Bottom: Bottom Panel"
+                Let's use a Column Flex for the UI layers above the stage.
+               --------------------------------------------------------------------------- */}
+            <div className="absolute inset-0 z-20 flex flex-col justify-end pb-[140px] md:pb-[140px] pointer-events-none">
+                <div className="w-full max-w-4xl mx-auto px-4 flex flex-col gap-4 pointer-events-auto transition-all duration-300">
+
                     {/* Info Panel */}
-                    <InfoPanel data={getActiveData()} />
+                    <div className="min-h-[120px]">
+                        <InfoPanel
+                            data={infoPanelData}
+                            onToggle={(id) => onToggleId(id)}
+                        />
+                    </div>
 
-                    {/* Input */}
-                    <CommandInput
-                        value={inputValue}
-                        onChange={setInputValue}
-                        onEngage={handleEngage}
-                        isReady={initialSelectedIds.length > 0}
-                    />
+                    {/* Command Input */}
+                    <div className="w-full">
+                        <CommandInput
+                            value={inputValue}
+                            onChange={setInputValue}
+                            onEngage={handleEngage}
+                            isReady={initialSelectedIds.length > 0} // Disabled if 0
+                        />
+                    </div>
+                </div>
+            </div>
+
+            {/* ---------------------------------------------------------------------------
+                BOTTOM PANEL CONTAINER (Status Bar + UnitDeck)
+                Fixed at bottom. Same markup structure as TacticalHUD (Stages).
+               --------------------------------------------------------------------------- */}
+            <div className="
+                absolute bottom-0 left-0 w-full z-30
+                bg-hud-bg-soft border-t border-hud-cyan-soft backdrop-blur-md
+                flex flex-col
+                pb-[env(safe-area-inset-bottom)]
+                min-h-[120px] md:min-h-[140px]
+            ">
+                {/* Status Bar */}
+                <div className="
+                    w-full flex items-center gap-4 px-4 md:px-6 py-1.5 md:py-2 
+                    border-b border-hud-cyan-soft bg-black/60
+                ">
+                    {/* Controls */}
+                    <div className="flex items-center gap-3 border-r border-white/10 pr-4 mr-0 md:mr-2">
+                        <button
+                            onClick={() => onToggleSidebar && onToggleSidebar()}
+                            className="text-hud-muted hover:text-white transition-colors"
+                            title="Toggle Sidebar"
+                        >
+                            {isSidebarOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
+                        </button>
+                        <button
+                            onClick={() => onToggleDetailPanel && onToggleDetailPanel()}
+                            className="text-hud-muted hover:text-white transition-colors"
+                            title="Toggle Detail Panel"
+                        >
+                            {isDetailPanelOpen ? <PanelRightOpen size={14} className="rotate-180" /> : <PanelRightOpen size={14} />}
+                        </button>
+                        <button
+                            onClick={() => onResetSession && onResetSession()}
+                            className="text-hud-muted hover:text-white transition-colors"
+                            title="Reset Session"
+                        >
+                            <RotateCcw size={14} />
+                        </button>
+                    </div>
+
+                    {/* System Status */}
+                    <div className="flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-hud-cyan animate-pulse shadow-[0_0_5px_cyan]"></div>
+                        <span className="text-[9px] md:text-[10px] font-mono font-bold tracking-[0.2em] uppercase text-hud-cyan">
+                            STAGE [STANDBY]
+                        </span>
+                        <span className="hidden md:inline text-[9px] font-mono tracking-widest text-hud-muted">
+                            // SYSTEM_IDLE
+                        </span>
+                    </div>
+
+                    <div className="flex-1"></div>
+
+                    {/* Decoration right */}
+                    <div className="hidden md:flex text-[9px] font-mono gap-4 text-hud-muted">
+                        <span>CPU: 12%</span>
+                        <span>MEM: 4GB</span>
+                        <span>NET: OK</span>
+                    </div>
                 </div>
 
-            </main>
+                {/* Unit Deck Area */}
+                <div className="flex-1 flex items-center w-full py-2">
+                    <UnitDeckList
+                        items={deckItems}
+                        onItemClick={handleDeckClick}
+                        onItemHover={handleDeckHover}
+                    />
+                </div>
+            </div>
 
         </div>
     );

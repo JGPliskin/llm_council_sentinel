@@ -245,6 +245,19 @@ function AppContent() {
                 chairman={chairmanInfo}
                 selectedIds={selectedAgentIds}
                 onToggleId={handleToggleAgent}
+                isSidebarOpen={isSidebarOpen}
+                onToggleSidebar={() => {
+                  const newState = !isSidebarOpen;
+                  setIsSidebarOpen(newState);
+                  if (newState && window.innerWidth < 768) setIsPanelOpen(false);
+                }}
+                isDetailPanelOpen={isPanelOpen}
+                onToggleDetailPanel={() => {
+                  const newState = !isPanelOpen;
+                  setIsPanelOpen(newState);
+                  if (newState && window.innerWidth < 768) setIsSidebarOpen(false);
+                }}
+                onResetSession={() => { if (confirm('Reset Session?')) engine.reset(); }}
               />
             </div>
           ) : (
@@ -272,36 +285,38 @@ function AppContent() {
           )}
 
           {/* Footer HUD */}
-          <TacticalHUD
-            stage={engine.stage}
-            agentProgress={engine.agentProgress}
-            aggregateRankings={engine.aggregateRankings}
-            resolvedCouncilors={engine.resolvedCouncilors}
-            consensusUnlocked={engine.consensusUnlocked}
-            stage3Complete={engine.stage3Complete}
-            hasViewedConsensus={engine.hasViewedConsensus}
-            onConsensusClick={engine.viewConsensus}
-            stage2Skipped={engine.stage2Skipped}
-            activeTab={engine.activeTab}
-            onTabSelect={engine.setActiveTab} // Interactive Switching
-            // IDLE props
-            selectedAgentIds={selectedAgentIds}
-            allCouncilors={allCouncilors}
-            // Controls
-            isSidebarOpen={isSidebarOpen}
-            onToggleSidebar={() => {
-              const newState = !isSidebarOpen;
-              setIsSidebarOpen(newState);
-              if (newState && window.innerWidth < 768) setIsPanelOpen(false);
-            }}
-            isDetailPanelOpen={isPanelOpen}
-            onToggleDetailPanel={() => {
-              const newState = !isPanelOpen;
-              setIsPanelOpen(newState);
-              if (newState && window.innerWidth < 768) setIsSidebarOpen(false);
-            }}
-            onResetSession={() => { if (confirm('Reset Session?')) engine.reset(); }}
-          />
+          {engine.stage !== 'idle' && (
+            <TacticalHUD
+              stage={engine.stage}
+              agentProgress={engine.agentProgress}
+              aggregateRankings={engine.aggregateRankings}
+              resolvedCouncilors={engine.resolvedCouncilors}
+              consensusUnlocked={engine.consensusUnlocked}
+              stage3Complete={engine.stage3Complete}
+              hasViewedConsensus={engine.hasViewedConsensus}
+              onConsensusClick={engine.viewConsensus}
+              stage2Skipped={engine.stage2Skipped}
+              activeTab={engine.activeTab}
+              onTabSelect={engine.setActiveTab} // Interactive Switching
+              // IDLE props
+              selectedAgentIds={selectedAgentIds}
+              allCouncilors={allCouncilors}
+              // Controls
+              isSidebarOpen={isSidebarOpen}
+              onToggleSidebar={() => {
+                const newState = !isSidebarOpen;
+                setIsSidebarOpen(newState);
+                if (newState && window.innerWidth < 768) setIsPanelOpen(false);
+              }}
+              isDetailPanelOpen={isPanelOpen}
+              onToggleDetailPanel={() => {
+                const newState = !isPanelOpen;
+                setIsPanelOpen(newState);
+                if (newState && window.innerWidth < 768) setIsSidebarOpen(false);
+              }}
+              onResetSession={() => { if (confirm('Reset Session?')) engine.reset(); }}
+            />
+          )}
         </div>
 
         {/* Right Detail Panel - Outside MainContent, Fixed position */}

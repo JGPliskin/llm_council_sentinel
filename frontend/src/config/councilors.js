@@ -4,10 +4,29 @@
  * Value: 前端专用的 UI 属性
  */
 export const COUNCILOR_UI_CONFIG = {
-    "immanuel_kant": { color: "cyan" },
-    "donald_trump": { color: "cyan" },
-    "hideo_kojima": { color: "cyan" },
-    "chairman": { color: "cyan" },
+    "immanuel_kant": {
+        color: "cyan",
+        role: "PHILOSOPHER",
+        standing: "/avatars/standing/kant_standing.png",
+        avatar: "/avatars/kant.png"
+    },
+    "donald_trump": {
+        color: "cyan",
+        role: "POLITICIAN",
+        standing: "/avatars/standing/trump_standing.png",
+        avatar: "/avatars/trump.png"
+    },
+    "hideo_kojima": {
+        color: "cyan",
+        role: "GAME DESIGNER",
+        standing: "/avatars/standing/kojima_standing.png",
+        avatar: "/avatars/kojima.png"
+    },
+    "chairman": {
+        color: "cyan",
+        role: "SYSTEM OVERSEER",
+        avatar: "/avatars/chairman.png"
+    },
 };
 
 /**

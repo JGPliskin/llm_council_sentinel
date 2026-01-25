@@ -27,9 +27,9 @@ export const ChairmanWidget = ({ data }) => {
 
                 {/* Hexagon/Circle Container */}
                 <div className="relative w-12 h-12">
-                    <div className="absolute inset-0 border border-hud-cyan/30 rounded-full animate-[spin_10s_linear_infinite]"></div>
-                    <div className="absolute inset-1 border border-hud-cyan/10 rounded-full"></div>
-                    <div className="absolute inset-2 bg-hud-bg-soft rounded-full overflow-hidden flex items-center justify-center border border-hud-cyan/20 group-hover:border-hud-cyan/50 transition-colors">
+                    <div className="absolute inset-0 border border-[rgba(6,182,212,0.3)] rounded-full animate-[spin_10s_linear_infinite]"></div>
+                    <div className="absolute inset-1 border border-[rgba(6,182,212,0.1)] rounded-full"></div>
+                    <div className="absolute inset-2 bg-hud-bg-soft rounded-full overflow-hidden flex items-center justify-center border border-[rgba(6,182,212,0.2)] group-hover:border-[rgba(6,182,212,0.5)] transition-colors">
                         {renderAvatar(data.avatar, data.name)}
                     </div>
                 </div>

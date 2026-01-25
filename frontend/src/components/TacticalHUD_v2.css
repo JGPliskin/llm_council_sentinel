@@ -21,7 +21,7 @@
     @apply flex items-center justify-center gap-4 h-full w-full px-4 overflow-x-auto;
 }
 
-/* Agent Slice Card - Demo-style low-profile angled tabs */
+/* Agent Slice Card */
 .agent-slice {
     @apply relative flex flex-col items-center justify-center flex-1 min-w-[110px] max-w-[200px] py-3 px-4 transition-all duration-300;
     background: rgba(5, 10, 20, 0.9);
@@ -84,17 +84,6 @@
 /* Avatar */
 .agent-avatar {
     @apply text-2xl mb-1 select-none relative z-10;
-}
-
-.agent-avatar-bg {
-    position: absolute;
-    inset: 0;
-    background-size: cover;
-    background-position: center;
-    opacity: 0.2;
-    filter: grayscale(100%);
-    z-index: 0;
-    pointer-events: none;
 }
 
 /* Name */

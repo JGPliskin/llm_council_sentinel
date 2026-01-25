@@ -75,8 +75,22 @@ export default {
           text: 'var(--hud-text)',
           muted: 'var(--hud-muted)',
         }
+      },
+      keyframes: {
+        shimmer: {
+          '0%': { backgroundPosition: '200% 0' },
+          '100%': { backgroundPosition: '-200% 0' }
+        },
+        breathe: {
+          '0%, 100%': { opacity: '1' },
+          '50%': { opacity: '0.5' }
+        }
+      },
+      animation: {
+        shimmer: 'shimmer 3s linear infinite',
+        breathe: 'breathe 2s ease-in-out infinite'
       }
-    }
+    },
   },
   plugins: [require("tailwindcss-animate")],
 }

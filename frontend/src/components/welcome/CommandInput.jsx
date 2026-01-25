@@ -36,7 +36,7 @@ export const CommandInput = ({ value, onChange, onEngage, isReady }) => {
                     className={`
                         relative flex items-center border p-1 transition-all duration-300 shadow-2xl
                         ${isReady
-                            ? 'bg-hud-bg/90 border-hud-cyan/30 group-focus-within:border-hud-cyan group-focus-within:shadow-[0_0_20px_rgba(6,182,212,0.15)]'
+                            ? 'bg-[rgba(5,10,20,0.9)] border-[rgba(6,182,212,0.3)] group-focus-within:border-hud-cyan group-focus-within:shadow-[0_0_20px_rgba(6,182,212,0.15)]'
                             : 'bg-black/80 border-red-900/30 cursor-not-allowed opacity-80'
                         }
                     `}
@@ -54,7 +54,7 @@ export const CommandInput = ({ value, onChange, onEngage, isReady }) => {
                         disabled={!isReady}
                         className={`
                             flex-1 bg-transparent border-none outline-none font-mono text-sm h-12
-                            placeholder:text-hud-muted/50
+                            placeholder:text-[rgba(91,107,122,0.5)]
                             ${isReady ? 'text-hud-text' : 'text-red-900/50 cursor-not-allowed'}
                         `}
                         autoFocus
@@ -66,7 +66,7 @@ export const CommandInput = ({ value, onChange, onEngage, isReady }) => {
                         className={`
                             h-10 px-6 ml-2 border-l uppercase text-xs font-bold tracking-widest transition-all
                             ${isReady && value.trim()
-                                ? 'border-hud-cyan/30 text-hud-cyan hover:bg-hud-cyan hover:text-black cursor-pointer'
+                                ? 'border-[rgba(6,182,212,0.3)] text-hud-cyan hover:bg-hud-cyan hover:text-black cursor-pointer'
                                 : 'border-white/5 text-white/10 cursor-not-allowed'
                             }
                         `}
@@ -84,12 +84,12 @@ export const CommandInput = ({ value, onChange, onEngage, isReady }) => {
                         onClick={() => handlePresetClick(preset.prompt)}
                         className="
                             group flex items-center gap-2 px-3 py-1.5 
-                            bg-hud-bg-soft/50 border border-hud-cyan/20 
-                            hover:bg-hud-cyan/10 hover:border-hud-cyan/50
+                            bg-[rgba(10,15,30,0.5)] border border-[rgba(6,182,212,0.2)] 
+                            hover:bg-[rgba(6,182,212,0.1)] hover:border-[rgba(6,182,212,0.5)]
                             rounded-sm transition-all duration-200
                         "
                     >
-                        <preset.icon className="w-3 h-3 text-hud-cyan/70 group-hover:text-hud-cyan" />
+                        <preset.icon className="w-3 h-3 text-[rgba(6,182,212,0.7)] group-hover:text-hud-cyan" />
                         <span className="text-[10px] font-mono text-hud-muted group-hover:text-hud-text uppercase tracking-wider">
                             {preset.title}
                         </span>
