@@ -24,7 +24,7 @@ export const InfoPanel = ({ data, onToggle }) => {
     // Empty State
     if (!displayData) {
         return (
-            <div className="w-full max-w-4xl min-h-[120px] flex flex-col items-center justify-center border border-white/5 bg-black/20 rounded-sm">
+            <div className="w-full max-w-5xl min-h-[120px] flex flex-col items-center justify-center border border-white/5 bg-black/20 rounded-sm">
                 <div className="text-hud-muted font-mono tracking-widest text-xs animate-pulse">NO UNIT SELECTED</div>
                 <div className="text-[10px] text-[rgba(91,107,122,0.6)] font-mono mt-1 tracking-wider">SELECT A COUNCILOR TO BEGIN</div>
             </div>
@@ -36,7 +36,7 @@ export const InfoPanel = ({ data, onToggle }) => {
     const isChairman = id === 'chairman';
 
     return (
-        <div className="w-full max-w-4xl min-h-[120px] flex gap-4 md:gap-6 items-start py-4 px-2 md:px-0 relative">
+        <div className="w-full max-w-5xl min-h-[120px] flex gap-4 md:gap-6 items-start py-4 px-2 md:px-0 relative">
             {/* Decorative Indicator */}
             <div className="hidden md:flex flex-col items-center gap-1 mt-1">
                 <div className="w-2 h-2 bg-hud-cyan rounded-sm shadow-[0_0_8px_cyan]"></div>

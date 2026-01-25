@@ -28,7 +28,7 @@ export function WelcomeScreen({
     const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
     const carouselRef = useRef(null);
     const artRefs = useRef({});
-    const scrollTimerRef = useRef(null);
+    const scrollRafRef = useRef(null);
 
     useEffect(() => {
         const onResize = () => setIsMobile(window.innerWidth < 768);
@@ -112,10 +112,13 @@ export function WelcomeScreen({
         };
 
         const handleScroll = () => {
-            if (scrollTimerRef.current) {
-                clearTimeout(scrollTimerRef.current);
+            if (scrollRafRef.current) {
+                return;
             }
-            scrollTimerRef.current = setTimeout(updateFocusBySnap, 120);
+            scrollRafRef.current = requestAnimationFrame(() => {
+                scrollRafRef.current = null;
+                updateFocusBySnap();
+            });
         };
 
         container.addEventListener('scroll', handleScroll, { passive: true });
@@ -123,9 +126,9 @@ export function WelcomeScreen({
 
         return () => {
             container.removeEventListener('scroll', handleScroll);
-            if (scrollTimerRef.current) {
-                clearTimeout(scrollTimerRef.current);
-                scrollTimerRef.current = null;
+            if (scrollRafRef.current) {
+                cancelAnimationFrame(scrollRafRef.current);
+                scrollRafRef.current = null;
             }
         };
     }, [isMobile, activeStandingArts, focusedId]);
@@ -253,12 +256,12 @@ export function WelcomeScreen({
                     className="
                     relative w-full max-w-6xl h-full flex md:items-end items-center justify-start md:justify-center
                     pb-[280px] md:pb-[340px]
-                    gap-4 lg:gap-8
+                    gap-4 md:gap-6 lg:gap-12
                     transition-all duration-300
                     pointer-events-none
                     overflow-x-auto md:overflow-visible
                     snap-x snap-mandatory
-                    px-[10vw] md:px-0
+                    px-[calc(50vw-clamp(102px,16.5svh,195px))] md:px-0
                 ">
                     {/* Empty State Message in Stage */}
                     {activeStandingArts.length === 0 && (
@@ -268,7 +271,11 @@ export function WelcomeScreen({
                         </div>
                     )}
 
-                    {activeStandingArts.map((art, index) => (
+                    {activeStandingArts.map((art, index) => {
+                        const isArtFocused = isMobile
+                            ? focusedId === art.id
+                            : (focusedId === art.id || stickyId === art.id);
+                        return (
                         <div
                             key={art.id}
                             ref={(el) => {
@@ -278,17 +285,19 @@ export function WelcomeScreen({
                                     delete artRefs.current[art.id];
                                 }
                             }}
-                            className="pointer-events-auto z-10 relative snap-center shrink-0"
+                            className={`pointer-events-auto relative snap-center shrink-0 ${isMobile && isArtFocused ? 'z-20' : 'z-10'}`}
                         >
                             <StandingArtDisplay
                                 data={art}
-                                isFocused={focusedId === art.id || stickyId === art.id}
+                                isFocused={isArtFocused}
                                 isSelected={!!art.isSelected}
+                                isMobile={isMobile}
                                 onInteraction={handleArtClick}
                                 onHover={handleArtHover}
                             />
                         </div>
-                    ))}
+                        );
+                    })}
                 </div>
             </main>
 
@@ -299,7 +308,7 @@ export function WelcomeScreen({
                 Let's use a Column Flex for the UI layers above the stage.
                --------------------------------------------------------------------------- */}
             <div className="absolute inset-0 z-20 flex flex-col justify-end pb-[140px] md:pb-[140px] pointer-events-none">
-                <div className="w-full max-w-4xl mx-auto px-4 flex flex-col gap-4 pointer-events-auto transition-all duration-300">
+                <div className="w-full max-w-5xl mx-auto px-4 flex flex-col gap-4 pointer-events-auto transition-all duration-300">
 
                     {/* Info Panel */}
                     <div className="min-h-[120px]">

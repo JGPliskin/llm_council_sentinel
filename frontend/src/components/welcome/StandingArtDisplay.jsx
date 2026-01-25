@@ -16,6 +16,7 @@ export const StandingArtDisplay = ({
     data,
     isFocused, // Used for highlighting or "Looking at" effect
     isSelected = false,
+    isMobile = false,
     onInteraction, // Click handler (Focus Lock)
     onHover // Hover handler
 }) => {
@@ -40,14 +41,13 @@ export const StandingArtDisplay = ({
             onMouseEnter={() => onHover && onHover(data.id)}
             onMouseLeave={() => onHover && onHover(null)}
             className={`
-                relative w-auto aspect-[3/5] 
-                transition-all duration-700 ease-in-out transform cursor-pointer
+                relative w-auto aspect-[3/5]
+                h-[clamp(340px,55svh,650px)] md:h-[clamp(280px,45svh,520px)]
+                transition-all duration-300 ease-out transform cursor-pointer
                 flex flex-col justify-end group
                 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}
+                ${isMobile ? (isFocused ? 'scale-[1.06] opacity-100 drop-shadow-[0_20px_40px_rgba(0,0,0,0.45)]' : 'scale-[0.88] opacity-50 blur-[0.5px] brightness-75') : ''}
             `}
-            style={{
-                height: 'clamp(340px, 55svh, 650px)',
-            }}
         >
             {/* Holographic Frame (Top/Left/Right) - Visible on Focus or Hover */}
             <div className={`
@@ -69,7 +69,7 @@ export const StandingArtDisplay = ({
 
             {/* Character Image */}
             <div className={`
-                h-full w-full relative transition-all duration-500
+                h-full w-full relative transition-all duration-300
                 ${isSelected
                     ? (isFocused
                         ? 'filter drop-shadow-[0_0_10px_rgba(6,182,212,0.3)] brightness-110 saturate-120'

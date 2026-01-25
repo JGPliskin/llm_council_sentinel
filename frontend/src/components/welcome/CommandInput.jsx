@@ -36,7 +36,7 @@ export const CommandInput = ({ value, onChange, onEngage, isReady }) => {
                     className={`
                         relative flex items-center border p-1 transition-all duration-300 shadow-2xl
                         ${isReady
-                            ? 'bg-[rgba(5,10,20,0.9)] border-[rgba(6,182,212,0.3)] group-focus-within:border-hud-cyan group-focus-within:shadow-[0_0_20px_rgba(6,182,212,0.15)]'
+                            ? 'bg-[rgba(5,10,20,0.96)] border-[rgba(6,182,212,0.5)] shadow-[0_0_18px_rgba(6,182,212,0.18)] group-focus-within:border-hud-cyan group-focus-within:shadow-[0_0_28px_rgba(6,182,212,0.3)]'
                             : 'bg-black/80 border-red-900/30 cursor-not-allowed opacity-80'
                         }
                     `}
