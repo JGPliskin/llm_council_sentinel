@@ -43,15 +43,16 @@ export const UnitDeckCard = ({
             onClick={handleClick}
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}
+            style={{ WebkitTapHighlightColor: 'transparent' }}
             className={`
-                group relative flex items-center gap-3 md:gap-4 p-2 md:p-3 overflow-hidden transition-all duration-300 flex-shrink-0 
-                w-[280px] min-w-[220px] max-w-[80vw] md:w-auto snap-center text-left
-                border border-transparent rounded-sm
+                group relative flex items-center gap-2 md:gap-4 p-1.5 md:p-3 overflow-hidden transition-[background-color,border-color,box-shadow,transform] duration-10 flex-shrink-0 
+                w-full md:w-auto text-left
+                border border-transparent rounded-sm outline-none focus:outline-none focus-visible:outline-none focus-visible:ring-0
                 ${isLinked
                     ? 'bg-[rgba(6,182,212,0.1)] border-[rgba(6,182,212,0.5)] translate-y-[-2px] md:translate-y-[-4px] shadow-[0_0_15px_rgba(6,182,212,0.15)]'
                     : 'bg-[rgba(5,10,20,0.4)] hover:bg-[rgba(5,10,20,0.6)] border-white/5 hover:border-white/10 opacity-70 hover:opacity-100'
                 }
-                ${isActiveTab ? 'ring-1 ring-[rgba(6,182,212,0.4)] bg-[rgba(6,182,212,0.05)]' : ''}
+                ${isActiveTab ? 'bg-[rgba(6,182,212,0.12)] border-[rgba(6,182,212,0.7)] shadow-[0_0_20px_rgba(6,182,212,0.35)]' : ''}
             `}
         >
             {/* Connection Line Visual (Linked only) */}
@@ -65,7 +66,7 @@ export const UnitDeckCard = ({
 
             {/* Avatar */}
             <div className={`
-                relative w-10 h-10 md:w-12 md:h-12 flex-shrink-0 overflow-hidden
+                hidden md:flex relative w-10 h-10 md:w-12 md:h-12 flex-shrink-0 overflow-hidden
                 border-t border-l border-r border-b-0
                 ${isLinked ? 'border-hud-cyan shadow-[0_0_10px_rgba(6,182,212,0.3)]' : 'border-slate-600 group-hover:border-slate-400'}
             `}>
@@ -85,22 +86,22 @@ export const UnitDeckCard = ({
             {/* Info Section */}
             <div className="flex-1 text-left z-10 overflow-hidden min-w-0">
                 <div className="flex justify-between items-center">
-                    <span className={`text-base md:text-lg font-orbitron uppercase font-bold tracking-wider truncate mr-2 ${isLinked ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>
+                    <span className={`text-sm md:text-lg font-orbitron uppercase font-bold tracking-wider truncate mr-2 ${isLinked ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>
                         {name}
                     </span>
 
                     {/* State Badge */}
                     {isSkipped ? (
-                        <span className="text-[9px] md:text-[10px] font-mono text-red-400 border border-red-900/50 bg-red-900/20 px-1 flex-shrink-0">SKIPPED</span>
+                        <span className="text-[8px] md:text-[10px] font-mono text-red-400 border border-red-900/50 bg-red-900/20 px-1 flex-shrink-0">SKIPPED</span>
                     ) : isLinked ? (
-                        <span className="text-[9px] md:text-[10px] font-mono text-hud-cyan animate-breathe bg-[rgba(6,182,212,0.1)] px-1 border border-[rgba(6,182,212,0.3)] flex-shrink-0">LINKED</span>
+                        <span className="text-[8px] md:text-[10px] font-mono text-hud-cyan animate-breathe bg-[rgba(6,182,212,0.1)] px-1 border border-[rgba(6,182,212,0.3)] flex-shrink-0">LINKED</span>
                     ) : (
-                        <span className="text-[9px] md:text-[10px] font-mono text-slate-600 border border-slate-700 px-1 flex-shrink-0">STANDBY</span>
+                        <span className="text-[8px] md:text-[10px] font-mono text-slate-600 border border-slate-700 px-1 flex-shrink-0">STANDBY</span>
                     )}
                 </div>
 
                 <div className="flex justify-between items-end mt-0.5">
-                    <div className="text-[9px] md:text-[10px] font-mono text-slate-500 group-hover:text-[rgba(6,182,212,0.8)] truncate uppercase tracking-widest">
+                    <div className="hidden md:block text-[9px] md:text-[10px] font-mono text-slate-500 group-hover:text-[rgba(6,182,212,0.8)] truncate uppercase tracking-widest">
                         // {role || 'COUNCILOR'}
                     </div>
                     {/* Rank Badge (Stage 3) */}
@@ -130,6 +131,7 @@ export const UnitDeckCard = ({
                     style={{ backgroundSize: '200% 100%' }}
                 ></div>
             )}
+
         </button>
     );
 };

@@ -107,6 +107,10 @@ Non-selected state:
 - Dimmed avatar
 - Thin low-contrast ring
 
+Web vs Mobile notes (interaction-coupled visuals):
+- Web: standing art only appears for selected councilors; hover on art or UnitDeck updates InfoPanel.
+- Mobile: standing art carousel shows all councilors; unselected art is grayscale; InfoPanel updates on carousel snap; tap art toggles selection.
+
 **No half-ring artifacts**: ensure the ring is not intersecting the masked avatar edge.
 
 ---
@@ -155,5 +159,5 @@ File: `frontend/src/components/TacticalHUD.css`
 
 ---
 
-Last updated: 2026-01-23
+Last updated: 2026-01-25
 

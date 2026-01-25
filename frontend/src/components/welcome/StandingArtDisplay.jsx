@@ -15,7 +15,9 @@ const renderStandingArt = (src, alt) => {
 export const StandingArtDisplay = ({
     data,
     isFocused, // Used for highlighting or "Looking at" effect
-    onInteraction // Click handler (Focus Lock)
+    isSelected = false,
+    onInteraction, // Click handler (Focus Lock)
+    onHover // Hover handler
 }) => {
     // For now, we assume data.standing is available, or fallback to avatar
     const artSrc = data.standing || data.avatar;
@@ -35,12 +37,17 @@ export const StandingArtDisplay = ({
     return (
         <div
             onClick={() => onInteraction && onInteraction(data.id)}
+            onMouseEnter={() => onHover && onHover(data.id)}
+            onMouseLeave={() => onHover && onHover(null)}
             className={`
-                relative h-[70vh] md:h-[60vh] lg:h-[70vh] w-auto aspect-[3/5] 
+                relative w-auto aspect-[3/5] 
                 transition-all duration-700 ease-in-out transform cursor-pointer
                 flex flex-col justify-end group
                 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}
             `}
+            style={{
+                height: 'clamp(340px, 55svh, 650px)',
+            }}
         >
             {/* Holographic Frame (Top/Left/Right) - Visible on Focus or Hover */}
             <div className={`
@@ -63,7 +70,11 @@ export const StandingArtDisplay = ({
             {/* Character Image */}
             <div className={`
                 h-full w-full relative transition-all duration-500
-                ${isFocused ? 'filter drop-shadow-[0_0_10px_rgba(6,182,212,0.3)] brightness-110 saturate-120' : 'filter grayscale-[0.3] brightness-90'}
+                ${isSelected
+                    ? (isFocused
+                        ? 'filter drop-shadow-[0_0_10px_rgba(6,182,212,0.3)] brightness-110 saturate-120'
+                        : 'filter grayscale-[0.15] brightness-95')
+                    : 'filter grayscale-[1] brightness-80'}
             `}>
                 {renderStandingArt(artSrc, data.name)}
 
@@ -71,15 +82,7 @@ export const StandingArtDisplay = ({
                 <div className="absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] z-10 bg-[length:100%_2px,3px_100%] pointer-events-none mix-blend-hard-light opacity-30"></div>
             </div>
 
-            {/* Name Tag (Bottom) */}
-            <div className={`
-                absolute bottom-[10%] left-1/2 -translate-x-1/2 
-                bg-black/80 border backdrop-blur px-3 py-1 
-                text-[10px] font-mono uppercase tracking-widest z-30 whitespace-nowrap transition-colors
-                ${isFocused ? 'border-hud-cyan text-hud-cyan' : 'border-white/10 text-slate-500'}
-            `}>
-                {data.name}
-            </div>
+
         </div>
     );
 };

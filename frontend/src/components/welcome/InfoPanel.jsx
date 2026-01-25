@@ -7,24 +7,18 @@ export const InfoPanel = ({ data, onToggle }) => {
     const [isFading, setIsFading] = useState(false);
 
     useEffect(() => {
-        // If switching from one unit to another, fade.
-        if (data?.id !== displayData?.id) {
-            setIsFading(true);
-            const timer = setTimeout(() => {
-                setDisplayData(data);
-                setIsFading(false);
-            }, 150); // Matches CSS duration
-            return () => clearTimeout(timer);
-        }
-        // If data is null (empty state), just set it
-        if (!data && displayData) {
-            setIsFading(true);
-            const timer = setTimeout(() => {
-                setDisplayData(null);
-                setIsFading(false);
-            }, 150);
-            return () => clearTimeout(timer);
-        }
+        const shouldUpdate =
+            (!data && displayData) ||
+            (data && (!displayData || data.id !== displayData.id || data.state !== displayData.state));
+
+        if (!shouldUpdate) return;
+
+        setIsFading(true);
+        const timer = setTimeout(() => {
+            setDisplayData(data || null);
+            setIsFading(false);
+        }, 150); // Matches CSS duration
+        return () => clearTimeout(timer);
     }, [data, displayData]);
 
     // Empty State

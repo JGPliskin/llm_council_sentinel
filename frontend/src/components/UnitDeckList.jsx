@@ -18,12 +18,11 @@ export const UnitDeckList = ({
         <div className="w-full flex items-center justify-center">
             <div className="
                 w-full max-w-7xl mx-auto
-                flex flex-nowrap overflow-x-auto snap-x snap-mandatory 
-                md:grid md:grid-cols-3 
-                gap-3 md:gap-4 lg:gap-8 
-                pb-1 md:pb-0 
-                no-scrollbar scroll-smooth
-                px-4 md:px-0
+                grid grid-cols-3
+                md:grid md:grid-cols-3
+                gap-2 md:gap-4 lg:gap-8
+                pb-1 md:pb-0
+                px-2 md:px-0
             ">
                 {items.map((item) => (
                     <UnitDeckCard

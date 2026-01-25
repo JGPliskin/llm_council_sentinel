@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { ChairmanWidget } from './welcome/ChairmanWidget';
 import { StandingArtDisplay } from './welcome/StandingArtDisplay';
 import { InfoPanel } from './welcome/InfoPanel';
@@ -25,6 +25,16 @@ export function WelcomeScreen({
     const [focusedId, setFocusedId] = useState(null); // Hover focus
     const [stickyId, setStickyId] = useState(null);   // Click "Lock" focus
     const [inputValue, setInputValue] = useState('');
+    const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+    const carouselRef = useRef(null);
+    const artRefs = useRef({});
+    const scrollTimerRef = useRef(null);
+
+    useEffect(() => {
+        const onResize = () => setIsMobile(window.innerWidth < 768);
+        window.addEventListener('resize', onResize);
+        return () => window.removeEventListener('resize', onResize);
+    }, []);
 
     // Clear sticky focus if the stickied unit is deselected? 
     // Spec says: "Click InfoPanel 'UNLINK' -> Unit deselects." 
@@ -36,8 +46,9 @@ export function WelcomeScreen({
     // 2. Data Preparation (ViewModels)
     // -------------------------------------------------------------------------
     const deckItems = useMemo(() => {
-        return councilors.map(c => {
+        const baseItems = councilors.map(c => {
             const isSelected = initialSelectedIds.includes(c.id);
+            const isFocused = isMobile ? focusedId === c.id : (focusedId === c.id || stickyId === c.id);
             const uiConfig = getCouncilorUIConfig(c.id);
             return {
                 id: c.id,
@@ -47,46 +58,121 @@ export function WelcomeScreen({
                 state: isSelected ? 'linked' : 'standby',
                 progress: 0, // Welcome screen has no progress
                 rank: undefined,
-                isActiveTab: false // or use this to indicate looking at? No, keep it simple.
+                isActiveTab: isFocused
             };
         });
-    }, [councilors, initialSelectedIds]);
+
+        if (!isMobile) {
+            return baseItems;
+        }
+
+        return baseItems.filter(item => item.state === 'linked');
+    }, [councilors, initialSelectedIds, focusedId, stickyId, isMobile]);
 
     const activeStandingArts = useMemo(() => {
-        return initialSelectedIds
-            .map(id => {
-                const c = councilors.find(x => x.id === id);
-                if (!c) return null;
-                const uiConfig = getCouncilorUIConfig(c.id);
-                return {
-                    ...c,
-                    standing: uiConfig.standing || c.avatar, // Fallback logic
-                    role: uiConfig.role || c.role
-                };
-            })
-            .filter(Boolean);
-    }, [initialSelectedIds, councilors]);
+        const ordered = councilors.map(c => {
+            const uiConfig = getCouncilorUIConfig(c.id);
+            return {
+                ...c,
+                standing: uiConfig.standing || c.avatar, // Fallback logic
+                role: uiConfig.role || c.role,
+                isSelected: initialSelectedIds.includes(c.id)
+            };
+        });
+
+        return isMobile ? ordered : ordered.filter(item => item.isSelected);
+    }, [initialSelectedIds, councilors, isMobile]);
+
+    useEffect(() => {
+        if (!isMobile) return;
+        const container = carouselRef.current;
+        if (!container) return;
+
+        const updateFocusBySnap = () => {
+            const rect = container.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            let bestId = null;
+            let bestDistance = Infinity;
+
+            activeStandingArts.forEach((art) => {
+                const el = artRefs.current[art.id];
+                if (!el) return;
+                const elRect = el.getBoundingClientRect();
+                const elCenter = elRect.left + elRect.width / 2;
+                const distance = Math.abs(elCenter - centerX);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    bestId = art.id;
+                }
+            });
+
+            if (bestId && bestId !== focusedId) {
+                setFocusedId(bestId);
+            }
+        };
+
+        const handleScroll = () => {
+            if (scrollTimerRef.current) {
+                clearTimeout(scrollTimerRef.current);
+            }
+            scrollTimerRef.current = setTimeout(updateFocusBySnap, 120);
+        };
+
+        container.addEventListener('scroll', handleScroll, { passive: true });
+        updateFocusBySnap();
+
+        return () => {
+            container.removeEventListener('scroll', handleScroll);
+            if (scrollTimerRef.current) {
+                clearTimeout(scrollTimerRef.current);
+                scrollTimerRef.current = null;
+            }
+        };
+    }, [isMobile, activeStandingArts, focusedId]);
 
     // -------------------------------------------------------------------------
     // 3. Interaction Handlers
     // -------------------------------------------------------------------------
     const handleDeckHover = (id) => {
+        if (isMobile) return;
         setFocusedId(id);
     };
 
     const handleDeckClick = (id) => {
-        // Toggle selection
-        onToggleId(id);
-        // If we just clicked (selected/deselected), we might want to sticky it?
-        // Spec says: UnitDeck Click -> Toggle selection.
-        // It doesn't explicitly say focus it, but usually clicking implies interest.
-        // Let's set sticky to this id so InfoPanel shows it immediately.
+        // Mobile requirement: clicking a slot focuses InfoPanel only.
+        // Selection is controlled via InfoPanel LINK/UNLINK.
+        if (isMobile) {
+            setFocusedId(id);
+            const target = artRefs.current[id];
+            if (target && target.scrollIntoView) {
+                target.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+            }
+            return;
+        }
+        if (onToggleId) {
+            const isSelected = initialSelectedIds.includes(id);
+            onToggleId(id);
+            setStickyId(isSelected ? null : id);
+            return;
+        }
         setStickyId(id);
     };
 
     const handleArtClick = (id) => {
         // Spec: Focus Lock InfoPanel (No selection toggle)
+        if (isMobile) {
+            if (onToggleId) {
+                onToggleId(id);
+            }
+            setFocusedId(id);
+            return;
+        }
         setStickyId(id);
+    };
+
+    const handleArtHover = (id) => {
+        if (isMobile) return;
+        setFocusedId(id);
     };
 
     const handleEngage = (finalInput) => {
@@ -103,8 +189,8 @@ export function WelcomeScreen({
         // 1. Hover
         if (focusedId) return councilors.find(c => c.id === focusedId);
 
-        // 2. Sticky (Focused Lock)
-        if (stickyId) return councilors.find(c => c.id === stickyId);
+        // 2. Sticky (Focused Lock) - desktop only
+        if (!isMobile && stickyId) return councilors.find(c => c.id === stickyId);
 
         // 3. Last Selected (if any)
         if (initialSelectedIds.length > 0) {
@@ -162,10 +248,17 @@ export function WelcomeScreen({
                     We can use flex layout for the main container to push it up?
                     Actually current layout is absolute inset-0.
                 */}
-                <div className="
-                    relative w-full max-w-6xl h-full flex items-end justify-center pb-[280px] md:pb-[240px] gap-2 lg:gap-8
+                <div
+                    ref={carouselRef}
+                    className="
+                    relative w-full max-w-6xl h-full flex md:items-end items-center justify-start md:justify-center
+                    pb-[280px] md:pb-[340px]
+                    gap-4 lg:gap-8
                     transition-all duration-300
                     pointer-events-none
+                    overflow-x-auto md:overflow-visible
+                    snap-x snap-mandatory
+                    px-[10vw] md:px-0
                 ">
                     {/* Empty State Message in Stage */}
                     {activeStandingArts.length === 0 && (
@@ -176,11 +269,23 @@ export function WelcomeScreen({
                     )}
 
                     {activeStandingArts.map((art, index) => (
-                        <div key={art.id} className="pointer-events-auto z-10 relative">
+                        <div
+                            key={art.id}
+                            ref={(el) => {
+                                if (el) {
+                                    artRefs.current[art.id] = el;
+                                } else {
+                                    delete artRefs.current[art.id];
+                                }
+                            }}
+                            className="pointer-events-auto z-10 relative snap-center shrink-0"
+                        >
                             <StandingArtDisplay
                                 data={art}
                                 isFocused={focusedId === art.id || stickyId === art.id}
+                                isSelected={!!art.isSelected}
                                 onInteraction={handleArtClick}
+                                onHover={handleArtHover}
                             />
                         </div>
                     ))}

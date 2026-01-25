@@ -96,6 +96,8 @@ docker-compose up -d
 - `docs/配置说明.md`：配置项说明
 - `docs/AGENTS.md`：核心流程与约束（技术版）
 - `docs/UI_STYLE_GUIDE.md`：前端 HUD 视觉规范
+- `docs/开发文档/Welcome_UnitDeck_TacticalHUD_Spec.md`：Welcome/UnitDeck 交互与布局规格
+- `docs/开发文档/implementation_plan.md`：Welcome/UnitDeck 实施计划
 
 ## 6. 运行约束与已知行为
 
@@ -104,8 +106,9 @@ docker-compose up -d
 - 管理员 Token：后端当前为 debug 模式，`verify_admin` 直接放行（见 `backend/main.py`）。
 - Thinking 持久化：仅流式 `/message/stream` 会写入 `metadata.thinking`。
 - Stage2 跳过条件：有效候选答案 `< 2`。
+- Welcome/UnitDeck 交互（概览）：Web 端通过底部 UnitDeck 选中/取消后显示立绘；hover 立绘/卡片会切换 InfoPanel。Mobile 端立绘可滑动浏览并在 snap 后更新 InfoPanel，点击立绘切换选中/取消，底部卡片仅显示已选中并用于切换 InfoPanel（不改变选中）。
 
 ---
 
-Last updated: 2026-01-23
+Last updated: 2026-01-25
 
