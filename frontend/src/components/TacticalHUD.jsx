@@ -1,3 +1,4 @@
+
 import React, { useMemo } from 'react';
 import { Scale, PanelLeftClose, PanelLeftOpen, PanelRightOpen, RotateCcw } from 'lucide-react';
 import { getCouncilorUIConfig } from '@/config/councilors';
@@ -139,7 +140,7 @@ function TacticalHUD({
             absolute bottom-0 left-0 w-full z-30 md:static
             bg-hud-bg-soft border-t backdrop-blur-md
             flex flex-col
-            min-h-[120px] md:min-h-[140px]
+            min-h-[160px] md:min-h-[140px]
             pb-[env(safe-area-inset-bottom)]
             transition-colors duration-500
             ${stageClass}
@@ -196,7 +197,7 @@ function TacticalHUD({
                 {stage3Complete && !hasViewedConsensus && activeTab !== 'final' && (
                     <div
                         onClick={onConsensusClick}
-                        className="absolute inset-0 bg-black/80 backdrop-blur-sm z-40 flex items-center justify-center cursor-pointer animate-in fade-in duration-500"
+                        className="absolute inset-0 bg-black/80 backdrop-blur-sm z-40 flex items-start justify-center cursor-pointer animate-in fade-in duration-500 pt-2"
                     >
                         <div className="
                             border-2 border-[rgba(6,182,212,0.8)] bg-[rgba(5,10,20,0.9)] 

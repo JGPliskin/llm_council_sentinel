@@ -433,7 +433,7 @@ function StageContentArea({
 
                 }}
 
-                className="flex-1 overflow-y-auto p-4 md:p-8 pb-28 md:pb-32 scroll-smooth relative z-10 custom-scrollbar"
+                className="flex-1 overflow-y-auto p-4 md:p-8 pb-48 md:pb-32 scroll-smooth relative z-10 custom-scrollbar"
 
             >
 

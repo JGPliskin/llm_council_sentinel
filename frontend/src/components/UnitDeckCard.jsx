@@ -1,3 +1,4 @@
+
 import React from 'react';
 
 /**
@@ -19,11 +20,15 @@ import React from 'react';
 export const UnitDeckCard = ({
     data,
     onClick,
-    onHover
+    onHover,
+    totalItems = 0
 }) => {
     const { id, name, role, avatar, state, progress, rank, isActiveTab } = data;
     const isLinked = state === 'linked';
     const isSkipped = state === 'skipped';
+
+    // Scale name for single item mode
+    const isSingleMode = totalItems === 1;
 
     // Interaction Handlers
     const handleClick = (e) => {
@@ -46,7 +51,7 @@ export const UnitDeckCard = ({
             style={{ WebkitTapHighlightColor: 'transparent' }}
             className={`
                 group relative flex items-center gap-2 md:gap-4 p-1.5 md:p-3 overflow-hidden transition-[background-color,border-color,box-shadow,transform] duration-10 flex-shrink-0 
-                w-full md:w-auto text-left
+                w-full md:w-auto text-center md:text-left
                 border border-transparent rounded-sm outline-none focus:outline-none focus-visible:outline-none focus-visible:ring-0
                 ${isLinked
                     ? 'bg-[rgba(6,182,212,0.1)] border-[rgba(6,182,212,0.5)] translate-y-[-2px] md:translate-y-[-4px] shadow-[0_0_15px_rgba(6,182,212,0.15)]'
@@ -55,9 +60,9 @@ export const UnitDeckCard = ({
                 ${isActiveTab ? 'bg-[rgba(6,182,212,0.12)] border-[rgba(6,182,212,0.7)] shadow-[0_0_20px_rgba(6,182,212,0.35)]' : ''}
             `}
         >
-            {/* Connection Line Visual (Linked only) */}
+            {/* Connection Line Visual (Linked only) - Desktop Only */}
             {isLinked && (
-                <div className="absolute -top-10 left-1/2 w-[1px] h-20 bg-[rgba(6,182,212,0.3)] z-0"></div>
+                <div className="hidden md:block absolute -top-10 left-12 w-[1px] h-20 bg-[rgba(6,182,212,0.3)] z-0"></div>
             )}
 
             {/* Corner Accents */}
@@ -83,34 +88,39 @@ export const UnitDeckCard = ({
                 `} />
             </div>
 
-            {/* Info Section */}
-            <div className="flex-1 text-left z-10 overflow-hidden min-w-0">
-                <div className="flex justify-between items-center">
-                    <span className={`text-sm md:text-lg font-orbitron uppercase font-bold tracking-wider truncate mr-2 ${isLinked ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>
+            {/* Info Section - Unify Mobile Center / Desktop Active Layout */}
+            <div className="flex-1 z-10 overflow-hidden min-w-0 flex flex-col items-center md:items-start justify-center md:justify-between md:pl-2">
+                <div className="flex items-center justify-center md:justify-between w-full">
+                    <span className={`
+                        font-orbitron uppercase font-bold tracking-wider truncate
+                        transition-all duration-300
+                        ${isSingleMode ? 'text-base md:text-xl scale-110 md:scale-100' : 'text-sm md:text-lg'}
+                        ${isLinked ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}
+                    `}>
                         {name}
                     </span>
 
-                    {/* State Badge */}
-                    {isSkipped ? (
-                        <span className="text-[8px] md:text-[10px] font-mono text-red-400 border border-red-900/50 bg-red-900/20 px-1 flex-shrink-0">SKIPPED</span>
-                    ) : isLinked ? (
-                        <span className="text-[8px] md:text-[10px] font-mono text-hud-cyan animate-breathe bg-[rgba(6,182,212,0.1)] px-1 border border-[rgba(6,182,212,0.3)] flex-shrink-0">LINKED</span>
-                    ) : (
-                        <span className="text-[8px] md:text-[10px] font-mono text-slate-600 border border-slate-700 px-1 flex-shrink-0">STANDBY</span>
+                    {/* Status Badge - Desktop Only */}
+                    {isLinked && (
+                        <span className="hidden md:flex ml-2 text-[10px] font-mono text-hud-cyan animate-breathe bg-[rgba(6,182,212,0.1)] px-1 border border-[rgba(6,182,212,0.3)] flex-shrink-0">
+                            LINKED
+                        </span>
                     )}
                 </div>
 
-                <div className="flex justify-between items-end mt-0.5">
+                <div className="w-full flex justify-center md:justify-start mt-0.5">
+                    {/* Role only on desktop */}
                     <div className="hidden md:block text-[9px] md:text-[10px] font-mono text-slate-500 group-hover:text-[rgba(6,182,212,0.8)] truncate uppercase tracking-widest">
                         // {role || 'COUNCILOR'}
                     </div>
-                    {/* Rank Badge (Stage 3) */}
-                    {typeof rank === 'number' && (
-                        <div className="text-[10px] font-bold font-mono text-hud-cyan bg-[rgba(6,182,212,0.1)] px-1 border-l border-[rgba(6,182,212,0.3)]">
-                            #{rank}
-                        </div>
-                    )}
                 </div>
+
+                {/* Rank Badge (Stage 3) - Centered or absolute? Keeping functional but subtle */}
+                {typeof rank === 'number' && (
+                    <div className="absolute right-1 top-1 text-[8px] font-bold font-mono text-hud-cyan opacity-70">
+                        #{rank}
+                    </div>
+                )}
             </div>
 
             {/* Horizontal Progress Bar (Stage 1 & 2) */}

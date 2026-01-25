@@ -276,26 +276,26 @@ export function WelcomeScreen({
                             ? focusedId === art.id
                             : (focusedId === art.id || stickyId === art.id);
                         return (
-                        <div
-                            key={art.id}
-                            ref={(el) => {
-                                if (el) {
-                                    artRefs.current[art.id] = el;
-                                } else {
-                                    delete artRefs.current[art.id];
-                                }
-                            }}
-                            className={`pointer-events-auto relative snap-center shrink-0 ${isMobile && isArtFocused ? 'z-20' : 'z-10'}`}
-                        >
-                            <StandingArtDisplay
-                                data={art}
-                                isFocused={isArtFocused}
-                                isSelected={!!art.isSelected}
-                                isMobile={isMobile}
-                                onInteraction={handleArtClick}
-                                onHover={handleArtHover}
-                            />
-                        </div>
+                            <div
+                                key={art.id}
+                                ref={(el) => {
+                                    if (el) {
+                                        artRefs.current[art.id] = el;
+                                    } else {
+                                        delete artRefs.current[art.id];
+                                    }
+                                }}
+                                className={`pointer-events-auto relative snap-center shrink-0 ${isMobile && isArtFocused ? 'z-20' : 'z-10'}`}
+                            >
+                                <StandingArtDisplay
+                                    data={art}
+                                    isFocused={isArtFocused}
+                                    isSelected={!!art.isSelected}
+                                    isMobile={isMobile}
+                                    onInteraction={handleArtClick}
+                                    onHover={handleArtHover}
+                                />
+                            </div>
                         );
                     })}
                 </div>
